@@ -515,6 +515,5 @@ The roles control who may write a definition. They do not control what a definit
 
 The code wins. These differences were found while this page was written:
 
-- The comment on `controlPlane.policy.allowKnowledge` in `charts/openagentix/values.yaml` says "`knowledge: true` is allowed". The field is an object, so the true form is `knowledge.enabled: true`.
 - `status.revision` is 12 hex characters (`internal/plan`). The CRD allows up to 64.
 - The printer columns come from the CRD. They match the README.

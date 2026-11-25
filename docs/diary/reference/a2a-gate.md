@@ -136,6 +136,12 @@ Easier ways to call it:
 6. Sends the request to `A2A_GATE_UPSTREAM`. The controller stays in `insecure` mode and never sees a caller credential.
 7. Writes one audit line.
 
+## Container agents (bring your own agent)
+
+An agent that runs as its own container is listed in a routes file that the controller writes: `{"container": ["<namespace>/<name>", ...]}`, nothing else, at most 1000 entries and 256 KiB. The gate rereads the file every 10 s. For a listed agent the gate builds the upstream itself, `http://<name>.<A2A_GATE_WORKLOAD_NAMESPACE>.svc.cluster.local:<port>`, so the list cannot point the gate at another host. The caller rules, the method rule and the audit line are the same as for any agent. JSON-RPC goes to `POST /` on the agent, `message:send` and `message:stream` to `POST /message:send` and `/message:stream`, and the card to `GET /.well-known/agent-card.json`.
+
+The gate rewrites the card of a listed agent (at most 64 KiB, else 502): `supportedInterfaces` becomes the gate's own `JSONRPC` and `HTTP+JSON` entries with `url` `<A2A_GATE_PUBLIC_URL>/agents/<namespace>/<name>`, and `securitySchemes`, `security`, `securityRequirements`, `url`, `preferredTransport` and `additionalInterfaces` are dropped. A missing or bad routes file at start leaves the list empty, so nothing is routed to the workload namespace. A bad update keeps the last good list. Details: [services/a2a-gate/README.md](https://github.com/openagentix/openagentix/blob/main/services/a2a-gate/README.md) and [Bring your own agent](../features/bring-your-own-agent.md).
+
 ## Caller rules
 
 The rules are a JSON file, rendered by the chart from its values and mounted from a ConfigMap (`a2a-gate-rules`). It holds no secret. The gate reads it once, at start. A change of the rules replaces the pod. Unknown fields are an error, so a typo cannot loosen a rule.
@@ -314,6 +320,12 @@ A 401 also has the header `WWW-Authenticate: Bearer realm="a2a-gate"`. Otherwise
 | `A2A_GATE_MAX_INFLIGHT` | `128` | Requests handled at once |
 | `A2A_GATE_ADDR` | `:8080` | Listen address |
 | `A2A_GATE_LOG_LEVEL` | `info` | Log level of the process log (not the audit line) |
+| `A2A_GATE_ROUTES_FILE` | empty | Path of the routes file the controller writes. Empty: container agents are off and the gate acts as without them |
+| `A2A_GATE_WORKLOAD_NAMESPACE` | none, required with the routes file | A DNS label: the namespace the container agents run in |
+| `A2A_GATE_WORKLOAD_PORT` | `8080` | Port of the container agents. 1 to 65535 |
+| `A2A_GATE_PUBLIC_URL` | none, required with the routes file | The address clients use for the gate, an `http` or `https` URL without credentials, query or fragment. Used in rewritten agent cards |
+
+When `controlPlane.containerAgents.enabled` is true the chart also sets `A2A_GATE_ROUTES_FILE`, `A2A_GATE_WORKLOAD_NAMESPACE` (`controlPlane.containerAgents.namespace`) and `A2A_GATE_PUBLIC_URL` (`controlPlane.containerAgents.publicUrl`, default the gate's Service URL). It has no value for `A2A_GATE_WORKLOAD_PORT`.
 
 The chart sets `A2A_GATE_ADDR`, `A2A_GATE_UPSTREAM`, `A2A_GATE_AUDIENCE`, `A2A_GATE_RULES`, `A2A_GATE_KEYS_DIR`, `A2A_GATE_AUDIT_USER_ID` and `A2A_GATE_MAX_INFLIGHT`. It has no value for `A2A_GATE_SNIFF_BYTES`, `A2A_GATE_MAX_BODY` or `A2A_GATE_LOG_LEVEL`.
 

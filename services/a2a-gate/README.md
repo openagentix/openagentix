@@ -4,6 +4,9 @@ A small authenticating reverse proxy in front of the kagent controller's A2A por
 and is switched on with the chart value `governance.a2a.enabled`. Why it exists, and what it does and does not
 protect: `docs/decisions/0006-governance.md` (Question 1) and `docs/diary/features/security.md`.
 
+`GET /healthz` and `GET /readyz` (also `HEAD`) answer `ok` with no token and are not audited. Every other path goes
+through the steps below.
+
 What it does for each request:
 
 1. Reads `Authorization: Bearer <token>`. Two kinds of token are accepted:
@@ -15,8 +18,13 @@ What it does for each request:
    caller may reach (`namespace/name`) and the user ids it may assert (`exact`, `prefix` or `fixed`).
 3. Passes only these routes, for an allowed agent, and answers 403 for everything else (gRPC and gRPC-Web
    included, content type `application/grpc*`, except the two memory RPCs below for a caller with `memory: true`):
-   - `POST /agents/<ns>/<name>` (JSON-RPC) and `POST .../message:send`, `message:stream` (also under `/v1/`);
+   - `POST /agents/<ns>/<name>` (JSON-RPC) and `POST /agents/<ns>/<name>/message:send` and `.../message:stream` (also with
+     a `v1/` segment before `message:`);
    - `GET /agents/<ns>/<name>/.well-known/agent-card.json` (and `agent.json`).
+
+   `<ns>` and `<name>` are Kubernetes names (lowercase letters, digits, `-` and `.`, at most 253 characters). A path with
+   `//`, `%` or `\`, or a request with an `Upgrade` header, is 403 `path`. A listed container agent (see below) uses the
+   same routes.
 
    **Methods.** A caller may use only the JSON-RPC methods in its rule (`methods`; without it
    `SendMessage` and `SendStreamingMessage`). The chart sets what its own callers really send: the bridge and each
@@ -45,7 +53,7 @@ What it does for each request:
    itself from the rule. The controller stays in `insecure` mode and never sees a caller credential.
 5. Streams the response with an immediate flush (SSE).
 6. Writes one JSON audit line to stdout: `time`, `caller`, `agent`, `user_id`, `context_id`, `trace_id`, `status`,
-   `duration_ms`, `method` (HTTP), `rpc` (JSON-RPC method) and, for a refusal, `reason`. The user id the caller claims is
+   `duration_ms`, `method` (HTTP), `rpc` (JSON-RPC method, only when there is one) and, for a refusal or failure, `reason`. The user id the caller claims is
    recorded only after the caller is authenticated, and cut to 128 bytes. `user_id` is a salted hash by default (`h:` and 8 hex
    digits; the salt is random per process); `A2A_GATE_AUDIT_USER_ID=raw` logs the id itself. The gate reads at
    most `A2A_GATE_SNIFF_BYTES` of a request body to find `contextId`, and never logs or keeps the body.
@@ -63,10 +71,28 @@ What it does for each request:
 | `A2A_GATE_MAX_BODY` | `8388608` | largest request body (REST routes; JSON-RPC bodies are limited by the line above) |
 | `A2A_GATE_MAX_INFLIGHT` | `128` | requests handled at once; the next gets 503 with `Retry-After` and `reason: busy` |
 | `A2A_GATE_ADDR` | `:8080` | listen address |
+| `A2A_GATE_LOG_LEVEL` | `info` | level of the process log (not the audit line) |
 | `A2A_GATE_ROUTES_FILE` | empty | path of the controller-written routes file; empty switches "bring your own agent" off and the gate behaves exactly as before |
 | `A2A_GATE_WORKLOAD_NAMESPACE` | required with the routes file | DNS label of the namespace container agents run in |
 | `A2A_GATE_WORKLOAD_PORT` | `8080` | port of those agents |
 | `A2A_GATE_PUBLIC_URL` | required with the routes file | address clients use for the gate (`https://a2a.example.com`); used in rewritten agent cards |
+
+## Refusals
+
+The body of an error is `{"error":"<text>"}`; the `reason` is only in the audit line. A 401 carries
+`WWW-Authenticate: Bearer realm="a2a-gate"`.
+
+| Status | `reason` | When |
+|---|---|---|
+| 401 | `no_token`, `bad_token` | no, more than one, or an invalid bearer value |
+| 403 | `unknown_caller`, `agent`, `user_id`, `method` | no rule for the caller, agent or user id outside the rule, method not allowed or not found |
+| 403 | `path`, `grpc`, `memory`, `frame` | route not allowed, gRPC on an A2A route, memory RPC without `memory: true`, bad memory frame |
+| 408 | `body_timeout` | the start of the body did not arrive in 10 s |
+| 413 | `body_too_large` | body over `A2A_GATE_MAX_BODY` (a memory call over 605 bytes) |
+| 502 | `upstream` | the controller (or the container agent) did not answer |
+| 503 | `auth_unavailable`, `busy` | TokenReview could not run; `A2A_GATE_MAX_INFLIGHT` reached |
+
+The full table, with the exact texts, is in the [A2A gate reference](../../docs/diary/reference/a2a-gate.md).
 
 ## Bring your own A2A agent (container agents)
 
@@ -103,6 +129,11 @@ more than 1000 entries, a file over 256 KiB, or data after the object rejects th
   `securityRequirements` (the gate is the authentication) and the legacy `url`, `preferredTransport`,
   `additionalInterfaces` are dropped; all other members pass through. Without this a client would call the pod directly.
   A non-200 answer from the agent passes through unchanged.
+
+The chart sets `A2A_GATE_ROUTES_FILE`, `A2A_GATE_WORKLOAD_NAMESPACE` (`controlPlane.containerAgents.namespace`) and
+`A2A_GATE_PUBLIC_URL` (`controlPlane.containerAgents.publicUrl`, by default the gate's own Service URL) only when
+`controlPlane.containerAgents.enabled` is true. It sets no `A2A_GATE_WORKLOAD_PORT`, so the port is 8080. A bad value of
+one of these three (not a bad routes file) stops the gate at start.
 
 The gate needs the `system:auth-delegator` ClusterRole for TokenReview (the chart binds it). It has no
 dependency outside the Go standard library.

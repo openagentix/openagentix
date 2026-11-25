@@ -13,7 +13,7 @@ this program builds.
    code path that copies a header from the browser's request. `TestNothingFromTheBrowserIsForwardedUpstream` asserts on
    what the fake API server received, and `TestOnlyFixedUpstreamPaths` on the paths.
 2. **Narrow identity.** The console's ServiceAccount reads (see "Deploying") and writes only `agentdefinitions.openagentix.io`.
-3. **Closed network.** The chart's NetworkPolicy admits nobody; the console is reached with `kubectl port-forward`.
+3. **Closed network.** There is no Ingress. The chart's NetworkPolicy (rendered when `networkPolicy.enabled` is true, the default) admits no ingress; the console is reached with `kubectl port-forward`, which a NetworkPolicy does not block.
 4. **Login.** A bearer token from a mounted Secret, compared in constant time, read again when the file changes. Strict CSP. The
    real mode refuses to start with a token shorter than 32 characters or equal to `demo-token`; failed sign-ins are throttled; a
    Host allowlist closes DNS rebinding (see "Protections").
@@ -160,9 +160,10 @@ token, so a sink cannot log them. Denied writes are audited too (`outcome: denie
   for everybody; that is why the lock-out is short at first.
 - **Token strength:** the real mode refuses to start, with a message that says why, for a token shorter than 32 characters or equal to
   `demo-token`.
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
   `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`,
-  `Cross-Origin-Resource-Policy: same-origin` on **every** answer the console writes (including the 421 and 403 above);
+  `Cross-Origin-Resource-Policy: same-origin`, `X-Frame-Options: DENY`,
+  `Permissions-Policy: camera=(), microphone=(), geolocation=()` and `X-Request-Id` on **every** answer the console writes (including the 421 and 403 above);
   `Cache-Control: no-store` on the API. **Exception:** the 400 and 431 answers that Go's `net/http` writes itself (a malformed request line, a header block over
   16 KiB) are produced before any handler runs and carry no console headers; they are a fixed plain-text line that reflects nothing
   of the request. **HSTS** (`Strict-Transport-Security`) is required whenever the console is served behind TLS (an Ingress, a mesh);
@@ -231,10 +232,14 @@ What the chart renders (`charts/openagentix/templates/console.yaml`, values bloc
 - **Secret** `console-token`, key `token` (`console.tokenSecret`), mounted as a file, path in `CONSOLE_TOKEN_FILE`. The chart renders no Secret.
 - **Mounts** the two ConfigMaps the controller reads (catalog and policy) read-only; paths in `CONSOLE_CATALOG_FILE` and `CONSOLE_POLICY_FILE`.
   A change of either (or a new `console.sourceHash`) replaces the pod.
-- **Service** ClusterIP 8080; no Ingress. **NetworkPolicy** ingress: nobody (`kubectl port-forward` does not pass through it); egress: DNS and the
-  Kubernetes API only (`console.apiServerCIDRs`, which `install.sh` sets; empty means the API server ports towards any address).
-- **Probes** `GET /healthz` on `http` with `httpHeaders: [{name: Host, value: localhost}]`: the Host allowlist answers 421 to the pod IP the kubelet sends otherwise.
-- **Env** `CONSOLE_NAMESPACE` (the agents namespace), `CONSOLE_VIEWER=1` for `console.viewer`, `CONSOLE_ALLOWED_HOSTS` from `console.allowedHosts`
+- **Service** ClusterIP 8080; no Ingress. **NetworkPolicy** (only when `networkPolicy.enabled`) ingress: nobody (`kubectl port-forward` does not pass
+  through it); egress: DNS, the Kubernetes API (`console.apiServerCIDRs`, which `install.sh` sets, and `console.apiServerPorts`, default 443 and 6443;
+  empty CIDRs mean those ports towards any address), and, when the bundled observability stack is on and no URL overrides it, port 8428 of the
+  bundled VictoriaMetrics and port 16686 of the bundled Jaeger, nothing else in that namespace. A `console.metrics.url` or `console.traces.url` of
+  your own opens no egress: add it to the policy yourself.
+- **Probes** (startup, liveness, readiness) `GET /healthz` on `http` with `httpHeaders: [{name: Host, value: localhost}]`: the Host allowlist answers 421 to the pod IP the kubelet sends otherwise.
+- **Env** `CONSOLE_NAMESPACE` (the agents namespace), `CONSOLE_VIEWER=1` for `console.viewer`, `CONSOLE_ALLOWED_HOSTS` from `console.allowedHosts`,
+  `CONSOLE_METRICS_URL` and `CONSOLE_TRACES_URL` from `console.metrics.url` and `console.traces.url`, or the bundled store when observability is on
   (and `CONSOLE_HSTS=1` is yours to add when an Ingress with TLS is). The token must be at least 32 characters; `install.sh` makes 48.
 - The catalog may carry `"demo": true` (rendered from the demo values files); then the web app shows its "Demo data" tag.
 
