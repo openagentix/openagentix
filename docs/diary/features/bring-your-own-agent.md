@@ -37,6 +37,12 @@ flowchart LR
 
 Less isolated than the built-in runtime: shared kernel unless a RuntimeClass is set, one process for all conversations, one identity per agent, no persistent files. On kind, outbound traffic to the internet is not enforced by the network plugin. Not verified: egress enforcement on k3s.
 
+## What was run
+
+In the `e2e` job (GitHub-hosted runner, one kind node, stub model, no key): `QUICKSTART_BYO=1 PROFILE=quickstart ./install.sh` builds the sample, loads it into kind, reads its digest from the node (`hack/kind-image-digest.sh`; kind keeps only the tag, so the script adds the `name@sha256` name on the node) and applies the definition. `hack/ci/smoke.sh` then checked: Ready 10 s after creation, isolation `container`, user 65532 with a read-only root and no token, the endpoint through the gate, an answer through the gate and the model gateway, the gateway user `kagent.echo-go`, and three refused definitions. The gate began to route to the new agent about 39 s after it was Ready (one run), because the route list reaches it through a ConfigMap volume; the check asks again for up to two minutes.
+
+Not shown: whether kind's network plugin enforces the NetworkPolicy (so the egress port to the model gateway is not shown to be right), pulling from a registry, a real model.
+
 ## Not done yet
 
 Tools through a tool profile (slice 3), the conformance checker (slice 2), a Python sample (slice 4), an egress allowlist (slice 5), enrolling a workload you run yourself, private registries.

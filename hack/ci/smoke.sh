@@ -94,7 +94,7 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   while :; do
     TRIES=$((TRIES+1)); ANS=$(hack/ask.sh echo-go "Say hello" 2>&1); RC=$?
     [ "$RC" = 0 ] && break
-    [ $(( $(date +%s) - T0 )) -ge "${SMOKE_ROUTE_WAIT:-45}" ] && break
+    [ $(( $(date +%s) - T0 )) -ge "${SMOKE_ROUTE_WAIT:-120}" ] && break
     sleep 5
   done
   echo "      echo-go answered after $(( $(date +%s) - T0 )) s and $TRIES attempt(s) (exit $RC) after it was Ready"
