@@ -682,7 +682,13 @@ if [ "$QS" = 1 ]; then
   log "quick start agent"
   $K create serviceaccount quickstart-ask -n "$RELEASE_NS" --dry-run=client -o yaml | $K apply -f - >/dev/null   # the identity hack/ask.sh uses (the A2A gate rule is in the profile)
   QS_DESC="Looks up known vulnerabilities of a package. Model: $(qs_model_label "$QS_MODEL")"
-  yq --arg d "$QS_DESC" '.spec.description=$d' components/quickstart/agent.yaml | $K apply -f - >/dev/null
+  yq --arg d "$QS_DESC" '.spec.description=$d' components/quickstart/agent.yaml > "$QS_TMP/agent.json"
+  # the ResourceQuota on definitions has no status for a moment after the chart is installed ("status unknown for quota"): retry
+  for qs_try in 1 2 3 4 5 6 7 8 9 10; do
+    $K apply -f "$QS_TMP/agent.json" >/dev/null 2>"$QS_TMP/apply.err" && break
+    [ "$qs_try" -lt 10 ] && /usr/bin/grep -q "status unknown for quota" "$QS_TMP/apply.err" || { cat "$QS_TMP/apply.err" >&2; die "could not create the quickstart AgentDefinition"; }
+    sleep 3
+  done
   $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
     || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition quickstart -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
 fi
