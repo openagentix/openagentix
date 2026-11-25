@@ -86,12 +86,36 @@ test('the pages with no data source say so, and show nothing invented', async ({
     for (const [href, title] of [
         ['/knowledge', 'Knowledge'],
         ['/channels', 'Channels and triggers'],
-        ['/schedules', 'Schedules'],
     ]) {
         await goTo(page, href!);
         await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible();
         await expect(page.getByText('Why it is not available yet')).toBeVisible();
     }
+    await done();
+});
+
+test('Schedules and Access show the demo data read-only, with a detail view, and never a user id', async ({ page }) => {
+    const done = await watch(page);
+    await signIn(page);
+    await goTo(page, '/schedules');
+    await expect(page.getByRole('heading', { level: 1, name: 'Schedules' })).toBeVisible();
+    await expect(page.getByText('Read-only in this release').first()).toBeVisible();
+    const sched = page.getByRole('region', { name: 'Schedules defined in chart values' });
+    await expect(sched.getByRole('row', { name: /daily-digest/ })).toContainText('on weekdays at 07:00');
+    await expect(sched.getByRole('row', { name: /weekly-review/ })).toContainText('Suspended');
+    await sched.getByRole('button', { name: 'daily-digest' }).click();
+    await expect(page.getByRole('dialog')).toContainText('Forbid');
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    await goTo(page, '/access');
+    await expect(page.getByRole('heading', { level: 1, name: 'Access' })).toBeVisible();
+    const acc = page.getByRole('region', { name: 'Who may call which agent' });
+    await expect(acc.getByRole('row', { name: /ci-checker/ })).toContainText('kagent/researcher');
+    await expect(acc.getByRole('row', { name: /bridge/ })).toContainText('any user id with a fixed start');
+    await expect(page.locator('body')).not.toContainText('telegram:');
+    await acc.getByRole('button', { name: 'ci-checker' }).click();
+    await expect(page.getByRole('dialog')).toContainText('ci/checker');
     await done();
 });
 
@@ -149,7 +173,7 @@ test('Models, Skills and Memory show catalog data, and Governance shows the poli
     await page.getByRole('tab', { name: 'Egress and tools' }).click();
     await expect(page.getByRole('row', { name: /cve-triage/ })).toContainText('none (refused)');
     await page.getByRole('tab', { name: 'Gate callers' }).click();
-    await expect(page.getByText(/no source in the console API/)).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Open Access' })).toHaveAttribute('href', '/access');
     await page.getByRole('button', { name: 'View YAML' }).click();
     await expect(page.getByLabel('Platform policy YAML', { exact: true })).toContainText('maxAgents: 5');
     await expect(page.getByLabel('Platform policy YAML', { exact: true })).toContainText('registry.ci.svc:5000');

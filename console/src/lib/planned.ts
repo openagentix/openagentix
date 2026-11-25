@@ -34,6 +34,18 @@ export interface ReadOnlyContent {
 }
 
 export const READONLY: Record<string, ReadOnlyContent> = {
+    schedules: {
+        title: 'Schedules',
+        strip: 'CronJob · namespace openagentix-schedules · chart values schedules',
+        noticeTitle: 'Read-only in this release',
+        notice: 'Schedules are set in chart values under `schedules`. Change them there and run `install.sh`. Every firing is at least one model call. Editing schedules from the console is postponed (ADR 0013).',
+    },
+    access: {
+        title: 'Access',
+        strip: 'A2A gate · ConfigMap a2a-gate-rules',
+        noticeTitle: 'Owned by operators',
+        notice: 'The gate rules are not edited in the console. Change `governance.a2a.callers` in chart values or Git. This page shows names, agents and methods only.',
+    },
     skills: {
         title: 'Skills',
         strip: 'platform catalog · skills (digest-pinned OCI images) · platform policy',
@@ -105,19 +117,6 @@ export const PLANNED: Record<string, PlannedContent> = {
         ],
         why: 'The console API does not read Kourier resources, and the `Channel` and `Trigger` kinds are not in the release plan of ADR 0013.',
         today: '`channels.connections` and `channels.bindings` in chart values.',
-    },
-    schedules: {
-        title: 'Schedules',
-        strip: 'CronJob · namespace openagentix-schedules · chart values schedules[]',
-        noticeTitle: 'No data source in this release',
-        notice: 'Today schedules are set in chart values under `schedules`. Every firing is at least one model call.',
-        willShow: [
-            'Each schedule with its agent, cron expression in plain English, state and next run',
-            'The last runs with outcome and duration',
-            'The user id the agent sees, which is the scope of its memory',
-        ],
-        why: 'The console API does not read CronJobs, and the `Schedule` kind is planned for release 0.3 (ADR 0013).',
-        today: '`schedules` in chart values.',
     },
     traces: {
         title: 'Traces',

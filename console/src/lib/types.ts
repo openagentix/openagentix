@@ -224,4 +224,41 @@ export interface Platform {
     policy: PlatformPolicy;
 }
 
+/** GET /api/v1/schedules (services/console/internal/govern). No prompt, token or user id. */
+export interface Schedule {
+    name: string;
+    agent: string;
+    cron: string;
+    timeZone: string;
+    concurrencyPolicy: string;
+    timeout: string;
+    state: 'active' | 'suspended';
+    active: number;
+    lastScheduled: string;
+    lastSucceeded: string;
+    created: string;
+}
+export interface ScheduleList {
+    configured: boolean;
+    namespace: string;
+    items: Schedule[];
+}
+
+/** GET /api/v1/access. The user id value, keys and hashes are never in it. */
+export interface Caller {
+    name: string;
+    source: 'chart' | 'values';
+    serviceAccount: string;
+    key: boolean;
+    agents: string[];
+    userIdRule: 'exact' | 'prefix' | 'fixed' | '';
+    methods: string[];
+    memory: boolean;
+}
+export interface AccessList {
+    configured: boolean;
+    namespace: string;
+    items: Caller[];
+}
+
 export const CONDITION_ORDER = ['Accepted', 'KeyReady', 'Applied', 'Ready'] as const;

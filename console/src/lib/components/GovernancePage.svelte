@@ -209,9 +209,10 @@
                         <p class="t2">
                             The A2A gate is {p.gateEnabled ? 'on' : 'off'}. Its caller rules (<code
                                 >governance.a2a.callers</code
-                            >) have no source in the console API, so they are not listed here. Read them in chart values
-                            or Git.
+                            >
+                            and the callers the chart derives) are listed on the Access page, by name, agents and methods.
                         </p>
+                        <p class="mt-3"><a href="/access">Open Access</a></p>
                     </div>
                 </section>
             {:else}

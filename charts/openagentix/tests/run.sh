@@ -1867,7 +1867,7 @@ eq "no Secrets, wildcard, status, patch, watch or deletecollection (operator)" "
 eq "no Secrets, wildcard, status, patch, watch or deletecollection (viewer)"   "$(q "$DV" "$CNR|$BADRULE")" 0
 eq "the Role names no resource other than the five the console reads or writes" "$(q "$D" "[$CNR|.rules[]|.apiGroups[]+\"/\"+.resources[]]|sort|join(\" \")")" "api.kagent.dev/agents api.kagent.dev/agenttemplates api.kagent.dev/harnesses api.kagent.dev/modelconfigs openagentix.io/agentdefinitions"
 eq "the console has no permission on Secrets anywhere (every Role and ClusterRole bound to its ServiceAccount)" "$(q "$D" '[.[]|select(.kind=="RoleBinding" or .kind=="ClusterRoleBinding")|select(any(.subjects[]?;.name=="openagentix-console"))|.roleRef.name] as $names|[.[]|select((.kind=="Role" or .kind=="ClusterRole") and (.metadata.name|IN($names[])))|.rules[]|select(.resources|index("secrets") or index("*"))]|length')" 0
-eq "no binding of any kind other than its own names the console ServiceAccount" "$(count "$D" '(.kind=="RoleBinding" or .kind=="ClusterRoleBinding") and any(.subjects[]?;.name=="openagentix-console") and .metadata.name!="openagentix-console"')" 0
+eq "no binding of any kind other than its own (and the two read-only ones below) names the console ServiceAccount" "$(count "$D" '(.kind=="RoleBinding" or .kind=="ClusterRoleBinding") and any(.subjects[]?;.name=="openagentix-console") and .metadata.name!="openagentix-console" and .metadata.name!="openagentix-console-schedules" and .metadata.name!="openagentix-console-gate"')" 0
 eq "viewer: the Role has no write verb at all"         "$(q "$DV" "[$CNR|.rules[].verbs[]|select(.==\"create\" or .==\"update\" or .==\"delete\")]|length")" 0
 eq "viewer: CONSOLE_VIEWER=1"                          "$(q "$DV" "$CNC|.env[]|select(.name==\"CONSOLE_VIEWER\")|.value")" 1
 eq "operator: CONSOLE_VIEWER is not set"               "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_VIEWER\")]|length")" 0
@@ -1899,7 +1899,7 @@ eq "resources are set"                                 "$(q "$D" "$CNC|.resource
 eq "the three files are mounted read-only"             "$(q "$D" "$CNC|.volumeMounts|map(.name+\":\"+.mountPath+\":\"+(.readOnly|tostring))|sort|join(\" \")")" "catalog:/etc/console/catalog:true policy:/etc/console/policy:true token:/etc/console/token:true"
 eq "volumes: the two control plane ConfigMaps and the token Secret" "$(q "$D" "$CNP|.volumes|map(.name+\":\"+(.configMap.name//.secret.secretName))|sort|join(\" \")")" "catalog:openagentix-control-plane-catalog policy:openagentix-control-plane-policy token:console-token"
 eq "the token volume mounts the one key, nothing else" "$(q "$D" "$CNP|.volumes[]|select(.name==\"token\")|.secret.items|map(.key+\"->\"+.path)|join(\",\")")" "token->token"
-eq "env: the three files, the namespace"               "$(q "$D" "$CNC|.env|map(.name+\"=\"+.value)|sort|join(\" \")")" "CONSOLE_CATALOG_FILE=/etc/console/catalog/catalog.json CONSOLE_NAMESPACE=kagent CONSOLE_POLICY_FILE=/etc/console/policy/policy.json CONSOLE_TOKEN_FILE=/etc/console/token/token"
+eq "env: the three files, the namespaces (agents, schedules, gate)"               "$(q "$D" "$CNC|.env|map(.name+\"=\"+.value)|sort|join(\" \")")" "CONSOLE_CATALOG_FILE=/etc/console/catalog/catalog.json CONSOLE_GATE_NAMESPACE=openagentix-gateway CONSOLE_NAMESPACE=kagent CONSOLE_POLICY_FILE=/etc/console/policy/policy.json CONSOLE_SCHEDULES_NAMESPACE=openagentix-schedules CONSOLE_TOKEN_FILE=/etc/console/token/token"
 eq "no env var carries a secret (no valueFrom, no literal token)" "$(q "$D" "$CNC|[.env[]|select(has(\"valueFrom\"))]|length")" 0
 eq "the token Secret is optional: false (the pod waits for the installer's Secret)" "$(q "$D" "$CNP|.volumes[]|select(.name==\"token\")|(.secret.optional//false)|tostring")" false
 CNA="$CND|.spec.template.metadata.annotations"
@@ -1919,6 +1919,26 @@ eq "CONSOLE_NAMESPACE follows kagent.namespace"        "$(q "$(docs --set contro
 eq "the Role follows kagent.namespace"                 "$(q "$(docs --set controlPlane.enabled=true --set console.enabled=true --set kagent.namespace=ag2)" "$CNR|.metadata.namespace")" ag2
 eq "the Service is a ClusterIP on 8080 selecting the pod" "$(q "$D" '.[]|select(.kind=="Service" and .metadata.name=="openagentix-console")|[.spec.type,(.spec.ports|map(.name+":"+(.port|tostring)+"->"+(.targetPort|tostring))|join(",")),.spec.selector.app]|join(" ")')" "ClusterIP http:8080->http console"
 eq "the pod carries the label the Service and the policy select" "$(q "$D" "$CND|.spec.template.metadata.labels.app")" console
+
+echo "# console: the two read-only pages (schedules, access rules): extra Roles only when there is something to read"
+CNSR='.[]|select(.kind=="Role" and .metadata.name=="openagentix-console-schedules")'
+CNGR='.[]|select(.kind=="Role" and .metadata.name=="openagentix-console-gate")'
+eq "schedules: one Role in the schedules namespace"    "$(count "$D" '.kind=="Role" and .metadata.name=="openagentix-console-schedules" and .metadata.namespace=="openagentix-schedules"')" 1
+eq "schedules: the Role may only list CronJobs"        "$(q "$D" "$CNSR|.rules|tojson")" '[{"apiGroups":["batch"],"resources":["cronjobs"],"verbs":["list"]}]'
+eq "schedules: the RoleBinding binds that Role to the console ServiceAccount only" "$(q "$D" '.[]|select(.kind=="RoleBinding" and .metadata.name=="openagentix-console-schedules")|[.metadata.namespace,.roleRef.kind,.roleRef.name,(.subjects|map(.kind+":"+.namespace+"/"+.name)|join(","))]|join(" ")')" "openagentix-schedules Role openagentix-console-schedules ServiceAccount:$CNNS/openagentix-console"
+eq "schedules: CONSOLE_SCHEDULES_NAMESPACE is set"     "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_SCHEDULES_NAMESPACE\")|.value")" openagentix-schedules
+eq "gate: one Role in the gate namespace"              "$(count "$D" '.kind=="Role" and .metadata.name=="openagentix-console-gate" and .metadata.namespace=="openagentix-gateway"')" 1
+eq "gate: the Role may only get the one ConfigMap a2a-gate-rules" "$(q "$D" "$CNGR|.rules|tojson")" '[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["a2a-gate-rules"],"verbs":["get"]}]'
+eq "gate: the RoleBinding binds that Role to the console ServiceAccount only" "$(q "$D" '.[]|select(.kind=="RoleBinding" and .metadata.name=="openagentix-console-gate")|[.metadata.namespace,.roleRef.kind,.roleRef.name,(.subjects|map(.kind+":"+.namespace+"/"+.name)|join(","))]|join(" ")')" "openagentix-gateway Role openagentix-console-gate ServiceAccount:$CNNS/openagentix-console"
+eq "gate: CONSOLE_GATE_NAMESPACE is set"               "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_GATE_NAMESPACE\")|.value")" openagentix-gateway
+eq "the two extra Roles name no Secret, wildcard, watch or write verb" "$(q "$D" "[($CNSR),($CNGR)|.rules[]|(.resources+.verbs+.apiGroups)[]|select(.==\"secrets\" or .==\"*\" or .==\"watch\" or .==\"create\" or .==\"update\" or .==\"patch\" or .==\"delete\")]|length")" 0
+eq "viewer mode gives the extra Roles the same read verbs" "$(q "$DV" "[($CNSR),($CNGR)|.rules[].verbs[]]|sort|join(\",\")")" "get,list"
+DNS=$(docs "${CN10[@]}" --set observability.enabled=false --set schedules=null)
+eq "no schedules: no schedules Role, binding or env"   "$(count "$DNS" '.metadata.name=="openagentix-console-schedules"')$(q "$DNS" "$CNC|[.env[]|select(.name==\"CONSOLE_SCHEDULES_NAMESPACE\")]|length")" 00
+DNG=$(docs --set controlPlane.enabled=true --set console.enabled=true)
+eq "no schedules and no gate (chart defaults): no extra Role, binding or env"            "$(count "$DNG" '.metadata.name=="openagentix-console-gate"')$(q "$DNG" "$CNC|[.env[]|select(.name==\"CONSOLE_GATE_NAMESPACE\")]|length")" 00
+eq "the gate namespace follows governance.a2a.namespace" "$(q "$(docs "${CN10[@]}" --set observability.enabled=false --set governance.a2a.namespace=gate2)" "$CNC|.env[]|select(.name==\"CONSOLE_GATE_NAMESPACE\")|.value")" gate2
+eq "the schedules namespace follows scheduling.namespace" "$(q "$(docs "${CN10[@]}" --set observability.enabled=false --set scheduling.namespace=sched2)" "$CNC|.env[]|select(.name==\"CONSOLE_SCHEDULES_NAMESPACE\")|.value")" sched2
 
 echo "# console: the NetworkPolicy"
 CNN='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")'
