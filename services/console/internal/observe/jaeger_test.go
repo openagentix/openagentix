@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +34,30 @@ func traceJSON() map[string]any {
 	}}}
 }
 
+func otv(k string, v any) map[string]any {
+	val := map[string]any{}
+	switch x := v.(type) {
+	case string:
+		val["stringValue"] = x
+	case int:
+		val["intValue"] = strconv.Itoa(x) // OTLP JSON carries 64-bit integers as strings
+	}
+	return map[string]any{"key": k, "value": val}
+}
+
+// otlpTraces is traceJSON() in the shape Jaeger v2 returns from /api/v3/traces: one resource per service, ids in hex, times in nanoseconds.
+func otlpTraces() map[string]any {
+	res := func(svc string, spans ...any) map[string]any {
+		return map[string]any{"resource": map[string]any{"attributes": []any{otv("service.name", svc)}}, "scopeSpans": []any{map[string]any{"spans": spans}}}
+	}
+	return map[string]any{"result": map[string]any{"resourceSpans": []any{
+		res("assistant", map[string]any{"traceId": tid, "spanId": "a1", "name": "a2a.request", "startTimeUnixNano": "1000000000", "endTimeUnixNano": "4000000000",
+			"attributes": []any{otv("gen_ai.conversation.id", "ctx-1"), otv("gen_ai.agent.name", "assistant"), otv("a2a.task.state", "completed"), otv("gen_ai.prompt", "SECRET PROMPT")}}),
+		res("model-gateway", map[string]any{"traceId": tid, "spanId": "b2", "parentSpanId": "a1", "name": "POST /v1/chat/completions", "startTimeUnixNano": "1500000000", "endTimeUnixNano": "3100000000",
+			"attributes": []any{otv("gen_ai.usage.input_tokens", 30782), otv("gen_ai.usage.output_tokens", 263)}}),
+	}}}
+}
+
 type fakeJaeger struct {
 	mu    sync.Mutex
 	paths []string
@@ -45,10 +70,12 @@ func (f *fakeJaeger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/api/v3/services":
 		_ = json.NewEncoder(w).Encode(map[string]any{"services": []string{"assistant", "model-gateway"}})
-	case r.URL.Path == "/api/traces" && r.URL.Query().Get("service") == "assistant":
-		_ = json.NewEncoder(w).Encode(traceJSON())
-	case r.URL.Path == "/api/traces":
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}})
+	// Jaeger v2 searches with /api/v3/traces (OTLP JSON) and answers 404 "No traces found" when nothing matches. It has no /api/traces search.
+	case r.URL.Path == "/api/v3/traces" && r.URL.Query().Get("query.service_name") == "assistant":
+		_ = json.NewEncoder(w).Encode(otlpTraces())
+	case r.URL.Path == "/api/v3/traces":
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"error":{"httpCode":404,"message":"No traces found"}}`))
 	case r.URL.Path == "/api/traces/"+tid:
 		_ = json.NewEncoder(w).Encode(traceJSON())
 	default:

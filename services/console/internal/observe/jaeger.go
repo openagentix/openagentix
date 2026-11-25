@@ -18,6 +18,9 @@ import (
 // ErrBadTraceID is a trace id that is not 32 lower-case hex characters. It never reaches the store.
 var ErrBadTraceID = errors.New("invalid trace id")
 
+// errNotFound is a 404 from Jaeger; it still counts as ErrUnavailable unless a caller treats it as "no results".
+var errNotFound = fmt.Errorf("%w: not found", ErrUnavailable)
+
 var traceIDRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 const (
@@ -124,6 +127,9 @@ func (j *Jaeger) get(ctx context.Context, path string, q url.Values, out any) er
 		return ErrUnavailable
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return ErrUnavailable
 	}
@@ -200,6 +206,108 @@ func summarize(t jTrace) (Turn, bool) {
 	return turn, true
 }
 
+type otlpValue struct {
+	Str    *string  `json:"stringValue"`
+	Int    *string  `json:"intValue"`
+	Double *float64 `json:"doubleValue"`
+	Bool   *bool    `json:"boolValue"`
+}
+type otlpAttr struct {
+	Key   string    `json:"key"`
+	Value otlpValue `json:"value"`
+}
+type otlpResult struct {
+	Result struct {
+		ResourceSpans []struct {
+			Resource struct {
+				Attributes []otlpAttr `json:"attributes"`
+			} `json:"resource"`
+			ScopeSpans []struct {
+				Spans []struct {
+					TraceID      string     `json:"traceId"`
+					SpanID       string     `json:"spanId"`
+					ParentSpanID string     `json:"parentSpanId"`
+					Name         string     `json:"name"`
+					Start        string     `json:"startTimeUnixNano"`
+					End          string     `json:"endTimeUnixNano"`
+					Attributes   []otlpAttr `json:"attributes"`
+				} `json:"spans"`
+			} `json:"scopeSpans"`
+		} `json:"resourceSpans"`
+	} `json:"result"`
+}
+
+func otlpTag(a otlpAttr) jTag {
+	switch {
+	case a.Value.Str != nil:
+		return jTag{Key: a.Key, Value: *a.Value.Str}
+	case a.Value.Int != nil:
+		if n, err := strconv.ParseFloat(*a.Value.Int, 64); err == nil {
+			return jTag{Key: a.Key, Value: n}
+		}
+	case a.Value.Double != nil:
+		return jTag{Key: a.Key, Value: *a.Value.Double}
+	case a.Value.Bool != nil:
+		return jTag{Key: a.Key, Value: *a.Value.Bool}
+	}
+	return jTag{Key: a.Key}
+}
+
+// searchTraces runs a /api/v3/traces search and converts the OTLP answer into the flat trace shape the rest of this file reads. Jaeger answers 404
+// ("No traces found") for a search that matches nothing: that is an empty list, not an outage.
+func (j *Jaeger) searchTraces(ctx context.Context, q url.Values) ([]jTrace, error) {
+	var res otlpResult
+	if err := j.get(ctx, "/api/v3/traces", q, &res); err != nil {
+		if errors.Is(err, errNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	byID := map[string]*jTrace{}
+	var order []string
+	for _, rs := range res.Result.ResourceSpans {
+		svc := ""
+		for _, a := range rs.Resource.Attributes {
+			if a.Key == "service.name" && a.Value.Str != nil {
+				svc = *a.Value.Str
+			}
+		}
+		for _, ss := range rs.ScopeSpans {
+			for _, sp := range ss.Spans {
+				t := byID[sp.TraceID]
+				if t == nil {
+					t = &jTrace{TraceID: sp.TraceID, Processes: map[string]struct {
+						ServiceName string `json:"serviceName"`
+					}{}}
+					byID[sp.TraceID] = t
+					order = append(order, sp.TraceID)
+				}
+				t.Processes[svc] = struct {
+					ServiceName string `json:"serviceName"`
+				}{svc}
+				st, _ := strconv.ParseInt(sp.Start, 10, 64)
+				en, _ := strconv.ParseInt(sp.End, 10, 64)
+				js := jSpan{SpanID: sp.SpanID, ProcessID: svc, OperationName: sp.Name, StartTime: st / 1000, Duration: (en - st) / 1000}
+				for _, a := range sp.Attributes {
+					js.Tags = append(js.Tags, otlpTag(a))
+				}
+				if sp.ParentSpanID != "" {
+					js.References = append(js.References, struct {
+						RefType string `json:"refType"`
+						SpanID  string `json:"spanID"`
+					}{"CHILD_OF", sp.ParentSpanID})
+				}
+				t.Spans = append(t.Spans, js)
+			}
+		}
+	}
+	out := make([]jTrace, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byID[id])
+	}
+	return out, nil
+}
+
 // Turns lists the most recent turns. The queries are fixed: the services Jaeger knows (at most 20), each asked for its
 // a2a.request operation over a bounded look-back. Nothing comes from the browser.
 func (j *Jaeger) Turns(ctx context.Context) ([]Turn, error) {
@@ -216,15 +324,14 @@ func (j *Jaeger) Turns(ctx context.Context) ([]Turn, error) {
 		if i >= maxServices {
 			break
 		}
-		var res struct {
-			Data []jTrace `json:"data"`
-		}
-		q := url.Values{"service": {s}, "operation": {"a2a.request"}, "limit": {strconv.Itoa(perService)},
-			"start": {strconv.FormatInt(end.Add(-lookback).UnixMicro(), 10)}, "end": {strconv.FormatInt(end.UnixMicro(), 10)}}
-		if err := j.get(ctx, "/api/traces", q, &res); err != nil {
+		// Jaeger v2 has no /api/traces search: the search is /api/v3/traces (OTLP JSON), and it answers 404 when nothing matches.
+		q := url.Values{"query.service_name": {s}, "query.operation_name": {"a2a.request"}, "query.num_traces": {strconv.Itoa(perService)},
+			"query.start_time_min": {end.Add(-lookback).UTC().Format(time.RFC3339)}, "query.start_time_max": {end.Add(time.Hour).UTC().Format(time.RFC3339)}}
+		traces, err := j.searchTraces(ctx, q)
+		if err != nil {
 			return nil, err
 		}
-		for _, t := range res.Data {
+		for _, t := range traces {
 			if seen[t.TraceID] || !traceIDRE.MatchString(t.TraceID) {
 				continue
 			}
