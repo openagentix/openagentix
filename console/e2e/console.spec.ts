@@ -80,27 +80,100 @@ test('sign in, see the registry with the demo data, and the token is never store
     await done();
 });
 
-test('every other navigation entry is an honest not-available page', async ({ page }) => {
+test('the pages with no data source say so, and show nothing invented', async ({ page }) => {
     const done = await watch(page);
     await signIn(page);
     for (const [href, title] of [
-        ['/skills', 'Skills'],
-        ['/models', 'Models'],
-        ['/tools', 'Tools'],
         ['/knowledge', 'Knowledge'],
         ['/channels', 'Channels and triggers'],
         ['/schedules', 'Schedules'],
         ['/traces', 'Traces'],
         ['/costs', 'Costs'],
-        ['/memory', 'Memory'],
-        ['/governance', 'Governance'],
-        ['/', 'Overview'],
     ]) {
         await goTo(page, href!);
         await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible();
         await expect(page.getByText('Why it is not available yet')).toBeVisible();
     }
     await done();
+});
+
+test('Overview shows real tiles and what needs attention', async ({ page }) => {
+    const done = await watch(page);
+    await signIn(page);
+    await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible();
+    await expect(page.getByText('Not available yet')).toHaveCount(0);
+    const tiles = page.getByRole('group', { name: 'Totals' });
+    await expect(tiles).toContainText('1 pending');
+    await expect(tiles).toContainText('1 refused');
+    await expect(tiles).toContainText('2 chart-managed');
+    await expect(tiles.locator('.tile', { hasText: 'Definitions used' })).toContainText('3of 5');
+    const att = page.getByRole('region', { name: 'Needs attention' });
+    await expect(att.getByRole('link', { name: 'cve-triage' })).toBeVisible();
+    await expect(att).toContainText('which is not in profile "lookup"');
+    await expect(att.getByRole('link', { name: 'release-notes' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Platform', exact: true })).toContainText('A2A gate');
+    await expect(page.getByRole('region', { name: 'Platform policy' })).toBeVisible();
+    await expect(page.locator('body')).not.toContainText(/Spend today|Turns, last/);
+    await page.getByRole('link', { name: /Open Governance/ }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Governance' })).toBeVisible();
+    await done();
+});
+
+test('Tools: choose a profile and read its tools and who uses it', async ({ page }) => {
+    const done = await watch(page);
+    await signIn(page);
+    await goTo(page, '/tools');
+    await expect(page.getByRole('heading', { level: 1, name: 'Tools' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /browse/ })).toContainText('Not allowed');
+    await page.getByRole('button', { name: /lookup/ }).click();
+    const detail = page.getByRole('complementary');
+    await expect(detail).toContainText('toolhive-vmcp-lookup');
+    await expect(detail).toContainText('osv_query_vulnerability');
+    await expect(detail).toContainText('researcher');
+    await done();
+});
+
+test('Models, Skills and Memory show catalog data, and Governance shows the policy as YAML', async ({ page }) => {
+    const done = await watch(page);
+    await signIn(page);
+    await goTo(page, '/models');
+    await expect(page.getByRole('button', { name: /claude-sonnet/ })).toContainText('Not allowed');
+    await goTo(page, '/skills');
+    await expect(page.getByRole('button', { name: /openagentix-canary/ })).toContainText('sha256:');
+    await goTo(page, '/memory');
+    await expect(page.getByRole('region', { name: 'Agents that remember' })).toContainText('assistant');
+    await goTo(page, '/governance');
+    await expect(page.getByRole('region', { name: 'Always enforced' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Egress and tools' }).click();
+    await expect(page.getByRole('row', { name: /cve-triage/ })).toContainText('none (refused)');
+    await page.getByRole('tab', { name: 'Gate callers' }).click();
+    await expect(page.getByText(/no source in the console API/)).toBeVisible();
+    await page.getByRole('button', { name: 'View YAML' }).click();
+    await expect(page.getByLabel('Platform policy YAML', { exact: true })).toContainText('maxAgents: 5');
+    await expect(page.getByLabel('Platform policy YAML', { exact: true })).toContainText('registry.ci.svc:5000');
+    await done();
+});
+
+test('the sidebar context line is fully visible and clear of the first item', async ({ page }) => {
+    for (const size of [
+        { width: 1440, height: 900 },
+        { width: 1440, height: 420 }, // a short window: the sidebar scrolls, the line must not shrink
+    ]) {
+        await page.setViewportSize(size);
+        await signIn(page);
+        const sb = page.locator('nav[aria-label="Main"]');
+        const ctxLine = sb.locator('.ctx');
+        await expect(ctxLine).toHaveText('demo · kagent');
+        const box = (await ctxLine.boundingBox())!;
+        const sbBox = (await sb.boundingBox())!;
+        const first = (await sb.locator('.ni').first().boundingBox())!;
+        expect(box.height, `context line height at ${size.height}`).toBeGreaterThanOrEqual(14);
+        expect(box.y).toBeGreaterThanOrEqual(sbBox.y);
+        expect(box.y + box.height).toBeLessThanOrEqual(sbBox.y + sbBox.height);
+        expect(box.y + box.height, 'the first nav item overlaps the context line').toBeLessThanOrEqual(first.y);
+        const clipped = await ctxLine.evaluate((e) => e.scrollHeight > e.clientHeight);
+        expect(clipped, 'the context line is clipped').toBe(false);
+    }
 });
 
 test('a refused agent shows both violation sentences word for word', async ({ page }) => {
@@ -274,6 +347,10 @@ test.describe('390 px wide', () => {
         await noScroll('deploy');
         await goTo(page, '/models');
         await noScroll('models');
+        await goTo(page, '/governance');
+        await noScroll('governance');
+        await goTo(page, '/');
+        await noScroll('overview with data');
         await done();
     });
 });
