@@ -216,3 +216,10 @@ ADR 0007 slice 1 (control plane) and slice 3 (console) are built and run on the 
 - Decisions recorded: ADR 0007 to 0013. ADR 0013 sets one focus (governed agent runs for platform teams), moves bring your own A2A agent to release 0.3, adopts identity in 0.4 and lists the postponed work.
 - Project process: governance and community files, DCO sign-off, CI on every push, 68 GitHub issues with milestones 0.3 to 0.6 and a Backlog, issue templates, a decision process, Discussions and private vulnerability reporting.
 - Not verified: the browser UI against the real cluster (it was driven only through the API in this run, and in demo mode with an in-memory backend), enforcement of the quota at its limit, the Playground (it does not exist yet), and bring your own agent (planned, not built). The end-to-end install in CI does not work yet.
+
+## 2026-11-25: quick start in CI, and how the project presents itself
+
+The quick start (ADR 0014, commit `b84cc09`) installs a governed agent with one command and no key: `PROFILE=quickstart ./install.sh`. The keyless end-to-end job in CI now runs it on a GitHub-hosted runner from nothing cached and passes the smoke test (`hack/ci/smoke.sh`): install in 366 to 394 s, node memory about 2.4 GiB. Page: [Quick start](./features/quick-start.md). This replaces the last line of the entry above: the end-to-end install in CI works for the quick start profile.
+
+- The README and the landing page now start with one definition, five points in the reader's terms, a diagram of the request path, the quick start commands and the status. The detailed reference moved below that, unchanged in content.
+- New pages under "Start here": [Why OpenAgentix](./guide/why.md), [Concepts](./guide/concepts.md), [Use cases](./guide/use-cases.md) and the [FAQ](./guide/faq.md).

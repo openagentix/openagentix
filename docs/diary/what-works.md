@@ -40,7 +40,7 @@ Evidence comes from the README, the CHANGELOG, `docs/decisions/` and the compone
 | Metrics from kb and notify | built and tested only | Go tests assert every series and label and that canary strings never reach `/metrics`; chart tests; default render byte-identical | `services/kb/internal/obs/`, `services/notify/internal/obs/`, chart `observability`, `knowledge.kb.metrics`, `notify.metrics` | Not run on the cluster; kb search has no vector-only mode; destination names are not labels |
 | Local dashboard | built and tested only | Fake Prometheus API, fake kubectl and a jsdom run of the page; `--check` validates its queries | `hack/dashboard.sh`, `hack/dashboard/` | Queries not yet run against a real VictoriaMetrics; no alerts; needs python3 |
 | Governance and guardrails | built and tested only | Cedar tool allowlist verified live; notify guardrails unit-tested | chart `mcp.virtual.incomingAuth.toolAccess`, `services/notify/` | No general guardrails, approvals or policy engine for agent output |
-| Single-command install | working and proven live | Cold install from a deleted cluster, twice, warm image cache, 604 s | `install.sh`, `uninstall.sh` | Two layers (installer plus chart), not one Helm chart; no cold install with an empty image cache |
+| Single-command install | working and proven live | Cold install from a deleted cluster, twice, warm image cache, 604 s; the quick start profile also from an empty cache in CI (below) | `install.sh`, `uninstall.sh` | Two layers (installer plus chart), not one Helm chart; the full demo was not installed with an empty image cache |
 | Open core and licensing | built and tested only | Apache-2.0 `LICENSE` at the repository root for the open core | `LICENSE` | No enterprise edition or repository split yet |
 
 ## What was built beyond the original brief
@@ -69,7 +69,8 @@ Evidence comes from the README, the CHANGELOG, `docs/decisions/` and the compone
 | Suspend and resume of a built agent | working and proven live | `Ready=False/Suspended`, runtime agent and key entry removed; resume restored the same key and Ready in about 12 s | `services/control-plane/` | A stop, not a pause: running conversations end |
 | Definition quota (`ResourceQuota`) | built and tested only | The quota object counts definitions on the cluster | chart `controlPlane.maxDefinitions` | Enforcement at the limit was not tried |
 | Bring your own A2A agent | not built | Planned for release 0.3 (ADR 0013) | none | Only kagent agents can be built |
-| CI end-to-end install | not built | The workflow exists as a scaffold that fails by design (`hack/ci/README.md`) | `.github/workflows/e2e.yml` | The other CI jobs run on every push |
+| CI end-to-end install (quick start, no key) | working and proven live (in CI) | `PROFILE=quickstart ./install.sh` with the stub model on a GitHub-hosted `ubuntu-24.04` runner, nothing cached, then `hack/ci/smoke.sh` (10 checks) passed; install 366 to 394 s (see [Quick start](./features/quick-start.md), ADR 0014) | `.github/workflows/e2e.yml`, `hack/ci/smoke.sh` | Not yet a required check; kind only, no k3s or managed cloud |
+| Quick start profile | working and proven live (in CI) | Agent Ready, a question answered through the A2A gate with a tool call, a tool outside the profile returned nothing, a forbidden definition was refused, the console API answered 401 without the token and listed the agent with it | `components/quickstart/`, `services/stub-model/`, `hack/ask.sh` | Run on a hosted runner only, not on a laptop; the Ollama path and the OpenAI and Gemini default model names are not verified |
 
 ## Facts that need care
 

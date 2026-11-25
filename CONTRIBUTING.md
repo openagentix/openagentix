@@ -50,7 +50,7 @@ Needs Docker:
 charts/openagentix/tests/memory-expiry-integration.sh   # starts and stops its own PostgreSQL
 ```
 
-Needs a cluster (a kind node, see the README "Quickstart"). Run these only if your change touches the installer or the live behaviour, and say in the pull request what you ran and what you saw.
+Needs a cluster (a kind node, see the README "Try it in 10 minutes" and "Full demo install"). Run these only if your change touches the installer or the live behaviour, and say in the pull request what you ran and what you saw.
 
 ```sh
 ./install.sh
