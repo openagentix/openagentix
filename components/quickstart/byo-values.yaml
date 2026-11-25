@@ -1,0 +1,23 @@
+# Bring your own agent, for the quick start (QUICKSTART_BYO=1 PROFILE=quickstart ./install.sh; ADR 0015).
+# Turns on the container runtime, allows ONE registry prefix, and lets the ask caller reach the sample agent.
+#   registry.local/oa/ is a NAME, not a server: the quick start builds the sample image under it and loads it into the kind nodes
+#   (hack/kind-image-digest.sh reads the digest from the node). Nothing is ever pulled from it. This prefix exists for the quick start
+#   only; a real cluster lists the prefix of its own registry (controlPlane.policy.runtimes.container.images).
+controlPlane:
+  containerAgents:
+    enabled: true
+  policy:
+    allowedRuntimes: [builtin, container]
+    runtimes:
+      container:
+        images: ["registry.local/oa/"]
+        maxAgents: 2
+
+governance:
+  a2a:
+    callers:
+      # the quick start caller of values.yaml, restated (a list replaces) with the sample agent added
+      - name: quickstart-ask
+        serviceAccount: {namespace: openagentix-system, name: quickstart-ask}
+        agents: ["kagent/quickstart", "kagent/echo-go"]
+        userId: {exact: "quickstart:ask"}

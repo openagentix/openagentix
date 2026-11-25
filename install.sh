@@ -111,6 +111,12 @@ case "$PROFILE" in
   quickstart) QS=1; VALS+=(-f components/quickstart/values.yaml) ;;
   *) die "unknown PROFILE '$PROFILE' (known: quickstart)" ;;
 esac
+# QUICKSTART_BYO=1 adds the sample container agent (examples/agents/echo-a2a, ADR 0015): the runtime is switched on, one registry prefix is allowed.
+QS_BYO=0
+if [ "${QUICKSTART_BYO:-0}" = 1 ]; then
+  [ "$QS" = 1 ] || die "QUICKSTART_BYO=1 needs PROFILE=quickstart"
+  QS_BYO=1; VALS+=(-f components/quickstart/byo-values.yaml)
+fi
 for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
 if [ "$QS" = 1 ]; then
   . components/quickstart/model.sh
@@ -499,6 +505,12 @@ if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:
   log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
   queue_build "$CN_IMAGE" . services/console/Dockerfile
 fi
+if [ "$QS_BYO" = 1 ]; then
+  BYO_REPO=registry.local/oa/echo-a2a
+  BYO_IMAGE="$BYO_REPO:$(src_tag examples/agents/echo-a2a)"
+  queue_build "$BYO_IMAGE" examples/agents/echo-a2a
+  log "sample container agent image $BYO_IMAGE"
+fi
 run_builds   # the queued images are built BUILD_JOBS at a time, then loaded into kind in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
@@ -704,6 +716,15 @@ if [ "$QS" = 1 ]; then
   done
   $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
     || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition quickstart -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
+  if [ "$QS_BYO" = 1 ]; then
+    log "sample container agent (bring your own agent)"
+    BYO_REF=$(hack/kind-image-digest.sh "$CLUSTER" "$BYO_REPO") || die "no digest for the sample image: see the line above"
+    echo "image $BYO_REF"
+    yq --arg i "$BYO_REF" '.spec.runtime.container.image=$i' examples/agents/echo-a2a/agent.yaml > "$QS_TMP/byo.json"
+    $K apply -f "$QS_TMP/byo.json" >/dev/null || die "could not create the echo-go AgentDefinition"
+    $K wait agentdefinition/echo-go -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
+      || { echo "WARN: the echo-go agent is not Ready yet: $K get agentdefinition echo-go -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition echo-go -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
+  fi
 fi
 
 log "DONE"

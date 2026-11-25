@@ -70,5 +70,55 @@ TOKEN=$($K get secret -n "${SMOKE_CONSOLE_NS:-openagentix-system}" console-token
 LIST=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/agents"); unset TOKEN
 grep -q '"quickstart"' <<<"$LIST" && ok "GET /api/v1/agents with the token lists quickstart" || bad "the console does not list quickstart" "$(printf '%s' "$LIST" | cut -c1-200)"
 
+# 6. bring your own agent (ADR 0015), only when the quick start was installed with QUICKSTART_BYO=1 (SMOKE_BYO=1)
+if [ "${SMOKE_BYO:-0}" = 1 ]; then
+  echo "# 6. a container agent (the sample echo-go)"
+  WNS=${SMOKE_WORKLOAD_NS:-openagentix-workloads}
+  $K wait agentdefinition/echo-go -n "$NS" --for=condition=Ready --timeout=300s >/dev/null 2>&1 && ok "AgentDefinition echo-go is Ready" || bad "AgentDefinition echo-go is not Ready" "$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-600)"
+  CREATED=$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null)
+  READYAT=$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}' 2>/dev/null)
+  if [ -n "$CREATED" ] && [ -n "$READYAT" ]; then
+    S1=$(python3 -I -c 'import sys,datetime as d;f=lambda s:d.datetime.strptime(s,"%Y-%m-%dT%H:%M:%SZ");print(int((f(sys.argv[2])-f(sys.argv[1])).total_seconds()))' "$CREATED" "$READYAT" 2>/dev/null || echo "?")
+    echo "      echo-go was Ready $S1 s after it was created"
+  fi
+  check "status.capabilities.isolation says container" "$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.status.capabilities.isolation}' 2>/dev/null)" container
+  EP=$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.status.endpoint.url}' 2>/dev/null)
+  echo "      status.endpoint.url: $EP"
+  case "$EP" in *"/agents/$NS/echo-go") ok "the endpoint goes through the A2A gate, not to the pod";; *) bad "the endpoint is not the gate route" "$EP";; esac
+  POD=$($K get pod -n "$WNS" -l openagentix.io/agent=echo-go -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  check "the pod runs as user 65532, non-root" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.spec.securityContext.runAsUser}:{.spec.securityContext.runAsNonRoot}' 2>/dev/null)" 65532:true
+  check "the pod has a read-only root filesystem and no service account token" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.spec.containers[0].securityContext.readOnlyRootFilesystem}:{.spec.automountServiceAccountToken}' 2>/dev/null)" true:false
+  ANS=$(hack/ask.sh echo-go "Say hello" 2>&1); RC=$?
+  echo "      answer: $(printf '%s' "$ANS" | tr '\n' ' ' | cut -c1-300)"
+  check "echo-go answered through the gate (exit 0)" "$RC" 0
+  if [ "$STUB" = 1 ]; then
+    grep -q 'stub model' <<<"$ANS" && ok "the answer came from the stub model, through the model gateway" || bad "the answer does not say it came from the stub model"
+  else
+    [ -n "$ANS" ] && ok "a real model answered" || bad "empty answer"
+  fi
+  KEYS=$($K get configmap llm-api-keys-control-plane -n agentgateway-system -o jsonpath='{.data}' 2>/dev/null)
+  grep -q '"kagent.echo-go"' <<<"$KEYS" && ok "the gateway knows its own user: kagent.echo-go" || bad "no gateway key entry for kagent.echo-go"
+  GWLOG=$($K logs -n agentgateway-system -l gateway.networking.k8s.io/gateway-name=model-gateway --tail=400 2>/dev/null | grep -c 'kagent.echo-go' || true)
+  echo "      gateway log lines that mention kagent.echo-go: ${GWLOG:-0}"
+  [ "${GWLOG:-0}" -gt 0 ] && ok "the gateway log shows the request under the gateway user kagent.echo-go" || echo "      (note: the gateway log does not name the user at this log level; the key entry above is the proof of identity)"
+  echo "# 6b. a container agent that policy must refuse"
+  GOODREF=$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.spec.runtime.container.image}')
+  DIGEST=${GOODREF#*@}
+  refuse_def() { # refuse_def <name> <expected text in the violations> <image> [extra spec json]
+    local n=$1 want=$2 img=$3 extra=${4:-}; [ -n "$extra" ] || extra='{}'
+    jq -nc --arg n "$n" --arg ns "$NS" --arg i "$img" --argjson x "$extra" '{apiVersion:"openagentix.io/v1alpha1",kind:"AgentDefinition",metadata:{name:$n,namespace:$ns},spec:({description:"must be refused",model:"quickstart-model",runtime:{type:"container",container:{image:$i,port:8080}}}+$x)}' | $K apply -f - >/dev/null
+    local acc="" v=""
+    for _ in $(seq 1 30); do acc=$($K get agentdefinition "$n" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null); [ -n "$acc" ] && break; sleep 2; done
+    v=$($K get agentdefinition "$n" -n "$NS" -o jsonpath='{.status.violations}' 2>/dev/null)
+    check "$n: Accepted=False" "$acc" False
+    grep -q "$want" <<<"$v" && ok "$n: the reason says '$want'" || bad "$n: the reason does not say '$want'" "$(printf '%s' "$v" | cut -c1-300)"
+    check "$n: nothing was created in the workload namespace" "$($K get deploy -n "$WNS" -l openagentix.io/agent-definition="$n" -o name 2>/dev/null | wc -l | tr -d ' ')" 0
+    $K delete agentdefinition "$n" -n "$NS" --wait=false >/dev/null 2>&1
+  }
+  refuse_def byo-bad-registry "not under a registry prefix" "docker.io/evil/agent@$DIGEST"
+  refuse_def byo-bad-tag "must be pinned by digest" "registry.local/oa/echo-a2a:latest"
+  refuse_def byo-bad-tools "tools cannot be listed" "$GOODREF" '{"tools":["osv_query_vulnerability"]}'
+fi
+
 echo; echo "smoke: passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
