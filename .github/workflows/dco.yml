@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: dco-${{ github.ref }}
@@ -27,49 +28,10 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          bad=0
-          checked=0
-          report=$(mktemp)
-          # Merge commits are skipped. Commits by bots (for example Dependabot) are skipped: they have no personal sign-off.
-          while read -r sha; do
-            email=$(git log -1 --format='%ae' "$sha")
-            name=$(git log -1 --format='%an' "$sha")
-            subject=$(git log -1 --format='%s' "$sha")
-            case "$email" in
-              *"[bot]@users.noreply.github.com") continue ;;
-            esac
-            checked=$((checked + 1))
-            if git log -1 --format='%(trailers:key=Signed-off-by,valueonly,separator=%x0a)' "$sha" \
-                 | tr 'A-Z' 'a-z' | grep -Fqx -e "$(printf '%s <%s>' "$name" "$email" | tr 'A-Z' 'a-z')"; then
-              continue
-            fi
-            bad=$((bad + 1))
-            echo "::error::Commit ${sha:0:12} (${subject}) has no 'Signed-off-by: ${name} <${email}>' line"
-            printf -- '- `%s` %s (author: %s <%s>)\n' "${sha:0:12}" "${subject//\`/}" "$name" "$email" >> "$report"
-          done < <(git log --no-merges --format='%H' "${BASE}..${HEAD}")
-
-          {
-            echo "## DCO check"
-            echo
-            if [ "$bad" -eq 0 ]; then
-              echo "All ${checked} commit(s) are signed off."
-            else
-              echo "${bad} of ${checked} commit(s) are missing a sign-off that matches the author:"
-              echo
-              cat "$report"
-              echo
-              echo "### How to fix"
-              echo
-              echo "A sign-off says you wrote the change, or have the right to send it, under the project licence (Developer Certificate of Origin 1.1, https://developercertificate.org/). The line must be \`Signed-off-by: Your Name <your-address>\` and must match the commit author."
-              echo
-              echo "- Last commit only: \`git commit --amend -s --no-edit\` then \`git push --force-with-lease\`"
-              echo "- Every commit of the branch: \`git rebase --signoff main\` then \`git push --force-with-lease\`"
-              echo "- Check your identity first: \`git config user.name\` and \`git config user.email\`"
-              echo "- For the next commits, use \`git commit -s\`"
-              echo
-              echo "See docs/contributing/workflow.md."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          [ "$bad" -eq 0 ]
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        # Rule (hack/ci/dco-check.sh): a commit passes with a matching Signed-off-by; a merge commit and a bot commit pass;
+        # a squash merge made by GitHub (committer noreply@github.com) passes only when its title ends in "(#N)" for a pull
+        # request of this repository that was merged AS this commit and whose own commits are all signed off (read-only API,
+        # default token). If that cannot be verified, the check fails.
+        run: hack/ci/dco-check.sh "$BASE" "$HEAD"

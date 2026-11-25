@@ -77,7 +77,8 @@ The goal is to end this exception. See "Growing the maintainer group" in [GOVERN
 
 ## Merging
 
-- **Squash merge** into `main`. The squashed title is a conventional-commit title, for example `feat(control-plane): add AgentAccess`. The issue number goes at the end: `(#123)`. Keep the sign-off line in the squashed message.
+- **Squash merge** into `main`. The squashed title is a conventional-commit title, for example `feat(control-plane): add AgentAccess`. The issue number goes at the end: `(#123)`. Keep the sign-off line in the squashed message: the repository setting is "default to pull request title" for the title and "all commit messages" for the body, so the squash commit lists the pull request's own commits, with their `Signed-off-by` lines.
+- **How the `DCO` check treats commits** (`hack/ci/dco-check.sh`, tested by `hack/ci/dco-test.sh`). A commit passes when (a) it has a `Signed-off-by` line that matches its author, (b) it is a merge commit, (c) its author is a bot, or (d) GitHub made it (committer `noreply@github.com`, a squash merge of another pull request into your branch) and its title ends in `(#N)` for a pull request of this repository that was merged as exactly this commit and whose own commits are all signed off. The workflow checks (d) through the API with the read-only default token; if it cannot, the commit fails. Typing `(#N)` in your own commit does not help.
 - **Changelog.** Anything a user can see needs a line under `[Unreleased]` in [CHANGELOG.md](https://github.com/openagentix/openagentix/blob/main/CHANGELOG.md), in the pull request itself. Breaking changes and upgrade steps go under "Upgrade notes". Pure test, CI and internal changes do not need a line.
 - Delete the branch after the merge. The issue closes from `Closes #123`; if it does not, close it and say which pull request fixed it.
 
