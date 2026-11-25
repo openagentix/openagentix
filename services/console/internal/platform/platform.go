@@ -86,6 +86,8 @@ type Policy struct {
 	Memory             PolicyMemory `json:"memory"`
 	Egress             PolicyEgress `json:"egress"`
 	ReservedNames      []string     `json:"reservedNames"`
+	// SuspendAll is the operator's stop switch: every definition is treated as suspended.
+	SuspendAll bool `json:"suspendAll"`
 }
 
 func (c Catalog) Profile(name string) (Profile, bool) {

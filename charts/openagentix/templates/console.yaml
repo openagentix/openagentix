@@ -1,0 +1,255 @@
+{{- $cnRaw := .Values.console | default dict }}
+{{- if hasKey $cnRaw "enabled" }}{{ if not (kindIs "bool" $cnRaw.enabled) }}{{ fail "console.enabled must be true or false" }}{{ end }}{{ end }}
+{{- if $cnRaw.enabled }}
+{{- $c := .Values.console }}
+{{- if not (include "oa.cpOn" .) }}{{ fail "console.enabled needs controlPlane.enabled=true: the console shows and writes AgentDefinitions and mounts the control plane's catalog and policy" }}{{ end }}
+{{- $ns := default .Release.Namespace $c.namespace }}
+{{- if ne $ns (include "oa.cpNamespace" .) }}{{ fail (printf "console.namespace (%s) must be the same namespace as the control plane (%s): the console mounts the control plane's catalog and policy ConfigMaps, and a ConfigMap cannot be mounted across namespaces. The chart does not copy that data" $ns (include "oa.cpNamespace" .)) }}{{ end }}
+{{- if not (kindIs "bool" $c.viewer) }}{{ fail "console.viewer must be true or false" }}{{ end }}
+{{- if not (kindIs "slice" $c.allowedHosts) }}{{ fail "console.allowedHosts must be a list of host names (optionally host:port)" }}{{ end }}
+{{- range $x := $c.allowedHosts }}
+{{- if not (and (kindIs "string" $x) (regexMatch "^[A-Za-z0-9.:\\[\\]-]+$" $x)) }}{{ fail (printf "console.allowedHosts entry %v is not a host name (no scheme, path or comma; for example console.example.org or console.example.org:8443)" $x) }}{{ end }}
+{{- end }}
+{{- $ts := $c.tokenSecret | default dict }}
+{{- $mOver := (($c.metrics | default dict).url | default "") }}
+{{- if and $mOver (not (and (kindIs "string" $mOver) (regexMatch "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$" $mOver))) }}{{ fail "console.metrics.url must be an http or https URL of the form scheme://host[:port], without credentials, path or query" }}{{ end }}
+{{- $mBundled := and (include "oa.obsOn" .) .Values.observability.bundled.enabled (not $mOver) }}
+{{- $mURL := $mOver }}
+{{- $tOver := (($c.traces | default dict).url | default "") }}
+{{- if and $tOver (not (and (kindIs "string" $tOver) (regexMatch "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$" $tOver))) }}{{ fail "console.traces.url must be an http or https URL of the form scheme://host[:port], without credentials, path or query" }}{{ end }}
+{{- $tBundled := and (include "oa.obsOn" .) .Values.observability.bundled.enabled .Values.observability.tracing.enabled (not $tOver) }}
+{{- $tURL := $tOver }}
+{{- if $tBundled }}{{ $tURL = printf "http://jaeger.%s.svc:16686" .Values.observability.namespace }}{{ end }}
+{{- if $mBundled }}{{ $mURL = printf "http://victoria-metrics.%s.svc:8428" .Values.observability.namespace }}{{ end }}
+{{- if not (and (kindIs "string" $ts.name) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ts.name)) }}{{ fail "console.tokenSecret.name must be a Secret name" }}{{ end }}
+{{- if not (and (kindIs "string" $ts.key) (regexMatch "^[-._a-zA-Z0-9]+$" $ts.key)) }}{{ fail "console.tokenSecret.key must be a Secret key (letters, digits, - _ .)" }}{{ end }}
+{{- if not (kindIs "slice" ($c.apiServerCIDRs | default list)) }}{{ fail "console.apiServerCIDRs must be a list of CIDRs" }}{{ end }}
+{{- range $x := ($c.apiServerCIDRs | default list) }}
+{{- if not (and (kindIs "string" $x) (or (regexMatch "^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$" $x) (regexMatch "^[0-9a-fA-F:]*:[0-9a-fA-F:.]*/([0-9]{1,2}|1[01][0-9]|12[0-8])$" $x))) }}{{ fail (printf "console.apiServerCIDRs entry %v is not a CIDR (for example 10.0.0.0/24)" $x) }}{{ end }}
+{{- end }}
+{{- if not (kindIs "slice" $c.apiServerPorts) }}{{ fail "console.apiServerPorts must be a list of port numbers" }}{{ end }}
+{{- range $x := $c.apiServerPorts }}
+{{- if not (and (or (kindIs "float64" $x) (kindIs "int64" $x) (kindIs "int" $x)) (ge (int $x) 1) (le (int $x) 65535)) }}{{ fail (printf "console.apiServerPorts entry %v is not a port number" $x) }}{{ end }}
+{{- end }}
+{{- $kns := .Values.kagent.namespace }}
+{{- $sa := "openagentix-console" }}
+{{- $catalogJSON := include "oa.cpCatalog" . }}
+{{- $policyJSON := include "oa.cpPolicy" . }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+---
+# One namespaced Role, derived from what services/console/internal/backend does (no ClusterRole, no wildcard, no Secret, nothing on the status subresource).
+# The code lists the four kagent kinds and never reads one by name or watches (list). For definitions it GETs, lists, POSTs (create, and the dry run of
+# a create), PUTs (update, and the dry run of a save) and DELETEs; it never PATCHes and never watches. A viewer gets no write verb (the console sends no dry run for it).
+# The console can only write AgentDefinition, which the controller validates, so no admission policy is bound to this ServiceAccount: the control plane's guard
+# matches the controller's username only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $kns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [openagentix.io]
+    resources: [agentdefinitions]
+    {{- if $c.viewer }}
+    verbs: [get, list]
+    {{- else }}
+    verbs: [get, list, create, update, delete]
+    {{- end }}
+  - apiGroups: [api.kagent.dev]
+    resources: [agents, agenttemplates, harnesses, modelconfigs]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $kns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $ns }}}
+---
+# One replica, hardened like the A2A gate and the control plane. The Secret of the token is created by install.sh (only when absent, never printed); until it
+# exists the pod waits in ContainerCreating.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: console}
+  template:
+    metadata:
+      labels:
+        app: console
+        {{- include "oa.labels" . | nindent 8 }}
+      annotations:
+        # the console reads the token again when the file changes, but the catalog and the policy only at start: a change of either replaces the pod
+        checksum/catalog: {{ $catalogJSON | sha256sum | quote }}
+        checksum/policy: {{ $policyJSON | sha256sum | quote }}
+        # the Secret's content is not known to the chart; its name and key are
+        checksum/token-secret: {{ printf "%s/%s" $ts.name $ts.key | sha256sum | quote }}
+        {{- if $c.sourceHash }}
+        # set by install.sh from the content of services/console and console: a code change rolls the pod although the image tag stays "dev"
+        openagentix.io/source-hash: {{ $c.sourceHash | quote }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $sa }}
+      automountServiceAccountToken: true   # its own token talks to the API server
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: console
+          image: {{ printf "%s:%s" $c.image.repository (toString $c.image.tag) | quote }}
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: CONSOLE_TOKEN_FILE, value: {{ printf "/etc/console/token/%s" $ts.key | quote }}}
+            - {name: CONSOLE_CATALOG_FILE, value: /etc/console/catalog/catalog.json}
+            - {name: CONSOLE_POLICY_FILE, value: /etc/console/policy/policy.json}
+            - {name: CONSOLE_NAMESPACE, value: {{ $kns | quote }}}
+            {{- if $c.viewer }}
+            - {name: CONSOLE_VIEWER, value: "1"}
+            {{- end }}
+            {{- if $tURL }}
+            - {name: CONSOLE_TRACES_URL, value: {{ $tURL | quote }}}
+            {{- end }}
+            {{- if $mURL }}
+            - {name: CONSOLE_METRICS_URL, value: {{ $mURL | quote }}}
+            {{- end }}
+            {{- if $c.allowedHosts }}
+            - {name: CONSOLE_ALLOWED_HOSTS, value: {{ join "," $c.allowedHosts | quote }}}
+            {{- end }}
+          volumeMounts:
+            - {name: token, mountPath: /etc/console/token, readOnly: true}
+            - {name: catalog, mountPath: /etc/console/catalog, readOnly: true}
+            - {name: policy, mountPath: /etc/console/policy, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          # The console answers 421 to any Host that is not on its list, and the kubelet sends the pod IP: the probes name the host themselves.
+          startupProbe:
+            httpGet: {path: /healthz, port: http, httpHeaders: [{name: Host, value: localhost}]}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http, httpHeaders: [{name: Host, value: localhost}]}
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet: {path: /healthz, port: http, httpHeaders: [{name: Host, value: localhost}]}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources: {{- toYaml $c.resources | nindent 12 }}
+      volumes:
+        - name: token
+          secret:
+            secretName: {{ $ts.name | quote }}
+            defaultMode: 0440
+            items:
+              - {key: {{ $ts.key | quote }}, path: {{ $ts.key | quote }}}
+        - name: catalog
+          configMap: {name: openagentix-control-plane-catalog}
+        - name: policy
+          configMap: {name: openagentix-control-plane-policy}
+---
+# ClusterIP only, no Ingress: it is reached with kubectl port-forward, which does not pass through a NetworkPolicy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {app: console}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+{{- if .Values.networkPolicy.enabled }}
+---
+# No ingress (port-forward does not pass through a NetworkPolicy; the kubelet's probes are not blocked either). Egress: DNS and the API server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app: console}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    {{- if $mBundled }}
+    # The bundled metrics store's query port, nothing else in that namespace.
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .Values.observability.namespace | quote }}}}
+          podSelector: {matchLabels: {app: victoria-metrics}}
+      ports:
+        - {protocol: TCP, port: 8428}
+    {{- end }}
+    {{- if $tBundled }}
+    # The bundled Jaeger's query port, nothing else in that namespace.
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .Values.observability.namespace | quote }}}}
+          podSelector: {matchLabels: {app: jaeger}}
+      ports:
+        - {protocol: TCP, port: 16686}
+    {{- end }}
+    {{- if $c.apiServerCIDRs }}
+    # The API server's addresses (install.sh sets them, as for the control plane: on kind the /24 of the node address, elsewhere the exact endpoints).
+    - to:
+        {{- range $c.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports:
+        {{- range $c.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- else }}
+    # FALLBACK, because console.apiServerCIDRs is empty: the API server ports towards ANY address (a policy that allowed no address would cut the
+    # console off from the API server, and the chart cannot look the address up). Set console.apiServerCIDRs (install.sh does) to close it.
+    - ports:
+        {{- range $c.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

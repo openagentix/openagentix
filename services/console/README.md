@@ -26,8 +26,11 @@ this program builds.
 |---|---|
 | `GET /healthz` | liveness and readiness; no token |
 | `GET /api/v1/session` | who am I (`console`), role (`operator` or `viewer`), `canWrite`, `capabilities` (`create`, `update`, `delete`, `validate`: what the Authorizer allows for a bare resource; `canWrite` is true only when the first three are), `demo`, version, namespace |
-| `GET /api/v1/platform` | catalog and policy summary read from the two mounted JSON files; no secrets, no images |
-| `GET /api/v1/agents` | built definitions plus chart agents (`source: "chart"`, read-only), `used` = built definitions counted by `maxAgents`; `truncated` and `cap` when the cluster holds more than the console reads (see "Bounded reads") |
+| `GET /api/v1/platform` | catalog and policy summary read from the two mounted JSON files (the policy includes `suspendAll` and `egress.inClusterDestinations`); no secrets, no images |
+| `GET /api/v1/agents` | built definitions (with `effectiveTools` and `effectiveEgress` from their status) plus chart agents (`source: "chart"`, read-only), `used` = built definitions counted by `maxAgents`; `truncated` and `cap` when the cluster holds more than the console reads (see "Bounded reads") |
+| `GET /api/v1/metrics/summary` | spend, tokens, requests, cache-read share, spend per gateway user and a 24-point spend series for `?window=24h` (default) or `7d`, read from the metrics store named by `CONSOLE_METRICS_URL`. The queries are fixed text in `internal/observe` (the ones of README "Observability"); the browser chooses only the window name, nothing else reaches the store. Bounded: 8 s timeout, 1 MiB per answer, 100 series, 20 users. Any failure is 503 `metrics_unavailable` with one sentence; what the store said is only logged. `GET /api/v1/platform` carries `metrics.available` (true when a store is configured) |
+| `GET /api/v1/traces` | the most recent agent turns (time, agent, outcome, model calls, duration, tokens) read from the Jaeger query API named by `CONSOLE_TRACES_URL`. No input: the queries are fixed text in `internal/observe` (service list, then the `a2a.request` operation over a 6 h look-back, at most 20 services, 30 turns). 503 `traces_unavailable` when not configured or not answering |
+| `GET /api/v1/traces/{traceId}` | the spans of one turn for the waterfall. The id must be 32 lower-case hex characters (400 otherwise, never sent to the store). Only an allowlist of span attributes is passed on (model, token counts, agent, tool name, task state, error type); prompts, answers, tool arguments and results, and headers are dropped whatever the trace holds |
 | `POST /api/v1/agents` | create a definition: body `{name, spec}`; 201, 409 `exists`, 422 `invalid` |
 | `POST /api/v1/agents/validate` | dry run: the API server's schema check with `dryRun=All` (nothing is written) and a **predicted** list. An identity that may not write (viewer) gets the predictions only (`schema.skipped: true`): no request reaches the cluster. Limited per identity per minute (429 `rate_limited`) |
 | `GET /api/v1/agents/{name}` | spec, status, conditions, YAML text; for a chart agent what could be read of it, `readOnly: true`; `unmanaged` lists spec fields the console cannot edit (see "Saving keeps what it does not know") |
@@ -93,6 +96,8 @@ are shown as tags. Chart agents are read from kagent objects and mapped to the s
 | `CONSOLE_KUBE_CA_FILE` | the ServiceAccount `ca.crt` when the address is in-cluster | cluster CA |
 | `CONSOLE_KAGENT_API` | `api.kagent.dev/v1alpha3` | group and version of the kagent kinds read for chart agents |
 | `CONSOLE_CONTEXT` | empty | text shown under the wordmark (for example `kind-openagentix · kagent`) |
+| `CONSOLE_METRICS_URL` | empty | base URL of a Prometheus-compatible query API (the bundled VictoriaMetrics, `http://victoria-metrics.openagentix-observability.svc:8428`); empty means no metrics and the Overview and Costs pages say so. In demo mode (`CONSOLE_DEV_FAKE`) fixed, invented numbers are served instead |
+| `CONSOLE_TRACES_URL` | empty | base URL of the bundled Jaeger query API (`http://jaeger.openagentix-observability.svc:16686`); empty means no traces. `GET /api/v1/platform` carries `traces.available` |
 | `CONSOLE_REQUEST_TIMEOUT` | `15s` | per-request deadline, also passed to the Kubernetes calls |
 | `CONSOLE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `CONSOLE_ALLOWED_HOSTS` | empty | comma-separated host names (optional `:port`) accepted in the `Host` header besides `localhost`, `127.0.0.1` and `[::1]`; set it for an Ingress name. Any other Host is answered `421` |
@@ -204,15 +209,33 @@ the app shell answers 503 with a hint.
 
 ## Deploying (what the chart needs)
 
-- **Image** `openagentix/console`, port **8080**, non-root, read-only root filesystem works (it writes nothing).
-- **ServiceAccount** `openagentix-console` with a Role in the agents namespace (kagent): `openagentix.io` `agentdefinitions` get, list, watch,
-  create, update, delete; and read only (get, list) on `api.kagent.dev` `agents`, `agenttemplates`, `harnesses`, `modelconfigs`.
-  Nothing on Secrets, nothing cluster-wide, no `agentdefinitions/status`.
-- **Secret** `console-token`, key `token`, generated by `install.sh` when absent and never printed; mounted as a file, path in `CONSOLE_TOKEN_FILE`.
-- **Mounts** the two ConfigMaps the controller reads (catalog and policy) as files, paths in `CONSOLE_CATALOG_FILE` and `CONSOLE_POLICY_FILE`.
-- **NetworkPolicy** ingress: nobody (use `kubectl port-forward svc/console 8080:8080`); egress: DNS and the Kubernetes API only.
-- **Probes** `GET /healthz` (no token) on 8080, with the header `Host: localhost` (`httpGet.httpHeaders`): the Host allowlist answers 421 to the
-  pod IP that the kubelet would send otherwise.
-- **Env** `CONSOLE_NAMESPACE=kagent`, optionally `CONSOLE_CONTEXT`, `CONSOLE_VIEWER=1` for a read-only console, `CONSOLE_ALLOWED_HOSTS`
-  and `CONSOLE_HSTS=1` when an Ingress with TLS is added. `install.sh` must create a `console-token` of at least 32 characters.
+The chart does all of this. It is opt-in: `console.enabled: true` (`components/console/demo-values.yaml`), and it needs `controlPlane.enabled` and the
+same namespace as the control plane (the render fails otherwise: the console mounts the control plane's two ConfigMaps, and the chart does not copy them).
+`install.sh` builds the image (`docker build -f services/console/Dockerfile .`, repository root as the context), loads it into kind, creates the token
+Secret when absent (48 random characters, never printed) and prints how to open it:
+
+```sh
+kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080       # then open http://127.0.0.1:8080
+kubectl get secret -n openagentix-system console-token -o jsonpath='{.data.token}' | base64 -d; echo    # the sign-in token
+```
+
+What the chart renders (`charts/openagentix/templates/console.yaml`, values block `console`):
+
+- **Image** `openagentix/console`, port **8080** (`http`), one replica, non-root 65532, read-only root filesystem, all capabilities dropped, seccomp `RuntimeDefault`.
+- **ServiceAccount** `openagentix-console` with one Role in the agents namespace (kagent), derived from what `internal/backend` really calls:
+  `openagentix.io` `agentdefinitions`: get, list, create, update, delete (create and update also cover the dry run of `validate`); with
+  `console.viewer: true` only get and list (a viewer sends no dry run). `api.kagent.dev` `agents`, `agenttemplates`, `harnesses`, `modelconfigs`: **list** only
+  (the console lists them and never reads one by name). No watch, no patch, nothing on Secrets, nothing cluster-wide, no `agentdefinitions/status`. The
+  control plane's admission guard matches the controller's username only, so it does not apply to this ServiceAccount; the console writes only
+  `AgentDefinition`, which the controller validates. `tests/run.sh` asserts the exact rules.
+- **Secret** `console-token`, key `token` (`console.tokenSecret`), mounted as a file, path in `CONSOLE_TOKEN_FILE`. The chart renders no Secret.
+- **Mounts** the two ConfigMaps the controller reads (catalog and policy) read-only; paths in `CONSOLE_CATALOG_FILE` and `CONSOLE_POLICY_FILE`.
+  A change of either (or a new `console.sourceHash`) replaces the pod.
+- **Service** ClusterIP 8080; no Ingress. **NetworkPolicy** ingress: nobody (`kubectl port-forward` does not pass through it); egress: DNS and the
+  Kubernetes API only (`console.apiServerCIDRs`, which `install.sh` sets; empty means the API server ports towards any address).
+- **Probes** `GET /healthz` on `http` with `httpHeaders: [{name: Host, value: localhost}]`: the Host allowlist answers 421 to the pod IP the kubelet sends otherwise.
+- **Env** `CONSOLE_NAMESPACE` (the agents namespace), `CONSOLE_VIEWER=1` for `console.viewer`, `CONSOLE_ALLOWED_HOSTS` from `console.allowedHosts`
+  (and `CONSOLE_HSTS=1` is yours to add when an Ingress with TLS is). The token must be at least 32 characters; `install.sh` makes 48.
 - The catalog may carry `"demo": true` (rendered from the demo values files); then the web app shows its "Demo data" tag.
+
+The HTTP API, the extension interfaces and the OpenAPI file are in the [API reference](../../docs/diary/reference/console-api.md).

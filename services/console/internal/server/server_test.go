@@ -19,7 +19,7 @@ import (
 
 func TestRouteTableIsExactlyTheDocumentedList(t *testing.T) {
 	want := []string{
-		"GET /healthz", "GET /api/v1/session", "GET /api/v1/platform", "GET /api/v1/agents", "POST /api/v1/agents", "POST /api/v1/agents/validate",
+		"GET /healthz", "GET /api/v1/session", "GET /api/v1/platform", "GET /api/v1/agents", "GET /api/v1/metrics/summary", "GET /api/v1/traces", "GET /api/v1/traces/{traceId}", "POST /api/v1/agents", "POST /api/v1/agents/validate",
 		"GET /api/v1/agents/{name}", "PUT /api/v1/agents/{name}", "DELETE /api/v1/agents/{name}", "/",
 	}
 	if !slices.Equal(server.Routes, want) {
@@ -55,7 +55,7 @@ func TestSessionAndPlatform(t *testing.T) {
 		t.Fatal(resp.Status, string(b))
 	}
 	p := decodeInto[platform.Summary](t, b)
-	if !slices.Contains(p.Models, "claude-haiku") || p.Policy.MaxAgents != 5 || len(p.Profiles) != 1 || p.Skills[0].Name != "openagentix-canary" {
+	if !slices.Contains(p.Models, "claude-haiku") || p.Policy.MaxAgents != 5 || len(p.Profiles) != 2 || p.Skills[0].Name != "openagentix-canary" {
 		t.Fatalf("platform: %+v", p)
 	}
 	for _, leak := range []string{"harnessImage", "snapshotLocation", "workerPool", "harnessEnv", "ghcr.io"} {
@@ -97,6 +97,29 @@ func TestListMergesChartAgentsAndSkipsControllerMadeAgents(t *testing.T) {
 	}
 	if !sawSelector {
 		t.Error("the chart agent list did not ask for agents without the definition label")
+	}
+}
+
+// The Governance page shows what each agent is really given (the status, not the request) from the list alone.
+func TestListCarriesEffectiveToolsAndEgress(t *testing.T) {
+	r := newRig(t)
+	r.api.seed("researcher", spec("claude-haiku"), map[string]any{
+		"effectiveTools":  []any{"osv_query_vulnerability", "execute_tool_script"},
+		"effectiveEgress": []any{"https://api.osv.dev"},
+		"conditions":      []any{map[string]any{"type": "Ready", "status": "True", "reason": "Ready"}}})
+	r.api.seed("empty", spec("claude-haiku"), map[string]any{})
+	_, b := r.do(t, "GET", "/api/v1/agents", nil)
+	l := decodeInto[model.AgentList](t, b)
+	got := map[string]model.Agent{}
+	for _, a := range l.Items {
+		got[a.Name] = a
+	}
+	a := got["researcher"]
+	if !slices.Equal(a.EffectiveTools, []string{"osv_query_vulnerability", "execute_tool_script"}) || !slices.Equal(a.EffectiveEgress, []string{"https://api.osv.dev"}) {
+		t.Fatalf("researcher: %+v", a)
+	}
+	if e := got["empty"]; e.EffectiveTools == nil || e.EffectiveEgress == nil {
+		t.Fatalf("an agent without status must list empty slices, not null: %s", b)
 	}
 }
 

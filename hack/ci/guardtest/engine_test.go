@@ -53,15 +53,15 @@ type compiled struct {
 type engine struct{ policies []compiled }
 
 func newEngine(pols []v1.ValidatingAdmissionPolicy) (*engine, error) {
-	env, err := cel.NewCompositionEnv(cel.VariablesTypeName, environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion()))
-	if err != nil {
-		return nil, err
-	}
+	env := environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion())
 	opt := cel.OptionalVariableDeclarations{HasAuthorizer: true}
 	optNoAuth := cel.OptionalVariableDeclarations{}
 	e := &engine{}
 	for _, pol := range pols {
-		fc := cel.NewCompositedCompilerFromTemplate(env)
+		fc, err := cel.NewCompositedCompiler(env)
+		if err != nil {
+			return nil, err
+		}
 		var vars []cel.NamedExpressionAccessor
 		for _, v := range pol.Spec.Variables {
 			vars = append(vars, &validating.Variable{Name: v.Name, Expression: v.Expression})
@@ -78,7 +78,7 @@ func newEngine(pols []v1.ValidatingAdmissionPolicy) (*engine, error) {
 			msgs = append(msgs, &validating.MessageExpressionCondition{MessageExpression: v.MessageExpression})
 		}
 		val := validating.NewValidator(fc.CompileCondition(vals, opt, environment.StoredExpressions), matcher,
-			fc.CompileCondition(nil, opt, environment.StoredExpressions), fc.CompileCondition(msgs, optNoAuth, environment.StoredExpressions), pol.Spec.FailurePolicy)
+			fc.CompileCondition(nil, opt, environment.StoredExpressions), fc.CompileCondition(msgs, optNoAuth, environment.StoredExpressions), pol.Spec.FailurePolicy, nil)
 		e.policies = append(e.policies, compiled{pol: pol, validator: val})
 	}
 	return e, nil
@@ -167,7 +167,7 @@ func (e *engine) eval(r request) verdict {
 			continue
 		}
 		attrs := admission.NewAttributesRecord(obj, old, gvk, r.Namespace, r.ObjName, gvr, r.Sub, admission.Operation(r.Op), &metav1.CreateOptions{}, false, &user.DefaultInfo{Name: r.User})
-		va := &admission.VersionedAttributes{Attributes: attrs, VersionedKind: gvk, VersionedObject: obj, VersionedOldObject: old}
+		va := &admission.VersionedAttributes{Attributes: attrs, VersionedKind: gvk, VersionedObject: admission.NewLazyObject(obj), VersionedOldObject: admission.NewLazyObject(old)}
 		res := p.validator.Validate(context.Background(), gvr, va, nil, nil, celconfig.RuntimeCELCostBudget, nil)
 		if len(res.Decisions) == 0 {
 			continue // the policy's matchConditions did not select the user

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 	"github.com/openagentix/openagentix/services/console/internal/config"
 	"github.com/openagentix/openagentix/services/console/internal/fake"
 	"github.com/openagentix/openagentix/services/console/internal/kube"
+	"github.com/openagentix/openagentix/services/console/internal/observe"
 	"github.com/openagentix/openagentix/services/console/internal/platform"
 	"github.com/openagentix/openagentix/services/console/internal/server"
 	"github.com/openagentix/openagentix/services/console/web"
@@ -101,7 +103,22 @@ func run(ctx context.Context, getenv func(string) string, d deps) error {
 		kb.Cap = cfg.ListMax
 		be = kb
 	}
+	var obs observe.Observability
+	switch {
+	case cfg.DevFake:
+		obs = fake.Observe{}
+	case cfg.MetricsURL != "" || cfg.TracesURL != "":
+		comp := observe.Composite{}
+		if cfg.MetricsURL != "" {
+			comp.M = observe.NewProm(cfg.MetricsURL, &http.Client{Timeout: 8 * time.Second})
+		}
+		if cfg.TracesURL != "" {
+			comp.T = observe.NewJaeger(cfg.TracesURL, &http.Client{Timeout: 8 * time.Second})
+		}
+		obs = comp
+	}
 	h := server.New(server.Options{
+		Observe: obs,
 		Backend: be, Platform: plat, Authenticator: auth, Authorizer: builtin.RoleAuthz{Viewer: cfg.Viewer},
 		Audit:  builtin.LogAudit{Log: slog.New(slog.NewJSONHandler(d.Stdout, nil))},
 		Static: web.FS(), Log: d.Log, Demo: cfg.DevFake, Namespace: ns, Context: cfg.Context, Version: version, RequestTimeout: cfg.RequestTimeout,

@@ -21,6 +21,8 @@
 # does not go within DEFINITIONS_WAIT (default 300s) the script stops before it removes anything else. The CRD itself is kept by the release (so that a
 # later install finds its definitions); PURGE_DATA=1 deletes it (and with it every definition left). PURGE_SECRETS=1 also deletes the controller's key
 # ConfigMap (llm-api-keys-control-plane); the key Secrets of built agents are deleted with their definitions (owner reference).
+# Console (ADR 0007, slice 3): the Deployment, Service, NetworkPolicy, ServiceAccount, Role and RoleBinding go with the release. The login token Secret
+# (console-token) is kept, so a later ./install.sh keeps the same token; PURGE_SECRETS=1 deletes it.
 set -euo pipefail
 CLUSTER=${CLUSTER:-openagentix}; CTX=${KUBE_CONTEXT:-kind-$CLUSTER}
 K=${KUBECTL:-kubectl}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
@@ -40,6 +42,8 @@ NOTIFYSECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq 
 WHSECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r 'select(.kind=="ChatConnection" and .spec.platform=="webhook")|.metadata.namespace+"/"+.spec.credentialsSecretRef.name' 2>/dev/null || true)
 # A2A gate (governance.a2a): the key Secret of every Kourier binding and the gate's hash Secret, read before the release goes
 GATESECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r '(select(.kind=="Binding" and .spec.identity.tokenSecretRef!=null)|.metadata.namespace+"/"+.spec.identity.tokenSecretRef.name),(select(.kind=="Deployment" and .metadata.name=="a2a-gate")|.metadata.namespace as $ns|.spec.template.spec.volumes[]|select(.name=="keys")|$ns+"/"+.secret.secretName)' 2>/dev/null || true)
+# console (console.enabled): the login token Secret, read before the release goes
+CONSOLESECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r 'select(.kind=="Deployment" and .metadata.name=="openagentix-console")|.metadata.namespace as $ns|.spec.template.spec.volumes[]|select(.name=="token")|$ns+"/"+.secret.secretName' 2>/dev/null || true)
 if helm status openagentix -n "$RELEASE_NS" >/dev/null 2>&1; then
   helm uninstall openagentix -n "$RELEASE_NS" --wait
 else
@@ -49,6 +53,7 @@ KOURIER_NS=${KOURIER_NS:-agent-kourier} CLUSTER="$CLUSTER" KUBE_CONTEXT="$CTX" K
 if [ "${PURGE_SECRETS:-0}" = 1 ]; then
   for row in $WHSECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done
   for row in $GATESECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done   # gate keys and their hashes
+  for row in $CONSOLESECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done   # the console's login token
   for row in $VKEYS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done
   $K delete configmap llm-api-keys llm-api-keys-control-plane -n agentgateway-system --ignore-not-found
   $K delete secret kb-admin kb-virtual-key -n openagentix-knowledge --ignore-not-found

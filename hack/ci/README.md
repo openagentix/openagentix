@@ -22,7 +22,11 @@ Workflows are in `.github/workflows/`. Every check also runs locally through the
 
 Make **`ci-ok`** the only required status check in the branch protection rule. Docs-only changes (`docs/`, `website/`, `*.md`,
 `LICENSE`) skip everything except `secrets`; `ci-ok` still passes. Superseded runs of the same ref are cancelled.
-`docs.yml` is separate and untouched. `e2e.yml` is a scaffold that fails by design (see `E2E-PLAN.md`).
+`docs.yml` is separate and untouched. `e2e.yml` is the keyless end-to-end install (see "e2e" below); it is NOT in `ci-ok` yet.
+
+## e2e (keyless quick start)
+
+`.github/workflows/e2e.yml` installs the quick start on a hosted `ubuntu-24.04` runner with no key and no token (`PROFILE=quickstart ./install.sh`, the stub model), then runs `hack/ci/smoke.sh`: the agent is Ready, a question is answered through the A2A gate with a tool call, a tool outside the profile returns nothing, a forbidden definition is refused, the console API answers 401 without the token and lists the agent with it. It runs on pull requests that touch install-relevant paths, nightly, and by hand. The job summary has the time to the first working agent and the install steps with their times. Local equivalent: `PROFILE=quickstart ./install.sh && hack/ci/smoke.sh`. The record of the runs, including gVisor on the runner, is below.
 
 ## Tools and pins
 
@@ -59,6 +63,6 @@ does), then add a Docker-based target to the `integration` job.
 
 ## Not built yet
 
-- **e2e.** See `E2E-PLAN.md`.
+- **e2e as a required check.** It runs but is not in `ci-ok` until it has passed reliably (see "e2e").
 - **arm64 images.** Only linux/amd64 is built. The Dockerfiles do not pin a platform, so arm64 on a hosted amd64 runner means QEMU
   emulation; use an arm64 runner (`ubuntu-24.04-arm`) in the `images` matrix when that is needed.

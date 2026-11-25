@@ -18,7 +18,7 @@ Bug fixes, tests, documentation and changes that follow an accepted ADR do not n
 
 1. **Issue.** Open an issue with the `kind/design` label (use the "Design proposal" template). It states the problem, not the solution. Triage adds `status/needs-design` while the question is open.
 2. **Draft.** Copy [`0000-template.md`](0000-template.md) to the next free number, `NNNN-short-title.md`, set the status to `Proposed`, and open a pull request. One ADR per pull request. Link the issue.
-3. **Discussion.** Review happens in the pull request. Objections give a reason and, if possible, an alternative. The pull request stays open at least 7 days for a change to a public resource, a default or the security model (see [GOVERNANCE.md](../../GOVERNANCE.md)).
+3. **Discussion.** Review happens in the pull request. Objections give a reason and, if possible, an alternative. The pull request stays open at least 7 days for a change to a public resource, a default or the security model (see [GOVERNANCE.md](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md)).
 4. **Decision.** A maintainer merges the pull request with the status set to one of:
    - `Accepted`: the direction is decided. Slices are then built, each with tests.
    - `Rejected`: kept in the repository, with the reasons, so the question is not asked again from scratch.
@@ -60,5 +60,7 @@ Follow the style of the existing records:
 | [0010](0010-community-and-enterprise-editions.md) | Community and enterprise editions | Accepted as direction (changed by 0011) | 2026-11-25 |
 | [0011](0011-foundation-readiness.md) | Readiness for a foundation | Accepted as direction | 2026-11-25 |
 | [0012](0012-platform-primitives-for-agentic-delivery.md) | Platform primitives for products built on OpenAgentix | Accepted | 2026-11-25 |
+| [0013](0013-focus-and-runtime-neutrality.md) | One focus, bring your own agent, adopted identity | Accepted | 2026-11-25 |
+| [0014](0014-quick-start-profile.md) | A quick start profile that needs no paid key and no chat token | Accepted | 2026-11-25 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.

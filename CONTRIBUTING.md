@@ -20,6 +20,8 @@ If you are unsure where to begin, open a GitHub Discussion or an issue and ask. 
 
 Issues are the single backlog, grouped in milestones that match the releases in [docs/roadmap.md](docs/roadmap.md). Look for the labels `good first issue`, `help wanted` and `adapter`. How issues are triaged, how branches and pull requests are named and merged, which checks are required, how review works while there is one maintainer, how releases are cut, and how security fixes are handled is written in [docs/contributing/workflow.md](docs/contributing/workflow.md). Decision records have their own guide: [docs/decisions/README.md](docs/decisions/README.md).
 
+[CLAUDE.md](CLAUDE.md) (also pointed to by [AGENTS.md](AGENTS.md)) is a short guide to the repository, its commands and its rules, for AI coding assistants and for new contributors.
+
 ## Build and test
 
 You need Go (the modules use Go 1.25 or newer), plus `helm`, `jq` and `yq` for the chart tests. `yq` here is the Python wrapper (`pip install yq==3.4.3`), not mikefarah's `yq`. The full install needs Docker, `kind` and `kubectl`; see the README, "Prerequisites".
@@ -50,7 +52,7 @@ Needs Docker:
 charts/openagentix/tests/memory-expiry-integration.sh   # starts and stops its own PostgreSQL
 ```
 
-Needs a cluster (a kind node, see the README "Quickstart"). Run these only if your change touches the installer or the live behaviour, and say in the pull request what you ran and what you saw.
+Needs a cluster (a kind node, see the README "Try it in 10 minutes" and "Full demo install"). Run these only if your change touches the installer or the live behaviour, and say in the pull request what you ran and what you saw.
 
 ```sh
 ./install.sh

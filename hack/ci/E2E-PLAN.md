@@ -1,111 +1,49 @@
-# Keyless end-to-end install in CI: what has to change
+# Keyless end-to-end install in CI
 
-Status: **not built.** `.github/workflows/e2e.yml` is a scaffold whose first step fails on purpose. This page says exactly what
-would have to change in `install.sh` and the chart before a CI run on a GitHub-hosted runner (4 vCPU, 16 GB, no secrets) can
-honestly go green. Nothing here was run; the findings come from reading `install.sh`, `charts/openagentix/values.yaml` and
-`components/`.
+Status: **built** (ADR 0014, issue #34). `.github/workflows/e2e.yml` installs the quick start on a GitHub-hosted runner with no key and
+no chat token, then runs `hack/ci/smoke.sh`. It is not in the required `ci-ok` gate yet; the table below is the record that decides when it
+goes in (several consecutive green runs on pull requests and nightly).
 
-## What `install.sh` hard-requires today
+## What runs
 
-1. **`ANTHROPIC_API_KEY`** (preflight, lines ~86-88): the script stops before changing anything unless the variable is set or
-   the Secret `agentgateway-system/anthropic-api-key` exists. It is then written to that Secret (`put_secret`, ~218). The default
-   chart model `claude-haiku` (`gateway.models[0]`, `provider: Anthropic`, `authSecret: anthropic-api-key`) and the default agent
-   `assistant` (`model: claude-haiku`) depend on it.
-2. **`TELEGRAM_BOT_TOKEN`** (preflight, lines ~89-91; Secret `openagentix-gateway/telegram-bridge`, ~220). The bridge is
-   `bridge.enabled: true` by default, builds and loads its image, and is part of the wait loop. `TELEGRAM_ALLOWED_CHAT_IDS` only
-   warns.
-3. **Tools**: `docker kind kubectl helm jq yq openssl shasum` (preflight). `shasum` is on the ubuntu runner (perl); `yq` must be
-   the Python wrapper (`hack/ci/install-tools.sh yq`).
-4. Everything else is conditional on chart values (`knowledge`, `notify`, `governance.a2a`, `schedules`, `channels.kourier`,
-   `observability`, memory), and each image build has a `SKIP_*` switch.
+1. `ubuntu-24.04` (4 vCPU, about 16 GB, `/dev/kvm` present), `helm`, `yq` (Python wrapper) and `kind` from `hack/ci/install-tools.sh`.
+2. `PROFILE=quickstart ./install.sh` with no environment variables: the profile (`components/quickstart/values.yaml`), the stub model, the
+   control plane, the console and the A2A gate, one `AgentDefinition`. `AGENT_WAIT=300s`. A step that fails fails the job (`pipefail`).
+3. `hack/ci/smoke.sh`: the agent is Ready; a question goes through the A2A gate (`hack/ask.sh`) and the stub answers with a real tool
+   call (the OSV tool through the tool profile, in the Substrate sandbox); a tool the profile does not offer returns no data; a definition
+   with a model outside the policy gets `Accepted=False` and no agent; the console API answers 401 without the token and lists the agent
+   with it.
+4. The job summary has the time from the start of `install.sh` to the agent Ready, each install step with its time, and the smoke output.
+   On any failure: pods, events, the agent objects, controller logs, the admission guard's answer for a key Secret
+   (`hack/ci/guard-probe.sh`) and `kind export logs` as an artifact.
 
-## A stub model path already exists in pieces
+Triggers: pull requests that touch `install.sh`, `charts/`, `components/`, `services/`, `console/`, the smoke and ask scripts or the
+workflow; nightly at 03:17 UTC; by hand.
 
-- `components/runtime/manifests/mock-llm.yaml` is an OpenAI-compatible stub server (a ConfigMap-hosted Python `http.server`, answers
-  `MOCK-LLM reply ... 2+2 is 4.`, streaming and non-streaming) in the `kagent` namespace, Service `mock-llm:8000`. It is "spike only":
-  `components/runtime/up.sh` applies `first-agent.yaml`, and the mock is referenced by `components/model-gateway/manifests/10-models.yaml`
-  (model `stub`, `provider: OpenAI`, `baseURL: http://mock-llm.kagent.svc.cluster.local:8000/v1`) and
-  `components/tools/manifests/30-mock-llm-tools.yaml`. Those are the spike manifests; the **chart does not render any of it**.
-- The chart's `gateway.models[]` supports `provider: OpenAI` with a `baseURL`, so a `stub` model entry needs no chart template change.
-- The bench harness (`components/bench`) has no stub of its own; it measures real backends.
+## Record
 
-## Proposed changes (minimal, in order)
+| Run | Result | Time to first working agent | Notes |
+|---|---|---|---|
+| first (commit e7dadef) | install reached the agent step in 355 s, agent never Ready | n/a | found a real bug: the control plane's key Secret carried the definition's labels and the admission guard refused it (422); fixed in `services/control-plane` (test first) |
+| second (commit 229e825) | **green, 10 of 10 smoke checks** | 366 s (6 min 6 s) from the start of `install.sh`; cold runner, nothing cached | see "Where the time goes" |
+| third (commit 091b596, the final profile with observability on) | **green, 10 of 10 smoke checks** | 394 s (6 min 34 s) | a first attempt of this commit range failed on a race (the quota on definitions had no status yet), fixed with a retry in `install.sh` |
 
-### In `install.sh`
+Where the time goes (second run, cumulative seconds from the start): kind cluster, CRDs, Substrate and its PostgreSQL, kagent and its
+PostgreSQL 128 s; agentgateway 55 s more (183 s); the four image builds (a2a-gate, stub-model, control-plane, console; 3 at a time, the
+console builds its web app inside Docker) 106 s (289 s); `helm upgrade --install` 7 s; the tool profile's vMCP 59 s (355 s); the agent
+Ready 11 s (366 s). The node used 2.3 GiB at the end.
 
-1. **A profile switch**, `E2E_PROFILE=ci` (or `KEYLESS=1`), read before the preflight. When set:
-   - skip the `ANTHROPIC_API_KEY` and `TELEGRAM_BOT_TOKEN` requirements;
-   - create `agentgateway-system/anthropic-api-key` with a dummy value only if the chosen values file still names it (better: the CI
-     values file does not, see below), and create no `telegram-bridge` Secret;
-   - set `SKIP_BRIDGE_IMAGE=1`, `SKIP_SKILL=1`, `SKIP_KB_INGEST=1`, `SKIP_NOTIFY_IMAGE=1`, `SKIP_A2A_GATE_IMAGE=1`, `SKIP_A2A_CALL_IMAGE=1`
-     by default.
-   Alternative with the same effect and less script logic: make both variables required only when the rendered chart actually
-   uses them (derive "needs Anthropic key" from `gateway.models[].authSecret` and "needs bridge token" from `bridge.enabled`).
-   This is the cleaner fix, because the preflight then states the real dependency and works for any keyless setup, not only CI.
-2. **Apply the stub** when the profile is on: `kubectl apply -f components/runtime/manifests/mock-llm.yaml` after the kagent
-   prerequisites (the stub Deployment lives in the `kagent` namespace, which `components/runtime/up.sh` creates). It must be
-   promoted from "spike only" to a supported test fixture (move to `components/testing/` or keep and document), and pin its
-   image (it runs a stock Python image; check the digest).
-3. **`kubectl-ate` download** (`components/runtime/up.sh`, release asset with SHA-256 check) and the Helm charts for kagent,
-   Substrate, agentgateway, ToolHive come from `ghcr.io`/`oci://`/GitHub. These are anonymous pulls; the risk is rate limits and
-   flakiness, not credentials.
-4. Optional: `AGENT_WAIT` default 900 s is right for a cold runner; keep it.
+## gVisor on a hosted runner
 
-### In the chart (a values file, no template change expected)
+Agent Substrate's gVisor sandbox **works** on `ubuntu-24.04` hosted runners with the default settings: the worker registered, the golden
+snapshot was taken, and a turn ran in a sandbox (the agent was Ready in 11 s and answered through a tool call). The runner has `/dev/kvm`,
+but the gVisor worker image used here does not need it (see `components/runtime/NOTES.md`: it ran on Docker Desktop without KVM).
+Observability (VictoriaMetrics and Jaeger) is ON in the profile: one dispatched run with it took 390 s against 366 s without, and the node used 2.366 GiB against 2.326 GiB; the smoke test passed in both.
 
-`components/ci/values.yaml` (new), passed with `VALUES_FILE`:
+Because it works, no weaker runtime class setting was added: there is no `SANDBOX_RUNTIME` switch, and nothing weakens the default.
 
-```yaml
-bridge: {enabled: false}
-knowledge: {enabled: false}          # kb + pgvector + local embedding model are the heaviest pieces
-observability: {enabled: false}
-governance: {a2a: {enabled: false}}
-notify: {enabled: false}
-schedules: []
-channels: {kourier: {enabled: false}}
-gateway:
-  models:
-    - {name: stub, provider: OpenAI, baseURL: "http://mock-llm.kagent.svc.cluster.local:8000/v1"}
-agents:
-  - name: assistant
-    model: stub
-    modelConfigName: gateway-stub
-    tools: []                        # no vMCP/ToolHive in the minimal profile
-```
+## What this does not prove
 
-Open questions to settle by running it once: whether `mcp.enabled: false` (no ToolHive, no vMCP) is accepted by the chart and
-the agent template; whether the agent needs a `skills` entry (the default `openagentix-canary` skill needs the in-cluster
-registry push, hence `SKIP_SKILL=1` and no skill in the CI values); whether the agent's virtual key (`assistant-virtual-key`)
-is created for a stub model the same way.
-
-## Minimal profile and what it costs
-
-| Part | In the minimal profile | Why |
-|---|---|---|
-| kind (1 node, `kindest/node:v1.37.0`) | yes | `hack/kind-config.yaml` |
-| kagent + Substrate (+ its PostgreSQL) | yes | the runtime under test |
-| agentgateway + Gateway API CRDs | yes | the stub is routed through it, the same path as production |
-| ToolHive + vMCP | no | tools are not needed for a message round trip |
-| kb, pgvector, embedding model | no | biggest image pulls and memory; covered by the integration job |
-| bridge, notify, a2a-gate, Kourier, observability | no | each has its own offline tests |
-
-Cold install of the full profile took about 23 minutes locally. The minimal profile removes ToolHive, the knowledge stack
-(PostgreSQL, embedding model), and the image builds, which were the longest waits; an estimate of **8-12 minutes** on a 4 vCPU runner
-is a guess and has to be measured. Memory: kagent controller, Substrate, a PostgreSQL, agentgateway and a gVisor-backed sandbox
-for the agent should fit in 16 GB, but the gVisor/proxy_arp sysctls (`install.sh` step 1) and Substrate's sandbox runtime on a
-GitHub runner (nested kernel features) are **unverified** and the most likely blocker.
-
-## Smoke test (to write)
-
-After `install.sh`: port-forward the kagent controller (`:8083`) and send one A2A `message/send` to
-`/api/a2a/kagent/assistant/` (same call `tools/a2a-call` makes), assert the reply contains `MOCK-LLM reply`. That proves
-kagent, Substrate sandbox, gateway routing, virtual-key auth and the A2A path with no model call and no secret. A second check:
-`helm upgrade` with the same values is a no-op (idempotency, which `install.sh` promises).
-
-## CI wiring when ready
-
-- Runner `ubuntu-24.04`, `timeout-minutes: 45`, nightly plus manual; not on every pull request until the run is stable and under
-  about 15 minutes. Then add it as a path-filtered job (`install.sh`, `charts/**`, `components/**`) to `ci.yml`.
-- Cache: docker images are not cached between runs on hosted runners; pre-pulling in parallel (`docker pull` of the images
-  listed by `helm template`) before `install.sh` saves a few minutes.
-- On failure upload `kubectl get pods -A`, events and `kind export logs` as an artifact (the scaffold prints pods and events).
+- A real model's answers (CI uses the stub); the Ollama path; the OpenAI and Gemini default model names.
+- A second install on a cluster that already has the full demo, upgrades, uninstall.
+- Behaviour under load, or on arm64 (the runner is amd64; the maintainer's laptop is arm64).

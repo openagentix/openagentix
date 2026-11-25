@@ -1,13 +1,13 @@
 # How we work
 
-This page says how work moves from an idea to a release. It follows [GOVERNANCE.md](../../GOVERNANCE.md) and [CONTRIBUTING.md](../../CONTRIBUTING.md); if they differ, those two win. The project has one maintainer today, and this page says what that means.
+This page says how work moves from an idea to a release. It follows [GOVERNANCE.md](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md) and [CONTRIBUTING.md](https://github.com/openagentix/openagentix/blob/main/CONTRIBUTING.md); if they differ, those two win. The project has one maintainer today, and this page says what that means.
 
 ## Issues are the backlog
 
 Every piece of planned work is a GitHub issue. There is no second list. [docs/roadmap.md](../roadmap.md) says what each release is for; the issues, grouped in milestones, say what is left to do.
 
 - **Milestones** are releases: `0.3 Control plane and console`, `0.4 Runs and trust`, `0.5 Work`, `0.6 Lifecycle and quality`, and `Backlog` for work that has no release yet. They have no due dates. Each release has one tracking issue, "Release 0.x tracking", with a task list.
-- **Labels** are defined in [`.github/labels.yml`](../../.github/labels.yml). Each issue has one `kind/...`, at least one `area/...`, and a `priority/...` once triaged.
+- **Labels** are defined in [`.github/labels.yml`](https://github.com/openagentix/openagentix/blob/main/.github/labels.yml). Each issue has one `kind/...`, at least one `area/...`, and a `priority/...` once triaged.
 
 | Label group | Meaning |
 |---|---|
@@ -34,7 +34,7 @@ New issues get `status/needs-triage`. A maintainer (or a reviewer, once there ar
 4. replaces `status/needs-triage` with `status/accepted` or `status/needs-design`, or closes the issue with the reason;
 5. adds `good first issue` or `help wanted` when it fits, after the issue says which files to change and how to test.
 
-Who can do what, from [GOVERNANCE.md](../../GOVERNANCE.md): anyone can open issues, comment and send pull requests. Setting labels and milestones needs the triage or write role on the repository, which maintainers have. Reviewers listed in `.github/CODEOWNERS` approve changes in their areas. A maintainer merges.
+Who can do what, from [GOVERNANCE.md](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md): anyone can open issues, comment and send pull requests. Setting labels and milestones needs the triage or write role on the repository, which maintainers have. Reviewers listed in `.github/CODEOWNERS` approve changes in their areas. A maintainer merges.
 
 First-time contributors get a first response in 3 working days. If you want to take an issue, say so in a comment. No one is assigned by the project; a comment is enough, and if there is no news for a few weeks anyone may take it.
 
@@ -54,7 +54,7 @@ Two checks must pass before a merge:
 
 | Check | What it does | If it fails |
 |---|---|---|
-| `ci-ok` | all the jobs in `ci.yml` passed or were skipped ([hack/ci/README.md](../../hack/ci/README.md)) | open the failed job, run the same step locally with `make test` or `make lint` |
+| `ci-ok` | all the jobs in `ci.yml` passed or were skipped ([hack/ci/README.md](https://github.com/openagentix/openagentix/blob/main/hack/ci/README.md)) | open the failed job, run the same step locally with `make test` or `make lint` |
 | `DCO` | every commit in the pull request has a `Signed-off-by` line that matches its author | `git rebase --signoff main` then `git push --force-with-lease`; for the last commit only: `git commit --amend -s --no-edit` |
 
 The workflow files may change over time; the current required checks are the ones set in the branch protection rule for `main`.
@@ -66,19 +66,20 @@ Be honest about the limits of a one-maintainer project:
 - **The maintainer cannot approve their own pull request.** GitHub does not count it, and it would not be a review.
 - **Until there is a second maintainer or a reviewer for the area**, pull requests by the maintainer are merged after `ci-ok` and DCO pass, and after a waiting time for comments:
   - at least 2 working days for a normal change;
-  - at least 7 days for a design change: an ADR, a public resource, a default, or the security model (the same times as in [GOVERNANCE.md](../../GOVERNANCE.md));
+  - at least 7 days for a design change: an ADR, a public resource, a default, or the security model (the same times as in [GOVERNANCE.md](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md));
   - a security fix may be merged at once and explained afterwards.
 - The pull request says that this rule is being used, so nobody reads a merge as a review.
 - **Pull requests from other people** need an approval from a maintainer or a reviewer for that area, and no unanswered objection. Silence for the waiting time is agreement (lazy consensus).
 - Review checks: does it do what the issue says; is there a test that fails without it; is it off by default and deny by default where that applies; does a change in behaviour have docs and a changelog line; is there a secret or personal data in the change, the description or the logs.
 - Feedback is checked against the code before it is applied. A reviewer who is wrong is told why, in plain words.
 
-The goal is to end this exception. See "Growing the maintainer group" in [GOVERNANCE.md](../../GOVERNANCE.md).
+The goal is to end this exception. See "Growing the maintainer group" in [GOVERNANCE.md](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md).
 
 ## Merging
 
-- **Squash merge** into `main`. The squashed title is a conventional-commit title, for example `feat(control-plane): add AgentAccess`. The issue number goes at the end: `(#123)`. Keep the sign-off line in the squashed message.
-- **Changelog.** Anything a user can see needs a line under `[Unreleased]` in [CHANGELOG.md](../../CHANGELOG.md), in the pull request itself. Breaking changes and upgrade steps go under "Upgrade notes". Pure test, CI and internal changes do not need a line.
+- **Squash merge** into `main`. The squashed title is a conventional-commit title, for example `feat(control-plane): add AgentAccess`. The issue number goes at the end: `(#123)`. Keep the sign-off line in the squashed message: the repository setting is "default to pull request title" for the title and "all commit messages" for the body, so the squash commit lists the pull request's own commits, with their `Signed-off-by` lines.
+- **How the `DCO` check treats commits** (`hack/ci/dco-check.sh`, tested by `hack/ci/dco-test.sh`). A commit passes when (a) it has a `Signed-off-by` line that matches its author, (b) it is a merge commit, (c) its author is a bot, or (d) GitHub made it (committer `noreply@github.com`, a squash merge of another pull request into your branch) and its title ends in `(#N)` for a pull request of this repository that was merged as exactly this commit and whose own commits are all signed off. The workflow checks (d) through the API with the read-only default token; if it cannot, the commit fails. Typing `(#N)` in your own commit does not help.
+- **Changelog.** Anything a user can see needs a line under `[Unreleased]` in [CHANGELOG.md](https://github.com/openagentix/openagentix/blob/main/CHANGELOG.md), in the pull request itself. Breaking changes and upgrade steps go under "Upgrade notes". Pure test, CI and internal changes do not need a line.
 - Delete the branch after the merge. The issue closes from `Closes #123`; if it does not, close it and say which pull request fixed it.
 
 ## Releases
@@ -92,7 +93,7 @@ The goal is to end this exception. See "Growing the maintainer group" in [GOVERN
 
 ## Security fixes
 
-- A vulnerability is reported through [private vulnerability reporting](https://github.com/openagentix/openagentix/security/advisories/new), as [SECURITY.md](../../SECURITY.md) says. It is never discussed in a public issue or pull request.
+- A vulnerability is reported through [private vulnerability reporting](https://github.com/openagentix/openagentix/security/advisories/new), as [SECURITY.md](https://github.com/openagentix/openagentix/blob/main/SECURITY.md) says. It is never discussed in a public issue or pull request.
 - The fix is prepared in the private advisory. A maintainer may merge a security fix without the waiting time.
 - After the fix is released, the advisory is published and a public issue is opened that describes the problem, the fix and the version. Only then do details become public.
 - Non-sensitive hardening (a pinned image, a missing test, a tighter default that closes no known hole) is a normal public issue with the `kind/security-hardening` label.

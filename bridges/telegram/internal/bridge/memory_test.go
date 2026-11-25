@@ -207,7 +207,7 @@ func TestMemoryErrorsDoNotLeak(t *testing.T) {
 	} {
 		buf := &syncBuf{}
 		f := newFakeTelegram(t, "["+upd(1, 424242, tc.text)+"]")
-		runUntil(t, memBridge(f, okAgent(), tc.mem, jsonLogger(buf, slog.LevelDebug)), func() bool { return len(f.sentMsgs()) >= 1 })
+		runUntil(t, memBridge(f, okAgent(), tc.mem, jsonLogger(buf, slog.LevelDebug)), func() bool { return len(f.sentMsgs()) >= 1 && len(turnRecords(t, buf)) >= 1 })
 		reply := f.sentMsgs()[0].Text
 		if strings.Contains(reply, memCanary) || strings.Contains(reply, "boom") || !strings.Contains(strings.ToLower(reply), "sorry") {
 			t.Errorf("%s: reply %q", name, reply)
@@ -226,12 +226,14 @@ func TestMemoryErrorsDoNotLeak(t *testing.T) {
 	}
 }
 
+// The reply is recorded by the fake before the turn line is logged and before the send returns, so the run is only
+// stopped once both turn lines exist: stopping earlier cancels the second send and logs send_error instead.
 // One "turn" line per command with an outcome and a count, never the memories or the chat id.
 func TestMemoryCommandLogLines(t *testing.T) {
 	buf := &syncBuf{}
 	f := newFakeTelegram(t, "["+upd(1, 424242, "/memories")+"]", "["+upd(2, 424242, "/forget confirm")+"]")
 	mem := &fakeMemory{items: []memory.Item{{Content: memCanary}, {Content: "b"}}}
-	runUntil(t, memBridge(f, okAgent(), mem, jsonLogger(buf, slog.LevelDebug)), func() bool { return len(f.sentMsgs()) >= 2 })
+	runUntil(t, memBridge(f, okAgent(), mem, jsonLogger(buf, slog.LevelDebug)), func() bool { return len(f.sentMsgs()) >= 2 && len(turnRecords(t, buf)) >= 2 })
 	recs := turnRecords(t, buf)
 	if len(recs) != 2 || recs[0]["outcome"] != "memories" || recs[0]["memories"] != float64(2) || recs[1]["outcome"] != "forget" {
 		t.Fatalf("turn records: %v", recs)

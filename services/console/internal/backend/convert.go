@@ -70,7 +70,7 @@ func BuiltAgent(d Definition) model.Agent {
 		Name: d.Meta.Name, Namespace: d.Meta.Namespace, Source: "built", Description: s.Description, Model: s.Model,
 		ToolProfile: s.ToolProfile, ToolsCount: len(s.Tools), Knowledge: s.Knowledge != nil && s.Knowledge.Enabled, Notify: s.Notify != nil && s.Notify.Enabled, Memory: mem,
 		Suspended: s.Suspend, Team: d.Meta.Labels["openagentix.io/team"], Project: d.Meta.Labels["openagentix.io/project"],
-		Skills: skills, EgressCount: n, State: st, StateReason: reason, Deleting: deleting,
+		Skills: skills, EgressCount: n, EffectiveTools: nz(d.Status.EffectiveTools), EffectiveEgress: nz(d.Status.EffectiveEgress), State: st, StateReason: reason, Deleting: deleting,
 		Conditions: nz(d.Status.Conditions), Generation: d.Meta.Generation, Updated: latest(d), ResourceVersion: d.Meta.ResourceVersion,
 	}
 }
@@ -165,7 +165,7 @@ func ChartAgent(c Chart, profiles map[string]string, knowledge, notify []string)
 		}
 	}
 	a := model.Agent{Name: c.Name, Namespace: c.Namespace, Source: "chart", Description: c.Description, Model: c.Model, ToolProfile: prof,
-		ToolsCount: len(c.Tools), Knowledge: has(knowledge), Notify: has(notify), Memory: mem, Skills: nz(c.Skills), State: st, StateReason: reason,
+		ToolsCount: len(c.Tools), Knowledge: has(knowledge), Notify: has(notify), Memory: mem, Skills: nz(c.Skills), EffectiveTools: []string{}, EffectiveEgress: []string{}, State: st, StateReason: reason,
 		Conditions: nz(c.Conditions), Updated: upd}
 	if c.ToolServer != "" && prof == "" && strings.HasPrefix(c.ToolServer, "toolhive-vmcp") {
 		a.ToolProfile = ""

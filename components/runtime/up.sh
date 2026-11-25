@@ -10,7 +10,7 @@ GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 SKIP_FIRST_AGENT=${SKIP_FIRST_AGENT:-0}
 [ "$SKIP_FIRST_AGENT" = 1 ] || : "${GOOGLE_API_KEY:?export GOOGLE_API_KEY first (or SKIP_FIRST_AGENT=1)}"
 
-CLUSTER=openagentix
+CLUSTER=${CLUSTER:-openagentix}
 VER=1.0.1                      # kagent + substrate charts (docs say 1.0.0; 1.0.1 is the latest patch)
 KAGENT_OCI=oci://ghcr.io/kagent-dev/kagent/helm
 SUB_OCI=oci://ghcr.io/kagent-dev/substrate/helm
@@ -35,7 +35,7 @@ fi
 
 # --- 1. kind cluster: v1.37 node, no feature gates needed (CTB/PodCertificateRequest are GA in certificates.k8s.io/v1)
 log "kind cluster"
-kind get clusters | grep -qx "$CLUSTER" || kind create cluster --config ../../hack/kind-config.yaml
+kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --config ../../hack/kind-config.yaml
 $K config use-context "kind-$CLUSTER" >/dev/null
 # Upstream hack/create-kind-cluster.sh does this for gVisor loopback pod networking. Not in the docs.
 docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null
@@ -110,6 +110,7 @@ if ! $K -n kagent get secret kagent-pg-admin >/dev/null 2>&1; then
 fi
 $K apply -f manifests/kagent-postgres.yaml
 $K -n kagent rollout status sts/kagent-pg --timeout=3m
+for _ in $(seq 30); do $K -n kagent exec kagent-pg-0 -- psql --no-psqlrc -U postgres -d kagent -tAc 'select 1' >/dev/null 2>&1 && break; sleep 2; done   # belt and braces after the TCP readiness probe
 if ! $K -n kagent get secret kagent-postgres-owner >/dev/null 2>&1; then
   OW=$(openssl rand -hex 12); RW=$(openssl rand -hex 12)
   $K -n kagent exec -i kagent-pg-0 -- psql --no-psqlrc -U postgres -d kagent --set=ON_ERROR_STOP=1 --single-transaction \

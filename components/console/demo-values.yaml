@@ -1,0 +1,10 @@
+# Demo for the local kind cluster: the web console ON (ADR 0007, slice 3). It needs the control plane, so it composes AFTER
+# components/control-plane/demo-values.yaml (it can be the last file; it does not restate `agents` or `controlPlane`):
+#   VALUES_FILE="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml" ./install.sh
+# install.sh builds the image (repository root as the build context: the Dockerfile builds the web app too), loads it into kind, creates the login
+# token Secret console-token (48 random characters, only when absent, never printed) and prints how to open the console. It is one small pod:
+# nobody can connect to it inside the cluster, so open it with
+#   kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080     then http://127.0.0.1:8080
+# Set `console.viewer: true` for a read-only console (its Role then has no write verb).
+console:
+  enabled: true

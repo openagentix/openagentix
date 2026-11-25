@@ -1,38 +1,37 @@
 name: e2e
 
-# ==========================================================================================================================
-#  NOT YET WORKING. SCAFFOLD ONLY.
-#  install.sh refuses to start without ANTHROPIC_API_KEY and TELEGRAM_BOT_TOKEN, and no keyless profile exists yet.
-#  The job below stops at its first step with that message on purpose, so it can never show a green check it has not earned.
-#  What has to change, and what the install costs on a 4 vCPU / 16 GB runner: hack/ci/E2E-PLAN.md.
-#  To switch it on once the plan is done: set the repository variable E2E_READY=true (and E2E_NIGHTLY=true for the schedule).
-# ==========================================================================================================================
+# Keyless end-to-end install (ADR 0014, issue #34): a kind cluster on a hosted runner, `PROFILE=quickstart ./install.sh` with NO key and NO
+# chat token (the built-in stub model), then hack/ci/smoke.sh. It writes the time to the first working agent to the job summary.
+# NOT part of the required `ci-ok` gate until it has passed reliably; see hack/ci/README.md for its record and for what it proves.
 on:
-  workflow_dispatch:
+  pull_request:
+    paths:
+      - install.sh
+      - uninstall.sh
+      - charts/**
+      - components/**
+      - services/**
+      - console/**
+      - hack/ci/smoke.sh
+      - hack/ask.sh
+      - hack/kind-config.yaml
+      - .github/workflows/e2e.yml
   schedule:
-    - cron: '17 3 * * *'   # nightly; the job is skipped unless the repository variable E2E_NIGHTLY is 'true'
+    - cron: '17 3 * * *'   # nightly
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: e2e
-  cancel-in-progress: false
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   e2e:
-    if: github.event_name == 'workflow_dispatch' || vars.E2E_NIGHTLY == 'true'
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
-      - name: guard, NOT YET WORKING
-        env:
-          READY: ${{ vars.E2E_READY }}
-        run: |
-          if [ "$READY" != "true" ]; then
-            echo "::error title=e2e is not built yet::install.sh needs ANTHROPIC_API_KEY and TELEGRAM_BOT_TOKEN and there is no keyless profile yet. See hack/ci/E2E-PLAN.md."
-            exit 1
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -40,17 +39,71 @@ jobs:
         with:
           version: v3.22.0
       - run: hack/ci/install-tools.sh yq kind
-      # ---- everything below is the PLAN, unproven: it assumes the install.sh changes listed in hack/ci/E2E-PLAN.md ----
-      - name: install (keyless profile, stub model, no Telegram)
+      - name: runner resources before the install
+        run: |
+          nproc; free -m | head -2; df -h / | tail -1
+          ls -l /dev/kvm 2>&1 || true
+          uname -r
+      - name: install (PROFILE=quickstart, no key, no token)
+        id: install
         env:
-          E2E_PROFILE: ci             # does not exist yet
-        run: ./install.sh
-      - name: smoke test, the stub agent answers an A2A message
+          PROFILE: quickstart
+          AGENT_WAIT: 300s
         run: |
-          echo "not written yet, see hack/ci/E2E-PLAN.md (Smoke test)"
-          exit 1
+          set -o pipefail
+          start=$(date +%s)
+          ./install.sh 2>&1 | tee install.log
+          echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: smoke test
+        id: smoke
+        run: |
+          set -o pipefail
+          start=$(date +%s)
+          hack/ci/smoke.sh 2>&1 | tee smoke.log
+          echo "smoke_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: runner resources after the install
+        if: always()
+        run: |
+          free -m | head -2
+          docker stats --no-stream --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' || true
+          uptime
+      - name: job summary (time to first working agent)
+        if: always()
+        env:
+          INSTALL_S: ${{ steps.install.outputs.install_seconds }}
+          SMOKE_S: ${{ steps.smoke.outputs.smoke_seconds }}
+        run: |
+          {
+            echo "## Quick start, keyless (stub model)"
+            echo
+            echo "- time from \`./install.sh\` start to the agent Ready and the summary: **${INSTALL_S:-n/a} s** (cold runner: nothing cached)"
+            echo "- smoke test (question through the gate, refused tool, refused definition, console API): ${SMOKE_S:-n/a} s"
+            echo "- runner: $(nproc) vCPU, $(free -m | awk '/Mem:/{print $2}') MB"
+            echo
+            echo "### Where the time goes (install.sh steps)"
+            echo '```'
+            grep '^=== ' install.log 2>/dev/null || true
+            echo '```'
+            echo "### Smoke test"
+            echo '```'
+            cat smoke.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: diagnostics
-        if: failure()
+        if: always()
         run: |
-          kubectl get pods -A || true
-          kubectl get events -A --sort-by=.lastTimestamp | tail -50 || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl get agent,agentdefinition -A -o yaml | head -150 || true
+          kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
+          kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
+          echo "--- what the admission guard says about a key Secret"
+          hack/ci/guard-probe.sh
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs
+          path: kind-logs
+          retention-days: 7

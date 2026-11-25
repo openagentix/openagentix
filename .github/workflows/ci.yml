@@ -128,6 +128,15 @@ jobs:
         run: components/channels/tests/run.sh
       - name: dashboard tests
         run: hack/dashboard/tests/run.sh
+      - name: DCO check, image tag and quick start tests
+        run: |
+          hack/ci/dco-test.sh
+          hack/ci/image-tag-test.sh
+          components/quickstart/tests/run.sh
+      - name: reference docs tests
+        run: |
+          pip install --quiet pyyaml==6.0.2 jsonschema==4.26.0
+          hack/docs/tests/run.sh
       - name: bench tests (python)
         run: |
           python3 -m unittest discover -s components/bench -p 'test_*.py'

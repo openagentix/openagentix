@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +81,7 @@ type rig struct {
 	mu     sync.Mutex
 	seen   []seen
 	handle http.HandlerFunc
+	sent   atomic.Int64 // requests sent through do that write an audit line (everything but the probes)
 }
 
 type syncBuf struct {
@@ -135,6 +137,9 @@ func newRig(t *testing.T, mut func(*Options)) *rig {
 
 func (r *rig) do(method, path, token string, hdr map[string]string, body string) (*http.Response, string) {
 	r.t.Helper()
+	if path != "/healthz" && path != "/readyz" {
+		r.sent.Add(1)
+	}
 	req, _ := http.NewRequest(method, r.srv.URL+path, strings.NewReader(body))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -170,7 +175,13 @@ func (r *rig) waitLines(n int) {
 	r.t.Fatalf("expected %d audit lines, have:\n%s", n, r.audit.String())
 }
 
+// auditLines returns the audit lines of every request sent through do. The line is written when the handler
+// returns, which can be after the client has its response, so it first waits for one line per request sent.
 func (r *rig) auditLines() []map[string]any {
+	r.t.Helper()
+	if n := int(r.sent.Load()); n > 0 {
+		r.waitLines(n)
+	}
 	var out []map[string]any
 	for _, l := range strings.Split(strings.TrimSpace(r.audit.String()), "\n") {
 		if l == "" {
@@ -429,6 +440,7 @@ func TestAuditLine(t *testing.T) {
 	}, msg("ctx-abc_1"))
 	r.do("POST", agentPath, "bad.token.x", map[string]string{"X-User-Id": "telegram:424242"}, msg("c"))
 	r.do("POST", agentPath, tokBridge, map[string]string{"X-User-Id": "telegram:424242"}, `{"method":"SendMessage","params":{"message":{"contextId":"`+strings.Repeat("a", 500)+`"}}}`)
+	r.waitLines(3)
 	raw := r.audit.String()
 	for _, secret := range []string{canary, tokBridge, "telegram:424242", "bad.token.x"} {
 		if strings.Contains(raw, secret) {
@@ -463,6 +475,47 @@ func TestAuditLine(t *testing.T) {
 	}
 	if lines[2]["context_id"] != "invalid" {
 		t.Errorf("an over-long contextId must be logged as invalid, got %v", lines[2]["context_id"])
+	}
+}
+
+// gatedWriter holds every audit write until release is closed.
+type gatedWriter struct {
+	release chan struct{}
+	sink    *syncBuf
+}
+
+func (g gatedWriter) Write(p []byte) (int, error) { <-g.release; return g.sink.Write(p) }
+
+// The audit line is written when the handler returns, so a client can hold its response before the line exists
+// (the gate cannot know the final status of a stream earlier, and Shutdown waits for the handler, so the line is
+// not lost on a graceful stop). auditLines must therefore wait for it; without the wait it returns nothing here.
+func TestAuditLinesWaitForTheHandlerToReturn(t *testing.T) {
+	g := gatedWriter{release: make(chan struct{}), sink: &syncBuf{}}
+	r := newRig(t, func(o *Options) { o.Audit = slog.New(slog.NewJSONHandler(g, nil)) })
+	r.audit = g.sink
+	r.handle = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"jsonrpc":"2.0","id":"1","result":{}}`)
+		w.(http.Flusher).Flush()
+	}
+	req, _ := http.NewRequest("POST", r.srv.URL+agentPath, strings.NewReader(msg("c")))
+	req.Header.Set("Authorization", "Bearer "+tokBridge)
+	req.Header.Set("X-User-Id", "telegram:1")
+	r.sent.Add(1)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if got := r.audit.String(); got != "" {
+		t.Fatalf("the client has its response and the audit line is already written: %q", got)
+	}
+	time.AfterFunc(100*time.Millisecond, func() { close(g.release) })
+	if l := r.auditLines(); len(l) != 1 {
+		t.Fatalf("auditLines returned %d lines, want 1 (it must wait for the handler)", len(l))
 	}
 }
 

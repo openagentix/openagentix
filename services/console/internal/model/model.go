@@ -108,21 +108,25 @@ const (
 
 // Agent is one row of the registry and the head of the detail.
 type Agent struct {
-	Name            string      `json:"name"`
-	Namespace       string      `json:"namespace"`
-	Source          string      `json:"source"` // built | chart
-	Description     string      `json:"description"`
-	Model           string      `json:"model"`
-	ToolProfile     string      `json:"toolProfile"`
-	ToolsCount      int         `json:"toolsCount"`
-	Knowledge       bool        `json:"knowledge"`
-	Notify          bool        `json:"notify"`
-	Memory          *Memory     `json:"memory,omitempty"`
-	Suspended       bool        `json:"suspended"`
-	Team            string      `json:"team,omitempty"`
-	Project         string      `json:"project,omitempty"`
-	Skills          []string    `json:"skills"`
-	EgressCount     int         `json:"egressCount"`
+	Name        string   `json:"name"`
+	Namespace   string   `json:"namespace"`
+	Source      string   `json:"source"` // built | chart
+	Description string   `json:"description"`
+	Model       string   `json:"model"`
+	ToolProfile string   `json:"toolProfile"`
+	ToolsCount  int      `json:"toolsCount"`
+	Knowledge   bool     `json:"knowledge"`
+	Notify      bool     `json:"notify"`
+	Memory      *Memory  `json:"memory,omitempty"`
+	Suspended   bool     `json:"suspended"`
+	Team        string   `json:"team,omitempty"`
+	Project     string   `json:"project,omitempty"`
+	Skills      []string `json:"skills"`
+	EgressCount int      `json:"egressCount"`
+	// EffectiveTools and EffectiveEgress are status.effectiveTools and status.effectiveEgress: what the controller
+	// really gave the agent. Empty for a chart agent (the console reads no such status for it).
+	EffectiveTools  []string    `json:"effectiveTools"`
+	EffectiveEgress []string    `json:"effectiveEgress"`
 	State           State       `json:"state"`
 	StateReason     string      `json:"stateReason"`
 	Deleting        bool        `json:"deleting"`

@@ -1,7 +1,7 @@
 // @ts-check
 const config = {
   title: 'OpenAgentix',
-  tagline: 'Kubernetes-native platform for running AI agents',
+  tagline: 'The open-source control plane for running AI agents on Kubernetes under your rules',
   favicon: 'img/favicon.svg',
   url: 'https://openagentix.github.io',
   baseUrl: '/openagentix/',
@@ -45,11 +45,19 @@ const config = {
     ],
   ],
   themeConfig: {
+    metadata: [
+      {
+        name: 'description',
+        content:
+          'OpenAgentix is an open-source control plane for running AI agents on Kubernetes: a key and budget per agent, approved tools, closed egress, checked callers and an audit record. Apache-2.0.',
+      },
+    ],
     colorMode: {defaultMode: 'light', respectPrefersColorScheme: true},
     navbar: {
       title: 'OpenAgentix',
       items: [
-        {to: '/', label: 'Diary', position: 'left', activeBaseRegex: '^/openagentix/(?!decisions)'},
+        {to: '/guide/why', label: 'Start here', position: 'left'},
+        {to: '/', label: 'Diary', position: 'left', activeBaseRegex: '^/openagentix/(?!decisions|guide)'},
         {type: 'docSidebar', sidebarId: 'decisions', docsPluginId: 'decisions', label: 'Decisions', position: 'left'},
         {href: 'https://github.com/openagentix/openagentix', label: 'GitHub', position: 'right'},
       ],

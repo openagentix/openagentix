@@ -1816,12 +1816,210 @@ eq "wildcard entries are accepted in every allow list" "$([ -z "$(render_err "${
 eq "the closed chart defaults render (nothing allowed)" "$([ -z "$(render_err --set controlPlane.enabled=true)" ] && echo rendered || echo failed)" rendered
 eq "...and render empty allow lists"                   "$(q "$(docs --set controlPlane.enabled=true)" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-policy")|.data["policy.json"]|fromjson|[.allowedModels,.allowedProfiles,.allowedSkills,.egress.allowedOrigins]|tojson')" '[[],[],[],[]]'
 
+
+echo "# console (ADR 0007, slice 3): off by default"
+CNV="$REPO/components/console/demo-values.yaml"
+CN10=("${CP9[@]}" -f "$CNV")
+D=$(docs)
+eq "no console objects by default"                     "$(count "$D" '.metadata.name|tostring|test("console")')" 0
+CNX="$(dirname "$0")/.console-variant.yaml"
+cat > "$CNX" <<'YAML'
+console:
+  enabled: false
+  namespace: elsewhere
+  sourceHash: abc
+  viewer: true
+  allowedHosts: [console.example.org]
+  apiServerCIDRs: [10.0.0.0/24]
+YAML
+CH0=$(helm template openagentix "$CHART" -n openagentix-system 2>&1 | shasum -a 256)
+eq "console.enabled=false (other console values set) is byte-identical to the default render" "$(helm template openagentix "$CHART" -n openagentix-system -f "$CNX" 2>&1 | shasum -a 256)" "$CH0"
+eq "console=null is byte-identical to the default render" "$(helm template openagentix "$CHART" -n openagentix-system -f /dev/stdin <<<'console: null' 2>&1 | shasum -a 256)" "$CH0"
+eq "the eight demo files render byte-identically with the console switch off and console values set" "$(helm template openagentix "$CHART" -n openagentix-system "${CP8[@]}" -f "$CNX" 2>&1 | shasum -a 256)" "$(helm template openagentix "$CHART" -n openagentix-system "${CP8[@]}" 2>&1 | shasum -a 256)"
+eq "the nine demo files (control plane on) render byte-identically with the console switch off and console values set" "$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" -f "$CNX" 2>&1 | shasum -a 256)" "$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" 2>&1 | shasum -a 256)"
+rm -f "$CNX"
+eq "the ten demo files render"                         "$([ -z "$(render_err "${CN10[@]}")" ] && echo rendered || echo failed)" rendered
+
+echo "# console: the objects"
+D=$(docs "${CN10[@]}" --set observability.enabled=false)
+CNNS=openagentix-system
+CND='.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-console")'
+CNP="$CND|.spec.template.spec"
+CNC="$CNP|.containers[0]"
+eq "one Deployment"                                    "$(count "$D" '.kind=="Deployment" and .metadata.name=="openagentix-console"')" 1
+eq "one ServiceAccount, in the console namespace"      "$(count "$D" '.kind=="ServiceAccount" and .metadata.name=="openagentix-console" and .metadata.namespace=="'$CNNS'"')" 1
+eq "one Role and one RoleBinding, in the agents namespace" "$(count "$D" '(.kind=="Role" or .kind=="RoleBinding") and .metadata.name=="openagentix-console" and .metadata.namespace=="kagent"')" 2
+eq "the RoleBinding binds the Role to the console ServiceAccount only" "$(q "$D" '.[]|select(.kind=="RoleBinding" and .metadata.name=="openagentix-console")|[.roleRef.kind,.roleRef.name,(.subjects|map(.kind+":"+.namespace+"/"+.name)|join(","))]|join(" ")')" "Role openagentix-console ServiceAccount:$CNNS/openagentix-console"
+eq "one Service"                                       "$(count "$D" '.kind=="Service" and .metadata.name=="openagentix-console"')" 1
+eq "one NetworkPolicy"                                 "$(count "$D" '.kind=="NetworkPolicy" and .metadata.name=="openagentix-console"')" 1
+eq "no Ingress, ClusterRole, ClusterRoleBinding or route for the console" "$(count "$D" '(.kind=="Ingress" or .kind=="ClusterRole" or .kind=="ClusterRoleBinding" or .kind=="HTTPRoute") and (.metadata.name|tostring|test("console"))')" 0
+eq "the console adds no Secret object (the installer creates the token)" "$(count "$D" '.kind=="Secret"')" 0
+
+echo "# console: the Role"
+CNR='.[]|select(.kind=="Role" and .metadata.name=="openagentix-console")'
+CNRULES='[{"apiGroups":["api.kagent.dev"],"resources":["agents","agenttemplates","harnesses","modelconfigs"],"verbs":["list"]},{"apiGroups":["openagentix.io"],"resources":["agentdefinitions"],"verbs":["create","delete","get","list","update"]}]'
+cnrules() { jq -S -c "$CNR|.rules|map(.verbs|=sort)|sort_by(.apiGroups[0])" <<<"$1"; }
+eq "operator mode: exact rules (definitions: get list create update delete; kagent kinds: list)" "$(cnrules "$D")" "$(jq -S -c . <<<"$CNRULES")"
+DV=$(docs "${CN10[@]}" --set console.viewer=true)
+eq "viewer mode: exact rules (definitions: get list only)" "$(cnrules "$DV")" "$(jq -S -c '.[1].verbs=["get","list"]' <<<"$CNRULES")"
+BADRULE='[.rules[]|(.resources+.verbs+.apiGroups)[]|select(.=="secrets" or .=="*" or .=="agentdefinitions/status" or .=="patch" or .=="watch" or .=="deletecollection")]|length'
+eq "no Secrets, wildcard, status, patch, watch or deletecollection (operator)" "$(q "$D" "$CNR|$BADRULE")" 0
+eq "no Secrets, wildcard, status, patch, watch or deletecollection (viewer)"   "$(q "$DV" "$CNR|$BADRULE")" 0
+eq "the Role names no resource other than the five the console reads or writes" "$(q "$D" "[$CNR|.rules[]|.apiGroups[]+\"/\"+.resources[]]|sort|join(\" \")")" "api.kagent.dev/agents api.kagent.dev/agenttemplates api.kagent.dev/harnesses api.kagent.dev/modelconfigs openagentix.io/agentdefinitions"
+eq "the console has no permission on Secrets anywhere (every Role and ClusterRole bound to its ServiceAccount)" "$(q "$D" '[.[]|select(.kind=="RoleBinding" or .kind=="ClusterRoleBinding")|select(any(.subjects[]?;.name=="openagentix-console"))|.roleRef.name] as $names|[.[]|select((.kind=="Role" or .kind=="ClusterRole") and (.metadata.name|IN($names[])))|.rules[]|select(.resources|index("secrets") or index("*"))]|length')" 0
+eq "no binding of any kind other than its own names the console ServiceAccount" "$(count "$D" '(.kind=="RoleBinding" or .kind=="ClusterRoleBinding") and any(.subjects[]?;.name=="openagentix-console") and .metadata.name!="openagentix-console"')" 0
+eq "viewer: the Role has no write verb at all"         "$(q "$DV" "[$CNR|.rules[].verbs[]|select(.==\"create\" or .==\"update\" or .==\"delete\")]|length")" 0
+eq "viewer: CONSOLE_VIEWER=1"                          "$(q "$DV" "$CNC|.env[]|select(.name==\"CONSOLE_VIEWER\")|.value")" 1
+eq "operator: CONSOLE_VIEWER is not set"               "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_VIEWER\")]|length")" 0
+
+echo "# console: the admission guard does not touch the console"
+CGP='.[]|select(.kind=="ValidatingAdmissionPolicy" and (.metadata.name|startswith("openagentix-control-plane-guard-")))'
+CGB='.[]|select(.kind=="ValidatingAdmissionPolicyBinding" and (.metadata.name|startswith("openagentix-control-plane-guard-")))'
+eq "no policy or binding of the guard names the console ServiceAccount" "$(q "$D" "[($CGP),($CGB)|tostring|select(contains(\"openagentix-console\"))]|length")" 0
+eq "every guard policy matches the controller's username only (matchConditions) and no other" "$(q "$D" "[$CGP|.spec.matchConditions|map(.expression)|join(\" \")|(contains(\"system:serviceaccount:$CNNS:openagentix-control-plane\") and (contains(\"openagentix-console\")|not))]|unique|join(\",\")")" true
+eq "no guard binding narrows or widens by a ServiceAccount (every binding is the policy's own)" "$(q "$D" "[$CGB|select(.metadata.name!=.spec.policyName)]|length")" 0
+eq "the console is not the controller's ServiceAccount" "$(q "$D" "[$CGP|.spec.matchConditions[]|.expression|contains(\"system:serviceaccount:$CNNS:openagentix-console\")]|any")" false
+eq "the guard is rendered identically with the console on and off" "$(q "$D" "[($CGP),($CGB)]|tostring"|shasum -a 256)" "$(q "$(docs "${CP9[@]}")" "[($CGP),($CGB)]|tostring"|shasum -a 256)"
+
+echo "# console: the Deployment"
+eq "Deployment in the console namespace"               "$(q "$D" "$CND|.metadata.namespace")" "$CNNS"
+eq "one replica"                                       "$(q "$D" "$CND|.spec.replicas")" 1
+eq "image"                                             "$(q "$D" "$CNC|.image")" openagentix/console:dev
+eq "ServiceAccount"                                    "$(q "$D" "$CNP|.serviceAccountName")" openagentix-console
+eq "runs as non-root 65532"                            "$(q "$D" "$CNP|.securityContext|[.runAsNonRoot,.runAsUser,.runAsGroup]|map(tostring)|join(\",\")")" true,65532,65532
+eq "fsGroup 65532"                                     "$(q "$D" "$CNP|.securityContext.fsGroup")" 65532
+eq "seccomp RuntimeDefault"                            "$(q "$D" "$CNP|.securityContext.seccompProfile.type")" RuntimeDefault
+eq "read-only root filesystem"                         "$(q "$D" "$CNC|.securityContext.readOnlyRootFilesystem")" true
+eq "no privilege escalation"                           "$(q "$D" "$CNC|.securityContext.allowPrivilegeEscalation")" false
+eq "drops ALL capabilities"                            "$(q "$D" "$CNC|.securityContext.capabilities.drop|join(\",\")")" ALL
+eq "container port 8080 named http"                    "$(q "$D" "$CNC|.ports|map(.name+\":\"+(.containerPort|tostring))|join(\",\")")" http:8080
+eq "the liveness probe is /healthz on http and sends Host: localhost" "$(q "$D" "$CNC|.livenessProbe.httpGet|[.path,.port,(.httpHeaders|map(.name+\"=\"+.value)|join(\",\"))]|map(tostring)|join(\" \")")" "/healthz http Host=localhost"
+eq "the readiness probe is /healthz on http and sends Host: localhost" "$(q "$D" "$CNC|.readinessProbe.httpGet|[.path,.port,(.httpHeaders|map(.name+\"=\"+.value)|join(\",\"))]|map(tostring)|join(\" \")")" "/healthz http Host=localhost"
+eq "resources are set"                                 "$(q "$D" "$CNC|.resources|has(\"limits\") and has(\"requests\")")" true
+eq "the three files are mounted read-only"             "$(q "$D" "$CNC|.volumeMounts|map(.name+\":\"+.mountPath+\":\"+(.readOnly|tostring))|sort|join(\" \")")" "catalog:/etc/console/catalog:true policy:/etc/console/policy:true token:/etc/console/token:true"
+eq "volumes: the two control plane ConfigMaps and the token Secret" "$(q "$D" "$CNP|.volumes|map(.name+\":\"+(.configMap.name//.secret.secretName))|sort|join(\" \")")" "catalog:openagentix-control-plane-catalog policy:openagentix-control-plane-policy token:console-token"
+eq "the token volume mounts the one key, nothing else" "$(q "$D" "$CNP|.volumes[]|select(.name==\"token\")|.secret.items|map(.key+\"->\"+.path)|join(\",\")")" "token->token"
+eq "env: the three files, the namespace"               "$(q "$D" "$CNC|.env|map(.name+\"=\"+.value)|sort|join(\" \")")" "CONSOLE_CATALOG_FILE=/etc/console/catalog/catalog.json CONSOLE_NAMESPACE=kagent CONSOLE_POLICY_FILE=/etc/console/policy/policy.json CONSOLE_TOKEN_FILE=/etc/console/token/token"
+eq "no env var carries a secret (no valueFrom, no literal token)" "$(q "$D" "$CNC|[.env[]|select(has(\"valueFrom\"))]|length")" 0
+eq "the token Secret is optional: false (the pod waits for the installer's Secret)" "$(q "$D" "$CNP|.volumes[]|select(.name==\"token\")|(.secret.optional//false)|tostring")" false
+CNA="$CND|.spec.template.metadata.annotations"
+eq "checksum of the catalog is the control plane's"    "$(q "$D" "$CNA[\"checksum/catalog\"]")" "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")|.spec.template.metadata.annotations["checksum/catalog"]')"
+eq "checksum of the policy is the control plane's"     "$(q "$D" "$CNA[\"checksum/policy\"]")" "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")|.spec.template.metadata.annotations["checksum/policy"]')"
+eq "checksum of the token Secret reference is set"     "$(q "$D" "$CNA[\"checksum/token-secret\"]|test(\"^[0-9a-f]{64}\$\")")" true
+eq "no source hash annotation without install.sh"      "$(q "$D" "$CNA|has(\"openagentix.io/source-hash\")")" false
+eq "sourceHash becomes the pod annotation"             "$(q "$(docs "${CN10[@]}" --set-string console.sourceHash=0123456789abcdef)" "$CNA[\"openagentix.io/source-hash\"]")" 0123456789abcdef
+eq "a policy change rolls the console too"             "$([ "$(q "$(docs "${CN10[@]}" --set controlPlane.policy.maxAgents=3)" "$CNA[\"checksum/policy\"]")" != "$(q "$D" "$CNA[\"checksum/policy\"]")" ] && echo differs || echo same)" differs
+eq "a changed token Secret name rolls the console"     "$([ "$(q "$(docs "${CN10[@]}" --set console.tokenSecret.name=other)" "$CNA[\"checksum/token-secret\"]")" != "$(q "$D" "$CNA[\"checksum/token-secret\"]")" ] && echo differs || echo same)" differs
+DTS=$(docs "${CN10[@]}" --set console.tokenSecret.name=other --set console.tokenSecret.key=pw)
+eq "tokenSecret name and key reach the volume and the env" "$(q "$DTS" "$CNP|[(.volumes[]|select(.name==\"token\")|.secret.secretName+\":\"+.secret.items[0].key),(.containers[0].env[]|select(.name==\"CONSOLE_TOKEN_FILE\")|.value)]|join(\" \")")" "other:pw /etc/console/token/pw"
+eq "CONSOLE_ALLOWED_HOSTS is not set by default"       "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_ALLOWED_HOSTS\")]|length")" 0
+eq "allowedHosts is passed comma-separated"            "$(q "$(docs "${CN10[@]}" --set 'console.allowedHosts={console.example.org,other.example.org:8443}')" "$CNC|.env[]|select(.name==\"CONSOLE_ALLOWED_HOSTS\")|.value")" "console.example.org,other.example.org:8443"
+eq "the probes still send Host: localhost with allowedHosts set" "$(q "$(docs "${CN10[@]}" --set 'console.allowedHosts={console.example.org}')" "$CNC|[.livenessProbe,.readinessProbe]|map(.httpGet.httpHeaders[0].value)|unique|join(\",\")")" localhost
+eq "CONSOLE_NAMESPACE follows kagent.namespace"        "$(q "$(docs --set controlPlane.enabled=true --set console.enabled=true --set kagent.namespace=ag2)" "$CNC|.env[]|select(.name==\"CONSOLE_NAMESPACE\")|.value")" ag2
+eq "the Role follows kagent.namespace"                 "$(q "$(docs --set controlPlane.enabled=true --set console.enabled=true --set kagent.namespace=ag2)" "$CNR|.metadata.namespace")" ag2
+eq "the Service is a ClusterIP on 8080 selecting the pod" "$(q "$D" '.[]|select(.kind=="Service" and .metadata.name=="openagentix-console")|[.spec.type,(.spec.ports|map(.name+":"+(.port|tostring)+"->"+(.targetPort|tostring))|join(",")),.spec.selector.app]|join(" ")')" "ClusterIP http:8080->http console"
+eq "the pod carries the label the Service and the policy select" "$(q "$D" "$CND|.spec.template.metadata.labels.app")" console
+
+echo "# console: the NetworkPolicy"
+CNN='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")'
+eq "NetworkPolicy selects the console pod, in its namespace" "$(q "$D" "$CNN|.spec.podSelector.matchLabels.app+\" \"+.metadata.namespace")" "console $CNNS"
+eq "no ingress at all"                                 "$(q "$D" "$CNN|[(.spec.policyTypes|sort|join(\",\")), (.spec.ingress//[]|length|tostring)]|join(\" \")")" "Egress,Ingress 0"
+eq "egress: DNS first"                                 "$(q "$D" "$CNN|.spec.egress[0]|[.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"],.to[0].podSelector.matchLabels[\"k8s-app\"],(.ports|map(.protocol+(.port|tostring))|sort|join(\",\"))]|join(\" \")")" "kube-system kube-dns TCP53,UDP53"
+eq "egress: two rules without CIDRs"                   "$(q "$D" "$CNN|.spec.egress|length")" 2
+eq "egress without CIDRs: the API server ports towards any address (documented fallback)" "$(q "$D" "$CNN|.spec.egress[1]|[(.to//[]|length|tostring),(.ports|map(.port|tostring)|join(\",\"))]|join(\" \")")" "0 443,6443"
+DCA=$(docs "${CN10[@]}" --set observability.enabled=false --set 'console.apiServerCIDRs={172.18.0.0/24,10.1.2.3/32}')
+eq "egress with CIDRs: only those, on the API server ports" "$(q "$DCA" "$CNN|.spec.egress[1]|[(.to|map(.ipBlock.cidr)|join(\",\")),(.ports|map(.port|tostring)|join(\",\"))]|join(\" \")")" "172.18.0.0/24,10.1.2.3/32 443,6443"
+eq "networkPolicy.enabled=false renders no NetworkPolicy for the console" "$(count "$(docs "${CN10[@]}" --set networkPolicy.enabled=false)" '.kind=="NetworkPolicy" and .metadata.name=="openagentix-console"')" 0
+
+echo "# console: render failures"
+cnfail() { local d=$1; shift; eq "$d" "$([ -n "$(render_err "${CN10[@]}" "$@")" ] && echo failed || echo rendered)" failed; }
+eq "console without the control plane fails, and says why" "$(render_err --set console.enabled=true | command grep -c 'console.enabled needs controlPlane.enabled')" 1
+eq "a namespace that differs from the control plane's fails, and says why" "$(render_err "${CN10[@]}" --set console.namespace=elsewhere | command grep -c 'same namespace as the control plane')" 1
+eq "the same namespace spelled out renders"            "$([ -z "$(render_err "${CN10[@]}" --set console.namespace=openagentix-system)" ] && echo rendered || echo failed)" rendered
+eq "a moved control plane needs the console there too" "$(render_err "${CN10[@]}" --set controlPlane.namespace=cp-ns | command grep -c 'same namespace as the control plane')" 1
+eq "...and the console follows when it is told to"     "$([ -z "$(render_err "${CN10[@]}" --set controlPlane.namespace=cp-ns --set console.namespace=cp-ns)" ] && echo rendered || echo failed)" rendered
+cnfail "enabled must be a boolean"                     --set console.enabled=yes
+cnfail "viewer must be a boolean"                      --set console.viewer=yes
+cnfail "allowedHosts must be a list"                   --set console.allowedHosts=console.example.org
+cnfail "an allowed host with a scheme fails"           --set 'console.allowedHosts={https://console.example.org}'
+cnfail "an allowed host with a path fails"             --set 'console.allowedHosts={console.example.org/x}'
+cnfail "an allowed host with a comma fails"            --set 'console.allowedHosts={a.example.org\,b.example.org}'
+cnfail "a bad API server CIDR fails"                   --set 'console.apiServerCIDRs={not-a-cidr}'
+cnfail "apiServerCIDRs must be a list"                 --set console.apiServerCIDRs=10.0.0.0/24
+cnfail "a bad API server port fails"                   --set 'console.apiServerPorts={0}'
+cnfail "an empty token Secret name fails"              --set console.tokenSecret.name=
+cnfail "an empty token Secret key fails"               --set console.tokenSecret.key=
+cnfail "a token Secret key with a slash fails"         --set console.tokenSecret.key=a/b
+echo "# stub model (ADR 0014): off by default, nothing renders"
+D=$(docs)
+eq "no stub-model Deployment by default"               "$(count "$D" '.metadata.name=="stub-model"')" 0
+D=$(docs --set gateway.stubModel.enabled=true)
+SM='.metadata.name=="stub-model"'
+eq "stub-model: Deployment, Service, NetworkPolicy"    "$(count "$D" "$SM")" 3
+eq "stub-model lives in the gateway namespace"         "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.metadata.namespace')" agentgateway-system
+eq "stub-model image"                                  "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image')" openagentix/stub-model:dev
+eq "stub-model runs non-root, read-only, no caps"      "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec|[.securityContext.runAsNonRoot,.containers[0].securityContext.readOnlyRootFilesystem,.containers[0].securityContext.allowPrivilegeEscalation,.containers[0].securityContext.capabilities.drop[0],.automountServiceAccountToken]|join(",")')" "true,true,false,ALL,false"
+eq "stub-model has limits and a probe"                 "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0]|(.resources.limits.memory!=null) and (.readinessProbe.httpGet.path=="/healthz")')" true
+eq "stub-model: only the gateway proxy may call it"    "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|[.spec.policyTypes[0],(.spec.ingress|length),.spec.ingress[0].from[0].podSelector.matchLabels["gateway.networking.k8s.io/gateway-name"],.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]]|join(",")')" "Ingress,1,model-gateway,agentgateway-system"
+eq "stub-model: egress closed"                         "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|.spec.policyTypes|index("Egress")!=null')" true
+eq "stub-model NetworkPolicy has no egress rule"       "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|(.spec.egress//[])|length')" 0
+eq "stub-model sourceHash annotates the pod"           "$(q "$(docs --set gateway.stubModel.enabled=true --set-string gateway.stubModel.sourceHash=abc)" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.metadata.annotations["openagentix.io/source-hash"]')" abc
+eq "stub-model off when the gateway is off"            "$(count "$(docs --set gateway.stubModel.enabled=true --set gateway.enabled=false)" "$SM")" 0
+
+echo "# quick start profile (components/quickstart/values.yaml)"
+QS="$CHART/../../components/quickstart/values.yaml"
+D=$(docs -f "$QS")
+eq "profile renders"                                   "$(q "$D" 'length>0')" true
+eq "profile: stub-model rendered"                      "$(count "$D" "$SM and .kind==\"Deployment\"")" 1
+eq "profile: no Telegram bridge"                       "$(count "$D" '.kind=="Deployment" and .metadata.name=="telegram-bridge"')" 0
+eq "profile: no chart agents"                          "$(count "$D" '.kind=="Agent"')" 0
+eq "profile: no knowledge base"                        "$(count "$D" '.metadata.name=="kb" or .metadata.name=="kb-embeddings"')" 0
+eq "profile: no notify, no memory embeddings"          "$(count "$D" '.metadata.name=="notify" or .metadata.name=="memory-embeddings"')" 0
+eq "profile: no schedules, no Kourier objects"         "$(count "$D" '.kind=="CronJob" or (.apiVersion|startswith("agentkourier"))')" 0
+eq "profile: control plane, console and gate on"       "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("openagentix-control-plane","openagentix-console","a2a-gate"))')" 3
+eq "profile: one tool server and one profile vMCP"     "$(count "$D" '.kind=="MCPServer"')/$(count "$D" '.kind=="VirtualMCPServer" and (.metadata.annotations["openagentix.io/tool-profile"]//"")!=""')" 1/1
+eq "profile: bundled observability on, content capture off"  "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("jaeger","victoria-metrics"))')/$(q "$D" '[.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-observability")|.data.captureContent]|first')" 2/false
+eq "profile: the model alias goes through the gateway" "$(q "$D" '.[]|select(.kind=="AgentgatewayModel")|.metadata.name')" quickstart-model
+eq "profile: the gate has the ask rule"                "$(q "$D" '.[]|select(.kind=="ConfigMap" and (.data["rules.json"]//"")!="")|.data["rules.json"]|fromjson|.callers[]|select(.name=="quickstart-ask")|.agents[0]')" kagent/quickstart
+eq "profile: the policy admits the alias and profile"  "$(q "$D" '[.[]|select(.kind=="ConfigMap")|.data["policy.json"]//empty|fromjson|(.allowedModels[0],.allowedProfiles[0])]|join(",")')" quickstart-model,lookup
+
 echo "# secrets hygiene"
 D=$(docs --set bridge.token=SENTINEL-TOKEN-123 --set gateway.apiKey=SENTINEL-TOKEN-123)
 eq "chart renders no Secret objects"                   "$(count "$D" '.kind=="Secret"')" 0
 eq "no stringData/data anywhere"                       "$(q "$D" '[.[]|select(has("data") or has("stringData"))]|length')" 0
 eq "stray secret-looking values are never rendered"    "$(q "$D" 'tostring|contains("SENTINEL-TOKEN-123")')" false
 eq "no Secret-valued env var has a literal value"      "$(q "$D" '[.[]|select(.kind=="Deployment")|.spec.template.spec.containers[].env[]|select((.name|test("TOKEN|KEY|CHAT_IDS")) and has("value"))]|length')" 0
+
+echo "# console: metrics (the bundled metrics store is reachable by the console only)"
+D=$(docs "${CN10[@]}")
+VMURL="http://victoria-metrics.openagentix-observability.svc:8428"
+eq "console on + observability on: CONSOLE_METRICS_URL is the bundled store" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_METRICS_URL\")|.value")" "$VMURL"
+eq "the console NetworkPolicy gets one egress rule to the store's pod and port 8428 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")|[.to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],(.ports|map(.port)|join(","))]]|tostring')" '[["openagentix-observability","8428"]]'
+eq "the store's ingress admits the console pods only, on 8428 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="victoria-metrics-ingress")|[.spec.ingress[]|[.from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],.from[0].podSelector.matchLabels.app,(.ports|map(.port)|join(","))]]|tostring')" '[["openagentix-system","console","8428"]]'
+D=$(docs "${CP9[@]}")
+eq "observability on, console off: the store's ingress still admits nobody" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="victoria-metrics-ingress")|(.spec.ingress // [])|length')" 0
+D=$(docs "${CN10[@]}" --set observability.enabled=false)
+eq "console on, observability off: no CONSOLE_METRICS_URL" "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_METRICS_URL\")]|length")" 0
+eq "console on, observability off: no egress to a metrics store" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")]|length')" 0
+D=$(docs "${CN10[@]}" --set console.metrics.url=https://metrics.example.org:8428)
+eq "console.metrics.url overrides the bundled store" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_METRICS_URL\")|.value")" "https://metrics.example.org:8428"
+eq "an override opens no egress to the bundled store" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")]|length')" 0
+eq "a console.metrics.url with a query or credentials is refused" "$(render_err "${CN10[@]}" --set 'console.metrics.url=http://u:p@x:1/?q=1' | /usr/bin/grep -c 'console.metrics.url')" 1
+
+echo "# console: traces (Jaeger's query port is reachable by the console only)"
+D=$(docs "${CN10[@]}")
+JGURL="http://jaeger.openagentix-observability.svc:16686"
+eq "console on + observability on: CONSOLE_TRACES_URL is the bundled Jaeger" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_TRACES_URL\")|.value")" "$JGURL"
+eq "the console NetworkPolicy gets one egress rule to Jaeger's pod and port 16686 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="jaeger")|[.to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],(.ports|map(.port)|join(","))]]|tostring')" '[["openagentix-observability","16686"]]'
+eq "Jaeger's ingress keeps its OTLP ports and adds the console on 16686 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="jaeger-ingress")|[.spec.ingress[]|(.ports|map(.port)|join(","))]|tostring')" '["4317,4318","16686"]'
+eq "the console rule on Jaeger admits the console pods of the console namespace" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="jaeger-ingress")|.spec.ingress[]|select(.ports[0].port==16686)|[.from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],.from[0].podSelector.matchLabels.app]|join(" ")')" "openagentix-system console"
+D=$(docs "${CP9[@]}")
+eq "console off: Jaeger's ingress is OTLP only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="jaeger-ingress")|[.spec.ingress[]|(.ports|map(.port)|join(","))]|tostring')" '["4317,4318"]'
+D=$(docs "${CN10[@]}" --set observability.enabled=false)
+eq "observability off: no CONSOLE_TRACES_URL" "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_TRACES_URL\")]|length")" 0
+D=$(docs "${CN10[@]}" --set console.traces.url=https://jaeger.example.org:16686)
+eq "console.traces.url overrides the bundled Jaeger and opens no egress for it" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_TRACES_URL\")|.value") $(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="jaeger")]|length')" "https://jaeger.example.org:16686 0"
+eq "a console.traces.url with credentials is refused" "$(render_err "${CN10[@]}" --set 'console.traces.url=http://u:p@x:1/' | /usr/bin/grep -c 'console.traces.url')" 1
 
 echo
 echo "passed=$PASS failed=$FAIL"

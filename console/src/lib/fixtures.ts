@@ -38,6 +38,7 @@ export function platform(): Platform {
             memory: { allowed: true, maxTtlDays: 30, requireExpiry: true },
             egress: { allowedOrigins: ['https://api.osv.dev'] },
             reservedNames: [],
+            suspendAll: false,
         },
     };
 }
@@ -56,6 +57,8 @@ export function agent(over: Partial<Agent> = {}): Agent {
         notify: false,
         skills: [],
         egressCount: 0,
+        effectiveTools: [],
+        effectiveEgress: [],
         state: 'ready',
         stateReason: '',
         deleting: false,

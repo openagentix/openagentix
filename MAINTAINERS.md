@@ -4,9 +4,9 @@ The maintainers decide what goes into OpenAgentix. How people become maintainers
 
 | Name | GitHub ID | Organisation | Areas |
 |---|---|---|---|
-| Gourav Shah | [@initcron](https://github.com/initcron) | Independent | all areas: chart, installer, services, control plane, documentation, releases, security reports |
+| Gourav Shah | [@initcron](https://github.com/initcron) | Initcron Systems Pvt Ltd | all areas: chart, installer, services, control plane, documentation, releases, security reports |
 
-"Independent" means the maintainer does not act for a company on this project. If that changes, this table changes.
+The organisation column names the company a maintainer works for. A maintainer acts for the project, not for their employer (see [GOVERNANCE.md](GOVERNANCE.md)).
 
 ## Emeritus
 

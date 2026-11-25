@@ -199,6 +199,17 @@ gateway:
   #       eviction: {consecutiveFailures: 1, duration: 30s}
   #   - name: auto
   #     failover: [gemini, claude-haiku]
+  # A scripted stand-in for a model, for trying the platform without a provider key (ADR 0014, README "Try it in 10 minutes"). It is NOT
+  # a language model. OFF: nothing renders. ON: a Deployment, a Service and a NetworkPolicy (only the gateway's proxy pods may call it; it may
+  # call nothing) in `gateway.namespace`; add a gateway.models entry with provider OpenAI and
+  # baseURL http://stub-model.<gateway.namespace>.svc.cluster.local:8080/v1 (components/quickstart/values.yaml does). install.sh builds and loads the image.
+  stubModel:
+    enabled: false
+    image: {repository: openagentix/stub-model, tag: dev, pullPolicy: IfNotPresent}   # built from services/stub-model and loaded into kind by install.sh
+    sourceHash: ""                # install.sh sets it to a hash of services/stub-model (the tag stays "dev")
+    resources:
+      requests: {cpu: 5m, memory: 8Mi}
+      limits: {cpu: 100m, memory: 32Mi}
   policy:
     name: model-gateway-policy    # the ONE AgentgatewayPolicy (docs warn that several can overwrite each other)
     apiKeyLabel: agentgateway.dev/apikey   # ConfigMaps with this label hold virtual-key hashes (install.sh)
@@ -539,6 +550,33 @@ controlPlane:
       inClusterDestinations: []
     reservedNames: []                 # more names a definition may not use: "name" in every namespace, "namespace/name" in one (the chart agents and kb, kb-extract, memory are always reserved in the agents namespace)
     suspendAll: false                 # the operator's stop switch: every definition is STOPPED: its agent object is removed (conversations end) and its gateway key is cut (resume: the same key, a fresh start), see the README
+
+# ---- Console (ADR 0007, slice 3): the web console for the control plane --------------------------------------------------
+# Opt-in. It needs controlPlane.enabled (the CRD, the catalog and the policy it shows). One replica, no Ingress and nobody may connect to it
+# in the cluster (the NetworkPolicy admits no ingress): reach it with `kubectl port-forward -n <namespace> svc/openagentix-console 8080:8080`
+# and sign in with the token in the Secret below (install.sh creates it, 48 random characters, only when absent, never printed).
+# Its ServiceAccount may read and write AgentDefinitions in the agents namespace (viewer: read only) and list four kagent kinds; no Secret.
+console:
+  enabled: false
+  image: {repository: openagentix/console, tag: dev, pullPolicy: IfNotPresent}   # built from services/console (context: the repository root) by install.sh
+  sourceHash: ""                      # install.sh sets it to a hash of services/console and console (the tag stays "dev")
+  namespace: ""                       # empty = the release namespace. It must be the control plane's namespace: the console mounts the two ConfigMaps that live there
+  tokenSecret: {name: console-token, key: token}   # the login token (at least 32 characters, the console refuses a weaker one); created by install.sh, mounted as a file
+  viewer: false                       # true: every write is refused and the Role has no write verb
+  allowedHosts: []                    # more Host names the console answers (an Ingress name); localhost, 127.0.0.1 and [::1] are always accepted. The probes send Host: localhost
+  # The API server addresses the console may reach (NetworkPolicy egress), set by install.sh like controlPlane.apiServerCIDRs. Empty: the
+  # API server ports towards ANY address (a closed policy would cut the console off).
+  apiServerCIDRs: []
+  apiServerPorts: [443, 6443]
+  # Metrics for the Overview and Costs pages. With observability.enabled and observability.bundled.enabled the console reads the bundled
+  # VictoriaMetrics (query API, port 8428) and only the console may reach it. url overrides that with your own Prometheus-compatible store
+  # (http or https, host[:port], no credentials, path or query); the chart then opens no egress for it. Empty and no bundled store: no metrics.
+  metrics: {url: ""}
+  # Traces for the Traces page: the bundled Jaeger query API (port 16686) under the same conditions, or this URL for your own Jaeger query API.
+  traces: {url: ""}
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {cpu: 250m, memory: 128Mi}
 
 # ---- Long-term memory (kagent memory + pgvector + local embedding model) ---------------------------------
 # Shared pieces for agents that opt in with `agents[].memory.enabled: true`. Rendered only when at least one agent
