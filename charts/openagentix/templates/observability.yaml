@@ -206,9 +206,11 @@ spec:
       serviceAccountName: victoria-metrics
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 65534
         runAsGroup: 65534
         fsGroup: 65534
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: victoria-metrics
@@ -280,8 +282,10 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 10001
         runAsGroup: 10001
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: jaeger

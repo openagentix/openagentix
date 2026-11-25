@@ -40,7 +40,7 @@ The installer ends with a summary: how long it took, which model is active, and 
 **Status and limits**
 
 - Early project with one maintainer. Last release `v0.2.0`; the control plane, console and quick start are on `main` and not yet in a release.
-- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). The same quick start and smoke test also passed on k3s (k3d, v1.37.2) in a CI job that is not a required check ([Install on k3s](docs/diary/guide/install-k3s.md)). Not yet tried on a managed cloud, OpenShift, several nodes or under load.
+- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). The same quick start and smoke test also passed on k3s (k3d, v1.37.2) in a CI job that is not a required check ([Install on k3s](docs/diary/guide/install-k3s.md)). Not yet tried on a managed cloud, OpenShift, several nodes or under load. The chart has a `platform: openshift` setting whose manifests render and follow restricted-v2, but nothing was run on OpenShift ([OpenShift](docs/diary/guide/openshift.md)).
 - Agents run on kagent with Agent Substrate (gVisor sandboxes). Bringing your own A2A agent is planned for 0.3.
 - Not built yet: human approval, identity per agent, budgets in money (budgets are in tokens), a Slack channel proven on a real workspace.
 - Demo-grade parts: development databases, one replica of most services. Read [what works](docs/diary/what-works.md) before you rely on anything.
@@ -597,7 +597,7 @@ Proven on the kind demo cluster (2026-11-25): a definition became a Ready agent 
 
 ## Bring your own agent
 
-You can run your own agent image next to the built-in ones (ADR 0015, issue #43). It is off by default. Set `controlPlane.containerAgents.enabled=true`, add `container` to the policy's `allowedRuntimes`, and name the registries you trust in `controlPlane.policy.runtimes.container.images`. Then a definition can say `spec.runtime.type: container` and name an image pinned by digest. The image must speak A2A 1.0 (an agent card at `/.well-known/agent-card.json` and `SendMessage` at `POST /`). A sample is in `examples/agents/echo-a2a`.
+You can run your own agent image next to the built-in ones (ADR 0015, issue #43). It is off by default. Set `controlPlane.containerAgents.enabled=true`, add `container` to the policy's `allowedRuntimes`, and name the registries you trust in `controlPlane.policy.runtimes.container.images`. Then a definition can say `spec.runtime.type: container` and name an image pinned by digest. The image must speak A2A 1.0 (an agent card at `/.well-known/agent-card.json` and `SendMessage` at `POST /`). Samples are in `examples/agents/echo-a2a` (Go) and `examples/agents/echo-a2a-python` (Python, A2A SDK; its README has the steps).
 
 ```sh
 kubectl apply -f examples/agents/echo-a2a/agent.yaml   # after you put your image digest in it

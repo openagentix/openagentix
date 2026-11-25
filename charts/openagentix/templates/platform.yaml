@@ -1,0 +1,8 @@
+{{- /*
+Checks for the platform value (issue #32). Renders nothing. It runs in every render, so a wrong platform fails even when no feature that
+depends on it is on.
+*/ -}}
+{{- $p := include "oa.platform" . }}
+{{- if and (eq $p "openshift") (include "oa.cpOn" .) .Values.controlPlane.containerAgents.enabled }}
+{{- fail "controlPlane.containerAgents is not supported with platform: openshift: the controller writes the agent pods with a fixed user id (65532) and the admission guard requires exactly that, which the restricted-v2 SCC refuses (it allows only ids from the namespace range). See docs/diary/guide/openshift.md" }}
+{{- end }}

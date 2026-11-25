@@ -64,8 +64,10 @@ spec:
           automountServiceAccountToken: false   # the job talks to the database only, never to the Kubernetes API
           securityContext:
             runAsNonRoot: true
+            {{- if not (include "oa.openshift" $) }}
             runAsUser: 999                       # the postgres user of the image
             runAsGroup: 999
+            {{- end }}
             seccompProfile: {type: RuntimeDefault}
           containers:
             - name: expire
