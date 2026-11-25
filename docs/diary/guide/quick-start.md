@@ -49,6 +49,10 @@ kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080
 
 Then open `http://127.0.0.1:8080`. The sign-in token is in the Secret `openagentix-system/console-token`; the installer prints the command to read it.
 
+## Other clusters
+
+The quick start also runs on k3s in Docker (`CLUSTER_TYPE=k3d`): see [Install on k3s](./install-k3s.md).
+
 ## Remove everything
 
 ```sh

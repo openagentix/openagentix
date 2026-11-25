@@ -40,7 +40,7 @@ The installer ends with a summary: how long it took, which model is active, and 
 ## Status
 
 - Early project with one maintainer. Last release `v0.2.0` (2026-11-25). The control plane, the console and the quick start came after it and are not yet in a release.
-- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). Not yet tried on k3s, a managed cloud, OpenShift, several nodes or under load.
+- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). The same quick start and smoke test also passed on k3s (k3d, v1.37.2) in a CI job that is not a required check ([Install on k3s](./guide/install-k3s.md)). Not yet tried on a managed cloud, OpenShift, several nodes or under load.
 - Agents run on kagent with Agent Substrate. Bringing your own A2A agent is planned for 0.3.
 - Not built yet: human approval, identity per agent, budgets in money, a Slack channel proven on a real workspace.
 

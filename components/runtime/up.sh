@@ -14,7 +14,10 @@ CLUSTER=${CLUSTER:-openagentix}
 VER=1.0.1                      # kagent + substrate charts (docs say 1.0.0; 1.0.1 is the latest patch)
 KAGENT_OCI=oci://ghcr.io/kagent-dev/kagent/helm
 SUB_OCI=oci://ghcr.io/kagent-dev/substrate/helm
-NODE=${CLUSTER}-control-plane
+# shellcheck source=../../hack/cluster.sh
+. ../../hack/cluster.sh   # CLUSTER_TYPE=kind (default) or k3d
+cluster_check_type || exit 1
+NODE=$(cluster_node)
 # rtk (user's shell hook) rewrites some kubectl invocations; use the real binary when run interactively.
 K=${KUBECTL:-kubectl}
 t0=$(date +%s)
@@ -34,9 +37,9 @@ if ! command -v kubectl-ate >/dev/null; then
 fi
 
 # --- 1. kind cluster: v1.37 node, no feature gates needed (CTB/PodCertificateRequest are GA in certificates.k8s.io/v1)
-log "kind cluster"
-kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --config ../../hack/kind-config.yaml
-$K config use-context "kind-$CLUSTER" >/dev/null
+log "$CLUSTER_TYPE cluster"
+cluster_exists || cluster_create ../..
+$K config use-context "$(cluster_ctx)" >/dev/null
 # Upstream hack/create-kind-cluster.sh does this for gVisor loopback pod networking. Not in the docs.
 docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null
 docker exec "$NODE" sysctl -e -w net.ipv6.conf.all.proxy_ndp=1 >/dev/null
