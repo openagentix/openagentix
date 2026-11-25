@@ -56,7 +56,7 @@ NODE_IMAGE=()
 [ -z "${KIND_NODE_IMAGE:-}" ] || NODE_IMAGE=(--image "$KIND_NODE_IMAGE")
 
 echo "# cluster $CLUSTER (kubeconfig $KUBECONFIG)"
-kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s "${NODE_IMAGE[@]}" >/dev/null
+kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s ${NODE_IMAGE[@]+"${NODE_IMAGE[@]}"} >/dev/null
 CREATED=1
 kubectl version 2>/dev/null | head -2
 for n in kagent agentgateway-system openagentix-system; do kubectl create namespace "$n" >/dev/null; done
@@ -315,17 +315,20 @@ for k in ServiceAccount Deployment Service NetworkPolicy; do jq -c "select(.kind
 for k in ServiceAccount Deployment Service NetworkPolicy; do
   allowed "the controller may create its $k in the workload namespace" asctl create --dry-run=server -f "$TMP/ca-$k.json"
 done
+# The API server validates the object before admission runs, so each bad Deployment must be valid
+# to it (a privileged container needs allowPrivilegeEscalation, a second container needs its own
+# name); otherwise the refusal comes from validation and not from the guard under test.
 dep_refused() { # dep_refused <desc> <pattern> <jq filter on the Deployment>
   jq -c "$3" "$TMP/ca-Deployment.json" > "$TMP/ca-dep-bad.json"
   refused "$1" "$2" asctl create --dry-run=server -f "$TMP/ca-dep-bad.json"
 }
 dep_refused "a Deployment with hostNetwork is refused" "must use only its own ServiceAccount" '.spec.template.spec.hostNetwork=true'
-dep_refused "a Deployment with a privileged container is refused" "no privilege escalation" '.spec.template.spec.containers[0].securityContext.privileged=true'
+dep_refused "a Deployment with a privileged container is refused" "no privilege escalation" '.spec.template.spec.containers[0].securityContext|=(.privileged=true|.allowPrivilegeEscalation=true)'
 dep_refused "a Deployment with another ServiceAccount is refused" "must use only its own ServiceAccount" '.spec.template.spec.serviceAccountName="default"'
 dep_refused "a Deployment with a hostPath volume is refused" "the only volume is an emptyDir" '.spec.template.spec.volumes+=[{name:"h",hostPath:{path:"/"}}]'
 dep_refused "a Deployment with an image by tag is refused" "digest-pinned image" '.spec.template.spec.containers[0].image="registry.local/oa/echo:v1"'
 dep_refused "a Deployment with an image of another registry is refused" "digest-pinned image" '.spec.template.spec.containers[0].image="docker.io/evil/x@sha256:'$(printf 'a%.0s' $(seq 1 64))'"'
-dep_refused "a Deployment with an extra container is refused" "digest-pinned image" '.spec.template.spec.containers+=[.spec.template.spec.containers[0]]'
+dep_refused "a Deployment with an extra container is refused" "digest-pinned image" '.spec.template.spec.containers+=[.spec.template.spec.containers[0]|.name="second"]'
 SECRET_CA=$(jq -nc --arg n "echo-go-virtual-key-$HEX8" '{apiVersion:"v1",kind:"Secret",type:"Opaque",immutable:true,metadata:{name:$n,namespace:"'$WNS'",labels:{"app.kubernetes.io/managed-by":"openagentix-control-plane","openagentix.io/agent-definition":"echo-go","openagentix.io/definition-namespace":"kagent"}},data:{OPENAI_API_KEY:"dmstMDAwMDAw"}}')
 printf '%s' "$SECRET_CA" > "$TMP/ca-secret.json"
 allowed "the controller may create the key Secret in the workload namespace" asctl create --dry-run=server -f "$TMP/ca-secret.json"
