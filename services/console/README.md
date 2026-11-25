@@ -237,3 +237,5 @@ What the chart renders (`charts/openagentix/templates/console.yaml`, values bloc
 - **Env** `CONSOLE_NAMESPACE` (the agents namespace), `CONSOLE_VIEWER=1` for `console.viewer`, `CONSOLE_ALLOWED_HOSTS` from `console.allowedHosts`
   (and `CONSOLE_HSTS=1` is yours to add when an Ingress with TLS is). The token must be at least 32 characters; `install.sh` makes 48.
 - The catalog may carry `"demo": true` (rendered from the demo values files); then the web app shows its "Demo data" tag.
+
+The HTTP API, the extension interfaces and the OpenAPI file are in the [API reference](../../docs/diary/reference/console-api.md).
