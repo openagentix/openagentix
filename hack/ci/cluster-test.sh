@@ -40,12 +40,12 @@ t "k3d network" "$(run k3d cluster_network)" k3d-alpha
 run k3d cluster_exists; t "k3d: alpha exists" "$?" 0
 CLUSTER=gamma run k3d cluster_exists; t "k3d: gamma does not exist" "$?" 1
 : > "$D/calls"; run k3d cluster_create . >/dev/null
-t "k3d create: one server, no Traefik, no ServiceLB" "$(calls)" "k3d cluster create alpha --image rancher/k3s:v1.37.2-k3s1 --servers 1 --agents 0 --no-lb --wait --timeout 300s --k3s-arg --disable=traefik@server:0 --k3s-arg --disable=servicelb@server:0;"
+t "k3d create: one server, a volume for /var/lib/ate, no Traefik, no ServiceLB" "$(calls)" "k3d cluster create alpha --image rancher/k3s:v1.37.2-k3s1 --servers 1 --agents 0 --no-lb --wait --timeout 300s --volume k3d-alpha-ate:/var/lib/ate@server:0 --k3s-arg --disable=traefik@server:0 --k3s-arg --disable=servicelb@server:0;"
 t "k3d create never turns the network policy controller off" "$(grep -c 'disable-network-policy' hack/cluster.sh)" 0
 K3D_NODE_IMAGE=rancher/k3s:v9 run k3d cluster_create . >/dev/null; t "K3D_NODE_IMAGE overrides the image" "$(calls | grep -o 'rancher/k3s:v9')" rancher/k3s:v9
 run k3d cluster_load_images a:1 b:2 >/dev/null; t "k3d image import" "$(calls)" "k3d image import a:1 b:2 --cluster alpha;"
 run k3d cluster_ctr images ls >/dev/null; t "k3d ctr uses the k3s containerd socket" "$(calls)" "docker exec k3d-alpha-server-0 ctr --address /run/k3s/containerd/containerd.sock --namespace=k8s.io images ls;"
-t "k3d delete hint" "$(run k3d cluster_delete_hint)" "k3d cluster delete alpha"
+t "k3d delete hint removes the cluster and its volume" "$(run k3d cluster_delete_hint)" "k3d cluster delete alpha && docker volume rm k3d-alpha-ate"
 
 echo "# unknown type"
 run podman cluster_check_type 2>/dev/null; t "unknown CLUSTER_TYPE is refused" "$?" 1

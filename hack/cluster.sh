@@ -40,8 +40,11 @@ cluster_create(){
   case "$CLUSTER_TYPE" in
     kind) kind create cluster --name "$CLUSTER" --config "${1:-.}/hack/kind-config.yaml";;
     # Traefik and ServiceLB are off: nothing in the chart uses an Ingress or a LoadBalancer, and ServiceLB would claim host ports.
+    # /var/lib/ate is a Docker volume: the runtime builds a sandbox root file system there and makes overlay whiteouts (mknod c 0 0), which the
+    # container's own overlay root refuses ("operation not permitted", even with --privileged). kind mounts /var as a volume, k3d does not.
     # The k3s network policy controller stays ON (it is the point of the test: k3s enforces NetworkPolicy).
     k3d) k3d cluster create "$CLUSTER" --image "$K3D_NODE_IMAGE" --servers 1 --agents 0 --no-lb --wait --timeout 300s \
+           --volume "k3d-$CLUSTER-ate:/var/lib/ate@server:0" \
            --k3s-arg "--disable=traefik@server:0" --k3s-arg "--disable=servicelb@server:0";;
   esac
 }
@@ -58,5 +61,5 @@ cluster_ctr(){
   esac
 }
 cluster_delete_hint(){
-  case "$CLUSTER_TYPE" in kind) echo "kind delete cluster --name $CLUSTER";; k3d) echo "k3d cluster delete $CLUSTER";; esac
+  case "$CLUSTER_TYPE" in kind) echo "kind delete cluster --name $CLUSTER";; k3d) echo "k3d cluster delete $CLUSTER && docker volume rm k3d-$CLUSTER-ate";; esac
 }

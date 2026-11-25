@@ -91,3 +91,6 @@ jobs:
           kubectl get agent,agentdefinition -A -o yaml | head -150 || true
           kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
           kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
+          kubectl logs -n ate-system ds/atelet --tail=60 | cut -c1-400 || true
+          kubectl logs -n ate-system deploy/ate-controller --tail=40 | cut -c1-400 || true
+          kubectl get pods -A -o wide | grep -v Running || true
