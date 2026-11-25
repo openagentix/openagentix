@@ -21,6 +21,8 @@ repository and its own API group, can depend on a resource without being broken 
 - A spec names no upstream product (no runtime, gateway or tool-server name, no image, no namespace of a platform component). What an upstream
   needs is derived by its adapter from the platform's own terms, or comes from the catalog's adapter-owned section (`runtime.<adapter>`,
   `tools.<adapter>`). A test keeps these words out of the platform packages.
+  One narrow exception, decided in [ADR 0015](decisions/0015-bring-your-own-agent.md): `spec.runtime.container.image`, the user's own agent image. It
+  must be pinned by digest and must match an operator allowlist. No other image field exists anywhere in a spec. The rule above is otherwise unchanged.
 - Identifiers the platform makes (a gateway user, a key Secret's name) are **opaque**: documented as strings, never to be parsed. Today a
   definition's gateway user is `<namespace>.<name>`.
 - A field that is planned but not built is **reserved**: the schema allows it, its shape is fixed, and the controller refuses a value with the
