@@ -1,0 +1,15 @@
+# Minimal profile (issue #29): the quick start without the parts that are not needed to see a governed agent.
+#   PROFILE=minimal ./install.sh        (or ./install.sh --minimal)
+# It is applied on top of components/quickstart/values.yaml (install.sh adds both files), so everything the quick start does stays:
+# the runtime, the model gateway with a virtual key and a token budget, one tool server and one tool profile, the control plane, the A2A gate
+# (and its audit lines) and the stub model. The agent is still made from an AgentDefinition.
+# Switched off here, compared with the quick start:
+#   console        no web console, so its image (it builds the web app) is not built and its pod is not started.
+#   observability  no VictoriaMetrics and no Jaeger, and no extra Helm upgrade of the kagent release for telemetry.
+console:
+  enabled: false
+
+observability:
+  enabled: false
+  bundled:
+    enabled: false

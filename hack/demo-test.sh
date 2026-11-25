@@ -86,6 +86,12 @@ echo "# DEMO_KEEP=1 keeps the agent"
 OUT=$(DEMO_KEEP=1 run); t "exit 0" "$?" 0
 hasnt "no delete call" "delete agentdefinition" "$(cat "$D/calls")"
 
+echo "# DEMO_CONSOLE=0 (PROFILE=minimal has no console): the other steps still run and the console step is skipped"
+OUT=$(DEMO_CONSOLE=0 run); t "exit 0" "$?" 0
+has "step 5 (the refused call) still ran" "denied, as it should be" "$OUT"
+has "the console step says it was skipped" "skipped" "$(grep -A2 'Step 6' <<<"$OUT")"
+hasnt "no console port-forward was tried" "port-forward" "$(cat "$D/calls")"
+
 echo "# failures"
 OUT=$(FAKE_NO_QS=1 run); t "no quick start installed: exit 1" "$?" 1
 has "it says how to install" "PROFILE=quickstart ./install.sh" "$OUT"
