@@ -6,7 +6,7 @@ module.exports = {
       type: 'category',
       label: 'Start here',
       collapsed: false,
-      items: ['guide/why', 'guide/concepts', 'guide/quick-start', 'guide/built-with', 'guide/use-cases', 'guide/faq'],
+      items: ['guide/why', 'guide/concepts', 'guide/quick-start', 'guide/install-k3s', 'guide/built-with', 'guide/use-cases', 'guide/faq'],
     },
     {
       type: 'category',

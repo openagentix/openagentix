@@ -12,7 +12,7 @@ The goal in the original product brief is a single-command deploy with Helm. Ups
 
 | Layer | What | Where |
 |---|---|---|
-| Installer | Creates the kind cluster, installs pinned upstream releases, creates Secrets from your environment, builds images, runs Helm | `install.sh`, `uninstall.sh` |
+| Installer | Creates the kind cluster (or a k3s cluster with `CLUSTER_TYPE=k3d`), installs pinned upstream releases, creates Secrets from your environment, builds images, runs Helm | `install.sh`, `uninstall.sh` |
 | Chart | Our own resources only, driven by values, no secret values | `charts/openagentix/` |
 
 ## How it works
@@ -70,6 +70,7 @@ Uninstall: `./uninstall.sh` removes only the `openagentix` release and then the 
 ## What was proven
 
 - Cold install from a deleted kind cluster, twice, on one machine with a warm Docker image cache: 604 s on a 5 CPU, 7.7 GiB VM.
+- The quick start, with the sample container agent, installed on k3s (k3d, v1.37.2) on a hosted runner in 5 min 51 s and passed 28 smoke checks. See [Install on k3s](../guide/install-k3s.md) for the commands, the differences from kind and the limits.
 - A second `install.sh` run changes nothing (checked for Kourier, notify and the base install).
 - A hand-applied install can be adopted by Helm without recreating objects (README "Adopting an existing hand-applied install").
 
