@@ -138,7 +138,7 @@ export async function copyText(text: string): Promise<boolean> {
         ta.className = 'sr';
         document.body.appendChild(ta);
         ta.select();
-        let ok = false;
+        let ok: boolean;
         try {
             ok = document.execCommand('copy');
         } catch {
