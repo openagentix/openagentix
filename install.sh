@@ -684,7 +684,7 @@ if [ "$QS" = 1 ]; then
   QS_DESC="Looks up known vulnerabilities of a package. Model: $(qs_model_label "$QS_MODEL")"
   yq --arg d "$QS_DESC" '.spec.description=$d' components/quickstart/agent.yaml | $K apply -f - >/dev/null
   $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
-    || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; }
+    || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition quickstart -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
 fi
 
 log "DONE"

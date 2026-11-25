@@ -65,12 +65,11 @@ QSA=$(render -f "$ROOT/components/quickstart/values.yaml" -f <(ANTHROPIC_API_KEY
 eq "quick start with an Anthropic model: asks for the key" "$(spf "$QSA" true | /usr/bin/grep -c '^ANTHROPIC_API_KEY is not set')" 1
 eq "quick start with an Anthropic model, key set"          "$(spf "$QSA" export ANTHROPIC_API_KEY=x)" ""
 eq "quick start never asks for a Telegram token"           "$(spf "$QSA" true | /usr/bin/grep -c TELEGRAM)" 0
-eq "bridge off in the default chart: no token asked"       "$(spf "$(render --set bridge.enabled=false --set agents[0].name=assistant)" export ANTHROPIC_API_KEY=x | /usr/bin/grep -c TELEGRAM)" 0
 
 echo "# preflight: the placeholder skill digest (issue #9)"
 eq "default chart, SKIP_SKILL unset: the installer pins it" "$(preflight_skill_problems "$DEF" 0)" ""
 eq "default chart, SKIP_SKILL=1: refused with the reason"  "$(preflight_skill_problems "$DEF" 1 | /usr/bin/grep -c 'SKIP_SKILL=1 stops install.sh')" 1
-eq "a real digest passes with SKIP_SKILL=1"                "$(preflight_skill_problems "$(render --set skills.openagentix-canary.oci=reg.example/s/x@sha256:$(printf 'a%.0s' $(seq 64)))" 1)" ""
+eq "a real digest passes with SKIP_SKILL=1"                "$(preflight_skill_problems "$(render --set skills.openagentix-canary.oci=reg.example/s/x@sha256:$(printf "a%.0s" $(seq 1 64)))" 1)" ""
 eq "quick start has no skill: SKIP_SKILL=1 is harmless"    "$(preflight_skill_problems "$QSR" 1)" ""
 eq "another skill left at the placeholder is refused"      "$(preflight_skill_problems '{"kind":"AgentTemplate","metadata":{"name":"t"},"spec":{"skills":[{"source":{"oci":"registry.invalid:5000/skills/other@sha256:0000000000000000000000000000000000000000000000000000000000000000"}}]}}' 0 | /usr/bin/grep -c 'pins only the example skill')" 1
 

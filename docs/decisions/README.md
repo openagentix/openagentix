@@ -60,5 +60,7 @@ Follow the style of the existing records:
 | [0010](0010-community-and-enterprise-editions.md) | Community and enterprise editions | Accepted as direction (changed by 0011) | 2026-11-25 |
 | [0011](0011-foundation-readiness.md) | Readiness for a foundation | Accepted as direction | 2026-11-25 |
 | [0012](0012-platform-primitives-for-agentic-delivery.md) | Platform primitives for products built on OpenAgentix | Accepted | 2026-11-25 |
+| [0013](0013-focus-and-runtime-neutrality.md) | One focus, bring your own agent, adopted identity | Accepted | 2026-11-25 |
+| [0014](0014-quick-start-profile.md) | A quick start profile that needs no paid key and no chat token | Accepted | 2026-11-25 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.

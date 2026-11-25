@@ -53,14 +53,17 @@ jobs:
         id: install
         env:
           PROFILE: quickstart
+          AGENT_WAIT: 480s
           VALUES_FILE: ${{ inputs.observability && 'components/observability/demo-values.yaml' || '' }}
         run: |
+          set -o pipefail
           start=$(date +%s)
           ./install.sh 2>&1 | tee install.log
           echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: smoke test
         id: smoke
         run: |
+          set -o pipefail
           start=$(date +%s)
           hack/ci/smoke.sh 2>&1 | tee smoke.log
           echo "smoke_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
@@ -93,7 +96,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: diagnostics
-        if: failure()
+        if: always()
         run: |
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true

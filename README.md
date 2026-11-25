@@ -44,14 +44,40 @@ The chart owns: the Telegram bridge Deployment, the model gateway (Gateway, one 
 
 Pinned upstream versions: kagent and Agent Substrate 1.0.1, Gateway API CRDs 1.6.3, agentgateway v1.7.0, ToolHive 0.67.1.
 
+## Try it in 10 minutes
+
+Bring any model key, or a local model, and get a governed agent on a laptop-size kind cluster. No chat app is needed, and no account other than your model provider's. (Slack is the first channel for organisations, planned for release 0.4; the Telegram bridge is an optional demo.)
+
+You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 6 CPU and 8 GB.
+
+```sh
+ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh      # or ./install.sh --quickstart
+```
+
+Model, chosen for you in this order: a key in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`), or any OpenAI-compatible endpoint (`MODEL_BASE_URL`, `MODEL_NAME`, and `MODEL_API_KEY` if it needs one); a local Ollama when you ask (`MODEL_PROVIDER=ollama MODEL_NAME=llama3.2`, optionally `OLLAMA_HOST`; Ollama must listen on all interfaces, and the cluster reaches the host at `host.docker.internal` on Docker Desktop or at the kind network gateway on Linux, which the installer looks up; this path is not tested yet); otherwise the stub. `MODEL_NAME` overrides the model name sent upstream. The installer's last lines say which model is active.
+
+No key yet? You can still try the platform's controls in 10 minutes: run `PROFILE=quickstart ./install.sh` with nothing set. A built-in **stub model** answers. It is a scripted stand-in, not a language model: it calls a tool for a vulnerability question and reports what the tool returned, and every answer says it is the stub. Use it to see the tool profile, the gate, the budget, the console and the refusals, not for answers. To switch later, run the same command with a key or endpoint above.
+
+What you get: kagent and Agent Substrate (sandboxed agents), the model gateway (a virtual key and a token budget per agent), the tool gateway with one tool server (OSV) and one tool profile that offers one tool, the control plane and the console, the A2A gate, and one agent, `quickstart`, created from an `AgentDefinition` (`components/quickstart/agent.yaml`). Off: the Telegram bridge, channels, schedules, notify, observability, the knowledge base and memory.
+
+Ask the agent, with no chat app (the answer comes back through the A2A gate):
+
+```sh
+hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
+```
+
+Open the console (`kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080`, then http://127.0.0.1:8080; the sign-in token is in Secret `openagentix-system/console-token`, the installer prints the command). Remove everything: `kind delete cluster --name openagentix`.
+
+Measured times and what they are made of: `docs/diary/features/quick-start.md`. The same install runs in CI without any key (`.github/workflows/e2e.yml`).
+
 ## Prerequisites
 
 - Kubernetes 1.37 or newer. The installer creates a kind cluster with `kindest/node:v1.37.0`. The pod-certificate APIs that Substrate uses are only GA from 1.37.
 - On your machine: `docker`, `kind` 0.33+, `kubectl` 1.37+, `helm` 3, `jq`, `yq` (the Python jq wrapper, not mikefarah's), `openssl`, `shasum`, and `curl` (the first install downloads the `kubectl-ate` plugin from the public Agent Substrate release and verifies its SHA-256; no GitHub login is needed).
 - Docker needs about 7.5 GB of memory or more (tested with a 7.7 GiB VM). The full stack idles at roughly 2.3 GiB in the node; each agent sandbox adds more. The knowledge base adds about 0.2 GiB working set when idle (see "Knowledge base"); `knowledge.enabled=false` leaves it out.
-- An Anthropic API key, and a Telegram bot token from @BotFather.
+- For the full demo below: an Anthropic API key, and a Telegram bot token from @BotFather (the installer asks for a token only when the Telegram bridge is on, and for a provider key only when a gateway model uses it).
 
-## Quickstart
+## Quickstart (the full demo)
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
