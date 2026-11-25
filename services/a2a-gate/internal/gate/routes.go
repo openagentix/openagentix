@@ -187,8 +187,10 @@ type target struct {
 	host string // <name>.<workloadNamespace>.svc.cluster.local:<port>
 	path string
 	card bool
-	ns   string
-	name string
+	// stream is set once the method is known: a streaming call is exempt from the response-header timeout
+	stream bool
+	ns     string
+	name   string
 }
 
 const keyTarget ctxKey = 2
@@ -219,7 +221,18 @@ func (h *handler) workloadTarget(ns, name, route string) *target {
 // modifyResponse rewrites the agent card of a listed agent; every other response passes through untouched.
 func (h *handler) modifyResponse(resp *http.Response) error {
 	t, _ := resp.Request.Context().Value(keyTarget).(*target)
-	if t == nil || !t.card || resp.StatusCode != http.StatusOK {
+	if t == nil {
+		return nil
+	}
+	// the answer of foreign code is not allowed to set cookies, grant cross-origin access or be sniffed as another type
+	resp.Header.Del("Set-Cookie")
+	for k := range resp.Header {
+		if strings.HasPrefix(strings.ToLower(k), "access-control-") {
+			delete(resp.Header, k)
+		}
+	}
+	resp.Header.Set("X-Content-Type-Options", "nosniff")
+	if !t.card || resp.StatusCode != http.StatusOK {
 		return nil
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxCardBytes+1))

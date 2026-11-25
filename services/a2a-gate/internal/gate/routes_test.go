@@ -95,6 +95,7 @@ type fakeNet struct {
 	mu    sync.Mutex
 	got   []*http.Request
 	reply func(*http.Request) (int, string)
+	hdr   http.Header // extra response headers
 }
 
 func (f *fakeNet) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -111,7 +112,11 @@ func (f *fakeNet) RoundTrip(r *http.Request) (*http.Response, error) {
 	if f.reply != nil {
 		code, body = f.reply(r)
 	}
-	return &http.Response{StatusCode: code, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	h := http.Header{"Content-Type": {"application/json"}}
+	for k, v := range f.hdr {
+		h[k] = v
+	}
+	return &http.Response{StatusCode: code, Header: h, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }
 
 func (f *fakeNet) requests() []*http.Request {
