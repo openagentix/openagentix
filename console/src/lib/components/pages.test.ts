@@ -107,12 +107,12 @@ describe('Overview', () => {
         expect(att).toHaveTextContent('which is not in profile "lookup"');
         expect(att).toHaveTextContent('AgentPending');
         expect(att).not.toHaveTextContent('researcher');
-        const plat = screen.getByRole('region', { name: 'Platform' });
+        const plat = screen.getByRole('region', { name: /Platform health/ });
         expect(plat).toHaveTextContent('kagent');
         expect(plat).toHaveTextContent('A2A gate');
         expect(plat).toHaveTextContent('expiry job on');
-        expect(screen.getByRole('region', { name: 'Platform policy' })).toBeInTheDocument();
-        expect(screen.getByRole('link', { name: /Governance/ })).toHaveAttribute('href', '/governance');
+        expect(screen.getByRole('region', { name: 'Security posture' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: /Open Governance/ })).toHaveAttribute('href', '/governance');
     });
     it('shows no empty-state banner and no invented numbers', async () => {
         world();

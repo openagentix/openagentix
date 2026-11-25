@@ -26,8 +26,8 @@ this program builds.
 |---|---|
 | `GET /healthz` | liveness and readiness; no token |
 | `GET /api/v1/session` | who am I (`console`), role (`operator` or `viewer`), `canWrite`, `capabilities` (`create`, `update`, `delete`, `validate`: what the Authorizer allows for a bare resource; `canWrite` is true only when the first three are), `demo`, version, namespace |
-| `GET /api/v1/platform` | catalog and policy summary read from the two mounted JSON files; no secrets, no images |
-| `GET /api/v1/agents` | built definitions plus chart agents (`source: "chart"`, read-only), `used` = built definitions counted by `maxAgents`; `truncated` and `cap` when the cluster holds more than the console reads (see "Bounded reads") |
+| `GET /api/v1/platform` | catalog and policy summary read from the two mounted JSON files (the policy includes `suspendAll` and `egress.inClusterDestinations`); no secrets, no images |
+| `GET /api/v1/agents` | built definitions (with `effectiveTools` and `effectiveEgress` from their status) plus chart agents (`source: "chart"`, read-only), `used` = built definitions counted by `maxAgents`; `truncated` and `cap` when the cluster holds more than the console reads (see "Bounded reads") |
 | `POST /api/v1/agents` | create a definition: body `{name, spec}`; 201, 409 `exists`, 422 `invalid` |
 | `POST /api/v1/agents/validate` | dry run: the API server's schema check with `dryRun=All` (nothing is written) and a **predicted** list. An identity that may not write (viewer) gets the predictions only (`schema.skipped: true`): no request reaches the cluster. Limited per identity per minute (429 `rate_limited`) |
 | `GET /api/v1/agents/{name}` | spec, status, conditions, YAML text; for a chart agent what could be read of it, `readOnly: true`; `unmanaged` lists spec fields the console cannot edit (see "Saving keeps what it does not know") |

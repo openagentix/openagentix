@@ -16,11 +16,15 @@ No default changed for users who leave the new `controlPlane` and `console` bloc
 - CI on every push: Go per module, chart tests, shell tests, integration, the admission guard, an API-server test, console unit and end-to-end tests, image builds and a secret scan (`hack/ci/README.md`).
 - The install command now takes ten demo values files. The two new ones, `components/control-plane/demo-values.yaml` and `components/console/demo-values.yaml`, go last, in that order.
 
+- Console: Overview, Models, Tools, Skills, Memory and Governance show real, read-only data from `GET /api/v1/platform` and `GET /api/v1/agents` (agents by state, what needs attention, active adapters, which agents use each model, profile and skill, the platform policy as a summary and as YAML, effective egress and tools per agent). The agents list now carries `effectiveTools` and `effectiveEgress`, and the platform policy carries `suspendAll`. Spend, traces, counts from jobs and gate caller rules stay "not available" because the console has no source for them.
+
 ### Changed
+- Console sidebar: the lock now means "read-only in this release" (pages that show data); a dotted circle means "no data source yet".
 - The `AgentDefinition` contract follows ADR 0012: `spec.knowledge` and `spec.notify` are objects (`enabled` plus a reserved list), `spec.skills` is a list of `{name, version}`, the gateway user of a built agent is `<namespace>.<name>` (for example `kagent.researcher`), and the status has public fields (`conditions`, `endpoint`, `revision`, `effectiveTools`, `effectiveEgress`) and a private `status.controller` part.
 - The control plane's admission guard is an allowlist: 8 ValidatingAdmissionPolicies that allow only the fields the controller writes.
 
 ### Fixed
+- Console: the context line under the logo was clipped when the sidebar was taller than the window. It no longer shrinks, and shows the namespace when no context name is set.
 - The API server refuses a CRD schema that describes `metadata`. The schema no longer does, and an API-server test covers it. This was found only by a live upgrade.
 - Two independent reviews found problems, all fixed test-first. First review: no critical, 7 important, 12 minor. Second review, after the console: 1 critical, 6 important, 17 minor.
 - The console embed placeholder is now committed, so a clean checkout builds.

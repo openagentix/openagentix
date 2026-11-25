@@ -191,8 +191,20 @@ export interface PlatformPolicy {
     suspendAll: boolean;
 }
 
+/** Already formatted headline numbers of the metrics row (the metrics route is a later pull request; absent today). */
+export interface MetricsHeadline {
+    spendToday: string;
+    spendNote: string;
+    tokensToday: string;
+    tokensNote: string;
+    turns24h: string;
+    turnsNote: string;
+}
+
 export interface Platform {
     demo: boolean;
+    /** Present only when the console API can read a metrics store. */
+    metrics?: { available: boolean };
     adapters: { runtime: string; modelGateway: string; tools: string };
     namespaces: { agents: string; gateway: string; tools: string };
     gatewayBaseUrl: string;

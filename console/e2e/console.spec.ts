@@ -111,8 +111,8 @@ test('Overview shows real tiles and what needs attention', async ({ page }) => {
     await expect(att.getByRole('link', { name: 'cve-triage' })).toBeVisible();
     await expect(att).toContainText('which is not in profile "lookup"');
     await expect(att.getByRole('link', { name: 'release-notes' })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Platform', exact: true })).toContainText('A2A gate');
-    await expect(page.getByRole('region', { name: 'Platform policy' })).toBeVisible();
+    await expect(page.getByRole('region', { name: /Platform health/ })).toContainText('A2A gate');
+    await expect(page.getByRole('region', { name: 'Security posture' })).toBeVisible();
     await expect(page.locator('body')).not.toContainText(/Spend today|Turns, last/);
     await page.getByRole('link', { name: /Open Governance/ }).click();
     await expect(page.getByRole('heading', { level: 1, name: 'Governance' })).toBeVisible();

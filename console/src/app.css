@@ -506,3 +506,43 @@ a.tag{text-decoration:none;color:inherit} a.tag:hover{border-color:var(--color-b
 .card .ref{overflow-wrap:anywhere}
 .foot .legend{white-space:nowrap}
 .panel>.hd h2{margin:0}
+table.mini td.r{white-space:nowrap;text-align:right;vertical-align:top}
+.panel>.hd .acts a{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.foot .legend{display:inline-flex;align-items:center;gap:6px}
+.pl-note{margin-left:6px}
+/* Overview */
+.statebar{display:flex;flex-direction:column;gap:8px}
+.sb-svg{display:block;width:100%;height:10px}
+.sb-empty{fill:var(--color-surface-sunken)}
+.seg-ready{fill:var(--color-ready)} .seg-pending{fill:var(--color-pending)} .seg-refused{fill:var(--color-refused)} .seg-error{fill:var(--color-error)} .seg-paused{fill:var(--color-paused)}
+.legend-row{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--color-text-2)}
+.legend-row li{display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums}
+.sec-title{font-size:15px;line-height:22px;font-weight:600;margin:0;display:flex;gap:10px;align-items:baseline}
+.posture{border-color:var(--color-accent);box-shadow:inset 3px 0 0 var(--color-accent)}
+.posture-list{list-style:none;margin:0;padding:6px 16px 12px;display:flex;flex-direction:column}
+.posture-list li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--color-border)}
+.posture-list li:last-child{border-bottom:0}
+.posture-list li svg{flex:none;margin-top:2px}
+.posture-list li.ok svg{color:var(--color-ready)} .posture-list li.warn svg{color:var(--color-pending)}
+.posture-list li.warn{font-weight:600}
+.all-good{display:flex;gap:12px;align-items:center}
+.all-good svg{color:var(--color-ready);flex:none}
+.hcard{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:12px 14px;display:flex;gap:12px;min-width:0}
+.hcard.off,.hcard.unknown{background:var(--color-surface-sunken)}
+.hcard .hbody{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.hcard .row1{display:flex;align-items:center;gap:8px}
+.hcard .row1 .badge{margin-left:auto}
+.hcard .hname{align-self:flex-start}
+.steps{list-style:none;margin:0;padding:8px 16px 14px;display:flex;flex-direction:column;gap:2px}
+.steps li{display:flex;gap:10px;align-items:center;padding:6px 0}
+.steps li svg{flex:none;color:var(--color-text-3)} .steps li.done svg{color:var(--color-ready)}
+.steps li.done span{color:var(--color-text-3)}
+.recent{list-style:none;margin:0;padding:6px 16px 12px;display:flex;flex-direction:column}
+.recent li{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--color-border)}
+.recent li:last-child{border-bottom:0}
+.recent .when{margin-left:auto;white-space:nowrap}
+/* a progress bar, not an inline width: the CSP forbids inline styles */
+progress.meter-p{appearance:none;-webkit-appearance:none;display:block;width:100%;height:6px;border:0;border-radius:3px;background:var(--color-surface-sunken);box-shadow:inset 0 0 0 1px var(--color-border);overflow:hidden}
+progress.meter-p::-webkit-progress-bar{background:var(--color-surface-sunken)}
+progress.meter-p::-webkit-progress-value{background:var(--color-accent);border-radius:3px}
+progress.meter-p::-moz-progress-bar{background:var(--color-accent);border-radius:3px}

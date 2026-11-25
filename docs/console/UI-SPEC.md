@@ -263,7 +263,7 @@ html { background: var(--color-canvas); color: var(--color-text-1); font-family:
 |           | main content (min 0, scrolls)             | detail panel  |
 |           |                                           | 380 px        |
 +-----------+-------------------------------------------+---------------+
-| footer line inside main: edition · version · "Read-only" legend       |
+| footer line inside main: edition · version · marker legend            |
 ```
 
 - CSS grid: `grid-template-columns: var(--sidebar-w) minmax(0, 1fr)`. The top bar is sticky inside the main column. Only the main column scrolls.
@@ -271,7 +271,7 @@ html { background: var(--color-canvas); color: var(--color-text-1); font-family:
 
 ### 4.2 Sidebar
 
-Groups, in this order. Group labels are uppercase `text-xs`. Items have a 16 px icon and a label. Items whose page is read-only in the first release carry a small lock glyph after the label with the tooltip "Read-only until its resource kind exists".
+Groups, in this order. Group labels are uppercase `text-xs`. Items have a 16 px icon and a label. A page can carry one of two markers after its label, and they mean different things. The **lock** marks a page that shows real data and cannot edit it in this release (Skills, Models, Tools, Memory, Governance); its tooltip is "Read-only in this release". A **dotted circle** marks a page that has no data source yet (Knowledge, Channels and triggers, Schedules, Traces, Costs); its tooltip is "No data source yet". Overview and Agents carry no marker. The footer line spells out both: "read-only in this release" and "no data source yet".
 
 | Group | Item | Sub-items (shown when the item is active) |
 |---|---|---|
@@ -399,9 +399,9 @@ Every page defines these. Wording is fixed here so pages stay consistent.
 
 ### 6.1 Overview
 
-Purpose: one look at whether the platform is healthy and what it costs today.
+Purpose: one look at whether the platform is healthy. In this release the page shows only what the console API reads (the agents list, the platform catalog and the policy). Spend, turns and recent changes come with the observability adapter and are not shown, not even as zeros; one calm line says so.
 
-- Tiles: Agents (count, split ready / pending / refused / error), Definitions used against `maxAgents` ("3 of 5"), Spend today in USD with tokens, Turns in the last 24 hours.
+- Tiles: Agents (count, split ready / pending / refused / paused, and how many are chart-managed), Definitions used against `maxAgents` ("3 of 5"), Needs attention (a count), Chart-managed. Spend today and Turns in the last 24 hours come back with the observability adapter.
 - "Needs attention": definitions not Ready, with reason; schedules whose last run failed; components that are off but referenced.
 - Platform: active adapters from the catalog (`runtime: kagent`, `modelGateway: agentgateway`, `tools: toolhive`), optional components and whether each is on (knowledge, graph, memory with expiry, notify, channels, schedules, observability, A2A gate).
 - Recent changes: last definition events (created, accepted, refused, ready) with time.
