@@ -519,6 +519,15 @@ table.mini td.r{white-space:nowrap;text-align:right;vertical-align:top}
 .cbar{display:block;width:100%;height:8px}
 .cb-track{fill:var(--color-surface-sunken)} .cb-fill{fill:var(--color-chart-1)}
 .toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.linkbtn{border:0;background:none;color:var(--color-accent);cursor:pointer;padding:0;font:inherit;text-decoration:underline}
+tr.sel{background:var(--color-selected)}
+.waterfall{list-style:none;margin:0;padding:6px 8px 10px;display:flex;flex-direction:column;gap:2px}
+.wf{display:grid;grid-template-columns:minmax(150px,38%) minmax(0,1fr) 64px;gap:10px;align-items:center;width:100%;text-align:left;border:0;background:none;border-radius:var(--radius-md);padding:5px 8px;cursor:pointer;color:inherit}
+.wf:hover{background:var(--color-hover)} .wf.on{background:var(--color-selected);box-shadow:inset 2px 0 0 var(--color-accent)}
+.wf-name{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.wf-name.d1{padding-left:12px} .wf-name.d2{padding-left:24px} .wf-name.d3{padding-left:36px} .wf-name.d4{padding-left:48px} .wf-name.d5{padding-left:60px} .wf-name.d6{padding-left:72px}
+.wf-bar{display:block;width:100%;height:8px} .wf-track{fill:var(--color-surface-sunken)} .wf-fill{fill:var(--color-chart-1)}
+.wf.err .wf-fill{fill:var(--color-error)} .wf-dur{text-align:right;white-space:nowrap}
 /* Overview */
 .statebar{display:flex;flex-direction:column;gap:8px}
 .sb-svg{display:block;width:100%;height:10px}

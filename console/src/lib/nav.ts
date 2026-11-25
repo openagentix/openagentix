@@ -50,7 +50,7 @@ export const NAV: NavGroup[] = [
     {
         label: 'Operate',
         items: [
-            { id: 'traces', label: 'Traces', href: '/traces', icon: 'i-trace', mark: 'nodata' },
+            { id: 'traces', label: 'Traces', href: '/traces', icon: 'i-trace' },
             { id: 'costs', label: 'Costs', href: '/costs', icon: 'i-coin' },
             { id: 'memory', label: 'Memory', href: '/memory', icon: 'i-memory', mark: 'readonly' },
         ],
