@@ -100,6 +100,29 @@ func TestListMergesChartAgentsAndSkipsControllerMadeAgents(t *testing.T) {
 	}
 }
 
+// The Governance page shows what each agent is really given (the status, not the request) from the list alone.
+func TestListCarriesEffectiveToolsAndEgress(t *testing.T) {
+	r := newRig(t)
+	r.api.seed("researcher", spec("claude-haiku"), map[string]any{
+		"effectiveTools":  []any{"osv_query_vulnerability", "execute_tool_script"},
+		"effectiveEgress": []any{"https://api.osv.dev"},
+		"conditions":      []any{map[string]any{"type": "Ready", "status": "True", "reason": "Ready"}}})
+	r.api.seed("empty", spec("claude-haiku"), map[string]any{})
+	_, b := r.do(t, "GET", "/api/v1/agents", nil)
+	l := decodeInto[model.AgentList](t, b)
+	got := map[string]model.Agent{}
+	for _, a := range l.Items {
+		got[a.Name] = a
+	}
+	a := got["researcher"]
+	if !slices.Equal(a.EffectiveTools, []string{"osv_query_vulnerability", "execute_tool_script"}) || !slices.Equal(a.EffectiveEgress, []string{"https://api.osv.dev"}) {
+		t.Fatalf("researcher: %+v", a)
+	}
+	if e := got["empty"]; e.EffectiveTools == nil || e.EffectiveEgress == nil {
+		t.Fatalf("an agent without status must list empty slices, not null: %s", b)
+	}
+}
+
 func TestGetBuiltChartAndMissing(t *testing.T) {
 	r := newRig(t)
 	r.api.seed("researcher", spec("claude-haiku"), map[string]any{"observedGeneration": 1, "controller": map[string]any{"keySecret": "researcher-virtual-key-1a2b3c4d"}, "endpoint": map[string]any{"protocol": "a2a", "url": "http://gate/agents/kagent/researcher"}, "revision": "sha256:abc",

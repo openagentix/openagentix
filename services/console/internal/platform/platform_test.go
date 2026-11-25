@@ -23,7 +23,7 @@ func TestSummaryCarriesSuspendAllAndInClusterDestinations(t *testing.T) {
 	dir := t.TempDir()
 	f := &Files{
 		CatalogPath: write(t, dir, "catalog.json", `{"models":["m"],"gateUrl":"http://gate","harnessImage":"ghcr.io/x@sha256:0","skills":{"s":"r"}}`),
-		PolicyPath: write(t, dir, "policy.json", `{"maxAgents":2,"suspendAll":true,"egress":{"allowedOrigins":["https://a.example"],"inClusterDestinations":["registry.ci.svc:5000"]}}`),
+		PolicyPath:  write(t, dir, "policy.json", `{"maxAgents":2,"suspendAll":true,"egress":{"allowedOrigins":["https://a.example"],"inClusterDestinations":["registry.ci.svc:5000"]}}`),
 	}
 	b, err := f.Get()
 	if err != nil {

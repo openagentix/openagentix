@@ -169,7 +169,7 @@ func (b *Backend) ready(d backend.Definition, at time.Time) model.Status {
 func (b *Backend) seedCharts(t time.Time) {
 	mk := func(name, desc, prof string, k, n bool, mem *model.Memory, tools []string) {
 		a := model.Agent{Name: name, Namespace: ns, Source: "chart", Description: desc, Model: "claude-haiku", ToolProfile: prof, ToolsCount: len(tools),
-			Knowledge: k, Notify: n, Memory: mem, Skills: []string{}, State: model.StateReady, Conditions: []model.Condition{cond("Ready", "True", "Ready", "", t.Add(-48*time.Hour))},
+			Knowledge: k, Notify: n, Memory: mem, Skills: []string{}, EffectiveTools: []string{}, EffectiveEgress: []string{}, State: model.StateReady, Conditions: []model.Condition{cond("Ready", "True", "Ready", "", t.Add(-48*time.Hour))},
 			Updated: t.Add(-48 * time.Hour).UTC().Format(time.RFC3339)}
 		sp := &model.Spec{Description: desc, Model: "claude-haiku", ToolProfile: prof, Tools: tools, Memory: mem,
 			Instructions: "You are a concise, helpful assistant running on a Kubernetes-native agent\nplatform. Answers are read in a chat app, so keep them short and use plain text.\n"}
