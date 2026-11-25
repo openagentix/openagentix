@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openagentix/openagentix/services/control-plane/internal/api"
 )
 
 func TestLoadExamples(t *testing.T) {
@@ -93,6 +95,187 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		"in-cluster entry, not namespaced":   {`{"maxAgents": 1, "egress": {"inClusterDestinations": ["registry:5000"]}}`, "inClusterDestinations"},
 		"in-cluster entry listed twice":      {`{"maxAgents": 1, "egress": {"inClusterDestinations": ["registry.ci.svc:5000", "registry.ci.svc:5000"]}}`, "twice"},
 		"reserved name with a bad namespace": {`{"maxAgents": 1, "reservedNames": ["Bad/x"]}`, "reservedNames"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadPolicy(write(t, c.in))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("want %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+const containerCatalogPatch = `"adapters": {"runtimes": {"builtin": "kagent", "container": "container"}, "runtime"`
+
+const containerSection = `"runtime": {"container": {"namespace": "openagentix-agents", "gatewayNamespace": "agentgateway-system", "gatewayPodSelector": {"app": "gw"}, "gatewayPort": 8080, "gateNamespace": "openagentix-gateway", "gatePodSelector": {"app": "a2a-gate"}}, `
+
+func containerCatalog(t *testing.T, edit func(string) string) (*Catalog, error) {
+	t.Helper()
+	base, _ := os.ReadFile("../../testdata/catalog.json")
+	s := strings.Replace(string(base), `"adapters": {
+    "runtime"`, containerCatalogPatch, 1)
+	s = strings.Replace(s, `"runtime": {
+    "kagent"`, containerSection+`"kagent"`, 1)
+	if edit != nil {
+		s = edit(s)
+	}
+	return LoadCatalog(write(t, s))
+}
+
+func TestContainerRuntimeInTheCatalog(t *testing.T) {
+	c, err := containerCatalog(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.RuntimeAvailable("builtin") || !c.RuntimeAvailable("container") || c.RuntimeAvailable("sandbox") {
+		t.Fatal("RuntimeAvailable")
+	}
+	k := c.Runtime.Container
+	if k == nil || k.Namespace != "openagentix-agents" || k.DNSNamespace != "kube-system" || k.GatewayPort != 8080 || k.WorkloadPort != 8080 {
+		t.Fatalf("defaults: %+v", k)
+	}
+	if c.RuntimeAdapter("container") != "container" || c.RuntimeAdapter("builtin") != "kagent" || c.RuntimeAdapter("x") != "" {
+		t.Fatal("RuntimeAdapter")
+	}
+	// an old catalog (no adapters.runtimes) offers builtin only
+	old, err := LoadCatalog("../../testdata/catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !old.RuntimeAvailable("builtin") || old.RuntimeAvailable("container") {
+		t.Fatal("absent adapters.runtimes means {builtin: adapters.runtime}")
+	}
+}
+
+func TestContainerRuntimeCatalogRefusals(t *testing.T) {
+	for name, c := range map[string]struct{ from, to, want string }{
+		"no section":            {`"container": {"namespace"`, `"containerX": {"namespace"`, "unknown field"},
+		"no namespace":          {`"namespace": "openagentix-agents"`, `"namespace": ""`, "runtime.container.namespace"},
+		"no gateway selector":   {`"gatewayPodSelector": {"app": "gw"}`, `"gatewayPodSelector": {}`, "runtime.container.gatewayPodSelector"},
+		"no gateway namespace":  {`"gatewayNamespace": "agentgateway-system"`, `"gatewayNamespace": ""`, "runtime.container.gatewayNamespace"},
+		"no gate namespace":     {`"gateNamespace": "openagentix-gateway"`, `"gateNamespace": ""`, "runtime.container.gateNamespace"},
+		"no gate selector":      {`"gatePodSelector": {"app": "a2a-gate"}`, `"gatePodSelector": {}`, "runtime.container.gatePodSelector"},
+		"bad port":              {`"gatewayPort": 8080`, `"gatewayPort": 70000`, "gatewayPort"},
+		"unknown runtime type":  {`"container": "container"}`, `"container": "container", "sandbox": "x"}`, "adapters.runtimes"},
+		"builtin must agree":    {`"builtin": "kagent"`, `"builtin": "other"`, "adapters.runtimes.builtin"},
+		"workload ns is agents": {`"namespace": "openagentix-agents"`, `"namespace": "kagent"`, "must not be the agents namespace"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := containerCatalog(t, func(s string) string { return strings.Replace(s, c.from, c.to, 1) })
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("want %q, got %v", c.want, err)
+			}
+		})
+	}
+	// the section without the listing is harmless; the listing without the section is not
+	_, err := containerCatalog(t, func(s string) string { return strings.Replace(s, `"container": {"namespace"`, `"x": {"namespace"`, 1) })
+	if err == nil {
+		t.Fatal("listing container without its section must fail")
+	}
+}
+
+func TestImageRE(t *testing.T) {
+	d := "@sha256:" + strings.Repeat("a", 64)
+	for in, ok := range map[string]bool{
+		"ghcr.io/acme/echo" + d:           true,
+		"ghcr.io/acme/agents/echo-go" + d: true,
+		"registry.ci:5000/a/b" + d:        true,
+		"ghcr.io/acme/echo:v1" + d:        false, // a tag next to the digest
+		"ghcr.io/acme/echo":               false,
+		"ghcr.io/acme/echo:latest":        false,
+		"echo" + d:                        false, // no repository path
+		"GHCR.io/acme/echo" + d:           false,
+		"ghcr.io/acme/echo@sha256:abc":    false,
+		"ghcr.io/acme/echo" + d + "x":     false,
+		"ghcr.io/acme/echo" + d + "\n":    false,
+		"https://ghcr.io/acme/echo" + d:   false,
+	} {
+		if ImageRE.MatchString(in) != ok {
+			t.Errorf("%q: want %v", in, ok)
+		}
+	}
+}
+
+func TestQuantities(t *testing.T) {
+	for in, want := range map[string]int64{"100m": 100, "1": 1000, "2": 2000, "1500m": 1500, "0": 0} {
+		got, err := ParseCPU(in)
+		if err != nil || got != want {
+			t.Errorf("cpu %q: %d %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "-1", "1.5", "1x", "m", "100M", "1e3"} {
+		if _, err := ParseCPU(bad); err == nil {
+			t.Errorf("cpu %q must fail", bad)
+		}
+	}
+	for in, want := range map[string]int64{"256Mi": 256 << 20, "1Gi": 1 << 30, "64Ki": 64 << 10, "1M": 1000000, "2G": 2000000000, "5K": 5000, "1000": 1000} {
+		got, err := ParseMemory(in)
+		if err != nil || got != want {
+			t.Errorf("memory %q: %d %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "-1Mi", "1.5Gi", "Mi", "1Ti", "1mi", "1 Gi"} {
+		if _, err := ParseMemory(bad); err == nil {
+			t.Errorf("memory %q must fail", bad)
+		}
+	}
+}
+
+func TestPolicyRuntimes(t *testing.T) {
+	p, err := LoadPolicy(write(t, `{"maxAgents": 1, "allowedRuntimes": ["builtin", "container"], "runtimes": {"container": {"images": ["ghcr.io/acme/agents/"], "defaultResources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu": "500m", "memory": "512Mi"}}, "maxResources": {"cpu": "1", "memory": "1Gi"}, "maxAgents": 3}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.RuntimeAllowed("container") || !p.RuntimeAllowed("builtin") || p.RuntimeAllowed("sandbox") {
+		t.Fatal("RuntimeAllowed")
+	}
+	if !p.ImageAllowed("ghcr.io/acme/agents/echo-go@sha256:"+strings.Repeat("0", 64)) || p.ImageAllowed("ghcr.io/acme/agentsx/echo@sha256:"+strings.Repeat("0", 64)) || p.ImageAllowed("ghcr.io/acme/agents/") == false {
+		// the last is a prefix check only: shape is ImageRE's job
+		t.Fatal("ImageAllowed")
+	}
+	// absent or empty means builtin only
+	for _, in := range []string{`{"maxAgents": 1}`, `{"maxAgents": 1, "allowedRuntimes": []}`} {
+		q, err := LoadPolicy(write(t, in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !q.RuntimeAllowed("builtin") || q.RuntimeAllowed("container") || q.ImageAllowed("ghcr.io/x/y") {
+			t.Fatalf("default policy must allow builtin only: %s", in)
+		}
+	}
+	// resolution: user values win per field, requests default to the policy defaults, limits are always set
+	r := p.ResolveContainerResources(nil)
+	if r.Requests.CPU != "100m" || r.Requests.Memory != "256Mi" || r.Limits.CPU != "500m" || r.Limits.Memory != "512Mi" {
+		t.Fatalf("%+v", r)
+	}
+	r = p.ResolveContainerResources(&api.Resources{Requests: api.ResourceList{CPU: "200m"}, Limits: api.ResourceList{Memory: "1Gi"}})
+	if r.Requests.CPU != "200m" || r.Requests.Memory != "256Mi" || r.Limits.CPU != "500m" || r.Limits.Memory != "1Gi" {
+		t.Fatalf("%+v", r)
+	}
+	// without any configuration there are still defaults and a ceiling
+	var z Policy
+	if r := z.ResolveContainerResources(nil); r.Limits.CPU == "" || r.Limits.Memory == "" || r.Requests.CPU == "" {
+		t.Fatalf("%+v", r)
+	}
+	if m := z.ContainerMax(); m.CPU == "" || m.Memory == "" {
+		t.Fatalf("%+v", m)
+	}
+}
+
+func TestLoadPolicyRuntimeRefusals(t *testing.T) {
+	for name, c := range map[string]struct{ in, want string }{
+		"prefix without slash":   {`{"maxAgents": 1, "runtimes": {"container": {"images": ["ghcr.io/acme/agents"]}}}`, "runtimes.container.images"},
+		"prefix with a tag":      {`{"maxAgents": 1, "runtimes": {"container": {"images": ["ghcr.io/acme/agents:v1/"]}}}`, "runtimes.container.images"},
+		"prefix upper case":      {`{"maxAgents": 1, "runtimes": {"container": {"images": ["GHCR.io/acme/"]}}}`, "runtimes.container.images"},
+		"prefix a bare host":     {`{"maxAgents": 1, "runtimes": {"container": {"images": ["ghcr.io/"]}}}`, "runtimes.container.images"},
+		"prefix a star":          {`{"maxAgents": 1, "runtimes": {"container": {"images": ["*"]}}}`, "runtimes.container.images"},
+		"prefix twice":           {`{"maxAgents": 1, "runtimes": {"container": {"images": ["a.io/b/", "a.io/b/"]}}}`, "twice"},
+		"bad quantity":           {`{"maxAgents": 1, "runtimes": {"container": {"maxResources": {"cpu": "lots"}}}}`, "maxResources.cpu"},
+		"defaults above max":     {`{"maxAgents": 1, "runtimes": {"container": {"defaultResources": {"limits": {"memory": "2Gi"}}, "maxResources": {"memory": "1Gi"}}}}`, "above"},
+		"requests above limits":  {`{"maxAgents": 1, "runtimes": {"container": {"defaultResources": {"requests": {"cpu": "2"}, "limits": {"cpu": "1"}}}}}`, "requests"},
+		"negative max agents":    {`{"maxAgents": 1, "runtimes": {"container": {"maxAgents": -1}}}`, "runtimes.container.maxAgents"},
+		"unknown allowed type":   {`{"maxAgents": 1, "allowedRuntimes": ["vm"]}`, "allowedRuntimes"},
+		"unknown runtimes field": {`{"maxAgents": 1, "runtimes": {"container": {"privileged": true}}}`, "unknown field"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadPolicy(write(t, c.in))

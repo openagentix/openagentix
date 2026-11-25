@@ -126,14 +126,19 @@ func (p Params) secret(key string) kube.Object {
 	for k, v := range p.Labels {
 		labels[k] = v
 	}
+	meta := kube.Object{
+		"name": p.SecretName, "namespace": p.Namespace, "labels": labels,
+		"annotations": map[string]any{AnnotationFingerprint: Fingerprint(Hash(key))},
+	}
+	// An owner reference cannot cross namespaces: a Secret in a workload namespace has no owner UID and so no reference; the
+	// controller deletes it by name (and by label) instead.
+	if p.Owner.UID != "" {
+		meta["ownerReferences"] = []any{kube.Object{"apiVersion": p.Owner.APIVersion, "kind": p.Owner.Kind, "name": p.Owner.Name, "uid": p.Owner.UID, "controller": true}}
+	}
 	return kube.Object{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "immutable": true,
-		"metadata": kube.Object{
-			"name": p.SecretName, "namespace": p.Namespace, "labels": labels,
-			"annotations":     map[string]any{AnnotationFingerprint: Fingerprint(Hash(key))},
-			"ownerReferences": []any{kube.Object{"apiVersion": p.Owner.APIVersion, "kind": p.Owner.Kind, "name": p.Owner.Name, "uid": p.Owner.UID, "controller": true}},
-		},
-		"data": kube.Object{p.DataKey: base64.StdEncoding.EncodeToString([]byte(key))},
+		"metadata": meta,
+		"data":     kube.Object{p.DataKey: base64.StdEncoding.EncodeToString([]byte(key))},
 	}
 }
 

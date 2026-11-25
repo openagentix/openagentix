@@ -45,6 +45,20 @@ type Runtime interface {
 	Capabilities() api.Capabilities
 }
 
+// workloadRuntime is optional on a Runtime: a runtime that writes its objects to a namespace of its own (not the definition's)
+// says which. Its objects cannot carry an owner reference to the definition, so the core finds and removes them by label.
+type workloadRuntime interface {
+	WorkloadNamespace() string
+}
+
+// Routes is the list of agents the A2A gate sends to the container runtime. nil in Config means the feature is off.
+type Routes interface {
+	// Ensure lists the agent ("namespace/name"); Remove drops it; Sync makes the list exactly keep.
+	Ensure(ctx context.Context, ref string) error
+	Remove(ctx context.Context, ref string) error
+	Sync(ctx context.Context, keep []string) error
+}
+
 // ModelGateway registers the hash of an agent's key under a gateway user.
 type ModelGateway interface {
 	Name() string
@@ -82,14 +96,18 @@ type Config struct {
 	Policy    *catalog.Policy
 	Kube      Kube
 	Secrets   keys.Secrets
-	Runtime   Runtime
-	Gateway   ModelGateway
-	Tools     catalog.ToolResolver
-	Log       *slog.Logger
-	Now       func() time.Time
-	Mint      func() (string, error)
-	Resync    time.Duration // full pass at least this often (60 s)
-	Backoff   time.Duration // first retry delay of a definition that failed or is not ready; doubles per failure up to 30 times this
+	// Runtime is the runtime of type builtin. Runtimes holds one per runtime type (spec.runtime.type); nil means {builtin: Runtime}.
+	Runtime  Runtime
+	Runtimes map[string]Runtime
+	// Routes is the gate's route list for container agents; nil when there is none.
+	Routes  Routes
+	Gateway ModelGateway
+	Tools   catalog.ToolResolver
+	Log     *slog.Logger
+	Now     func() time.Time
+	Mint    func() (string, error)
+	Resync  time.Duration // full pass at least this often (60 s)
+	Backoff time.Duration // first retry delay of a definition that failed or is not ready; doubles per failure up to 30 times this
 	// MinInterval is the shortest time between the starts of two passes of Run (1 s), however many events arrive.
 	MinInterval time.Duration
 	// MinRecreateInterval is the shortest time between two creations of one definition's runtime agent (2 minutes): a suspend
@@ -111,6 +129,19 @@ type Controller struct {
 	last       map[string]string
 	fails      map[string]*failure
 	ready      atomic.Bool
+	// routeSet is the set of definitions (defKey) whose status says a container agent runs: what the gate's route list must hold.
+	// It is seeded from the statuses at list time and updated as each definition is handled, under smu.
+	routeSet map[string]bool
+}
+
+func (c *Controller) noteRoute(key string, want bool) {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	if want {
+		c.routeSet[key] = true
+	} else {
+		delete(c.routeSet, key)
+	}
 }
 
 // failure is the retry state of one definition.
@@ -153,7 +184,70 @@ func New(cfg Config) *Controller {
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.NewJSONHandler(discard{}, nil))
 	}
-	return &Controller{cfg: cfg, seen: map[string]int64{}, seenLabels: map[string]string{}, last: map[string]string{}, fails: map[string]*failure{}}
+	rts := map[string]Runtime{}
+	for k, v := range cfg.Runtimes {
+		rts[k] = v
+	}
+	if _, ok := rts[api.RuntimeBuiltin]; !ok && cfg.Runtime != nil {
+		rts[api.RuntimeBuiltin] = cfg.Runtime
+	}
+	cfg.Runtimes = rts
+	if cfg.Runtime == nil {
+		cfg.Runtime = rts[api.RuntimeBuiltin]
+	}
+	return &Controller{cfg: cfg, seen: map[string]int64{}, seenLabels: map[string]string{}, last: map[string]string{}, fails: map[string]*failure{}, routeSet: map[string]bool{}}
+}
+
+// runtimeFor is the runtime of a type; unknown is an error (the plan cannot be rendered).
+func (c *Controller) runtimeFor(t string) (Runtime, error) {
+	if t == "" {
+		t = api.RuntimeBuiltin
+	}
+	if r, ok := c.cfg.Runtimes[t]; ok && r != nil {
+		return r, nil
+	}
+	return nil, fmt.Errorf("no runtime adapter is configured for runtime type %q", t)
+}
+
+// rt is runtimeFor for code that runs after the plan was rendered (so the type is known); it falls back to builtin.
+func (c *Controller) rt(t string) Runtime {
+	if r, err := c.runtimeFor(t); err == nil {
+		return r
+	}
+	return c.cfg.Runtimes[api.RuntimeBuiltin]
+}
+
+// workloadNS is the namespace a runtime type writes to when it is not the definition's ("" otherwise).
+func (c *Controller) workloadNS(t string) string {
+	if w, ok := c.rt(t).(workloadRuntime); ok {
+		return w.WorkloadNamespace()
+	}
+	return ""
+}
+
+// ns returns where a manifest goes.
+func manifestNS(m kube.Manifest, def string) string {
+	if m.Namespace != "" {
+		return m.Namespace
+	}
+	return def
+}
+
+// specType is the runtime type of an applied spec (a JSON string from status.controller.appliedSpec); "" when there is none.
+func specType(applied string) string {
+	if applied == "" {
+		return ""
+	}
+	var s api.Spec
+	if json.Unmarshal([]byte(applied), &s) != nil {
+		return ""
+	}
+	return s.RuntimeType()
+}
+
+// routeWanted says whether the status shows a container agent that runs, so the gate must route to it.
+func routeWanted(st api.Status) bool {
+	return st.AgentRef != nil && specType(st.Controller.AppliedSpec) == api.RuntimeContainer
 }
 
 type discard struct{}
@@ -418,6 +512,7 @@ func (c *Controller) reconcile(ctx context.Context, honourBackoff bool) (string,
 	users := map[string]bool{} // gateway user ids of every listed definition
 	seen := map[string]int64{}
 	seenLabels := map[string]string{}
+	routes := map[string]bool{} // by defKey: the status says a container agent runs
 	var items []item
 	for _, raw := range raws {
 		name, ns := kube.Meta(raw).String("name"), kube.Meta(raw).String("namespace")
@@ -432,7 +527,16 @@ func (c *Controller) reconcile(ctx context.Context, honourBackoff bool) (string,
 			continue
 		}
 		items = append(items, item{d: d, raw: raw, wasAccepted: d.Status.Condition(api.CondAccepted).Status == "True", running: runs(d.Status)})
+		routes[defKey(ns, name)] = !d.Deleting() && routeWanted(d.Status)
 	}
+	c.smu.Lock()
+	c.routeSet = map[string]bool{}
+	for k, v := range routes {
+		if v {
+			c.routeSet[k] = true
+		}
+	}
+	c.smu.Unlock()
 	// Order: definitions that run come first (a definition whose edit is refused but whose previous generation runs still holds
 	// its place), then those that are accepted now, so a definition that is fixed later or created later never displaces one
 	// that already holds a place under maxAgents; then oldest first, by name for equal times.
@@ -475,22 +579,46 @@ func (c *Controller) reconcile(ctx context.Context, honourBackoff bool) (string,
 	// the definitions that hold a place so far in this pass (accepted, or refused with the previous generation still running),
 	// by namespace: they count against maxAgents, which is per namespace
 	earlier := map[string][]string{}
+	earlierC := map[string]int{} // how many of them run the container runtime (policy.runtimes.container.maxAgents)
+	holdsPlace := func(it item) {
+		ns := it.d.Metadata.Namespace
+		earlier[ns] = append(earlier[ns], it.d.Metadata.Name)
+		t := it.d.Spec.RuntimeType()
+		if it.running && it.d.Status.Controller.AppliedSpec != "" {
+			t = specType(it.d.Status.Controller.AppliedSpec)
+		}
+		if t == api.RuntimeContainer {
+			earlierC[ns]++
+		}
+	}
 	for _, it := range items {
 		d := it.d
 		ns, key := d.Metadata.Namespace, defKey(d.Metadata.Namespace, d.Metadata.Name)
 		if honourBackoff && c.backingOff(key, d.Metadata.Generation) {
 			if (it.wasAccepted || it.running) && !d.Deleting() {
-				earlier[ns] = append(earlier[ns], d.Metadata.Name)
+				holdsPlace(it)
 			}
 			continue
 		}
-		holds, err := c.safeOne(ctx, it.raw, d, earlier[ns])
+		holds, err := c.safeOne(ctx, it.raw, d, earlier[ns], earlierC[ns])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", key, err))
 			c.noteFailure(key, d.Metadata.Generation, true)
 		}
 		if holds {
-			earlier[ns] = append(earlier[ns], d.Metadata.Name)
+			holdsPlace(it)
+		}
+	}
+	if c.cfg.Routes != nil {
+		c.smu.Lock()
+		keep := make([]string, 0, len(c.routeSet))
+		for k := range c.routeSet {
+			keep = append(keep, k)
+		}
+		c.smu.Unlock()
+		slices.Sort(keep)
+		if err := c.cfg.Routes.Sync(ctx, keep); err != nil {
+			c.cfg.Log.Warn("route list sync failed", "outcome", "routes_sync_failed", "err", err)
 		}
 	}
 	if err := c.sweep(ctx, users); err != nil {
@@ -500,14 +628,14 @@ func (c *Controller) reconcile(ctx context.Context, honourBackoff bool) (string,
 }
 
 // safeOne keeps a panic in one definition's reconcile from stopping the others.
-func (c *Controller) safeOne(ctx context.Context, raw kube.Object, d *api.AgentDefinition, earlier []string) (holds bool, err error) {
+func (c *Controller) safeOne(ctx context.Context, raw kube.Object, d *api.AgentDefinition, earlier []string, earlierC int) (holds bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			holds, err = false, fmt.Errorf("internal error: %v", r)
 			c.cfg.Log.Error("reconcile panicked", "agent", d.Metadata.Name, "outcome", "panic", "err", fmt.Sprint(r))
 		}
 	}()
-	return c.one(ctx, raw, d, earlier)
+	return c.one(ctx, raw, d, earlier, earlierC)
 }
 
 // gatewayEntries reads the gateway's key entries once per pass.
@@ -607,6 +735,8 @@ type attempt struct {
 	delayedUntil time.Time
 	// starting: this pass creates the runtime agent (it was absent), recorded in status.controller.agentStartedAt
 	starting bool
+	// earlierC: how many container agents hold a place ahead of this definition in its namespace
+	earlierC int
 }
 
 // recreateDelay says whether creating the runtime agent now would come too soon after its last creation: only when the agent is
@@ -647,6 +777,7 @@ func (a *attempt) unknownIfAbsent(t, reason string) {
 
 func (a *attempt) finish(outcome string, r retry, kv ...any) error {
 	a.c.logOutcome(a.ns, a.name, outcome, kv...)
+	a.c.noteRoute(a.key, routeWanted(a.st))
 	if err := a.c.patchStatus(a.ctx, a.d, a.st); err != nil {
 		a.c.noteFailure(a.key, a.gen, true)
 		return err
@@ -678,7 +809,7 @@ func (a *attempt) synced() {
 	}
 }
 
-func (c *Controller) one(ctx context.Context, raw kube.Object, d *api.AgentDefinition, earlier []string) (bool, error) {
+func (c *Controller) one(ctx context.Context, raw kube.Object, d *api.AgentDefinition, earlier []string, earlierC int) (bool, error) {
 	name, ns := d.Metadata.Name, d.Metadata.Namespace
 	if d.Deleting() {
 		return false, c.finalize(ctx, d)
@@ -695,12 +826,14 @@ func (c *Controller) one(ctx context.Context, raw kube.Object, d *api.AgentDefin
 	a := &attempt{c: c, ctx: ctx, d: d, name: name, ns: ns, key: defKey(ns, name), user: plan.GatewayUser(ns, name),
 		gen: d.Metadata.Generation, now: c.cfg.Now().UTC().Format(time.RFC3339), st: cloneStatus(d.Status)}
 	a.st.ObservedGeneration = a.gen
-	caps := c.cfg.Runtime.Capabilities()
+	a.earlierC = earlierC
+	// the capabilities are those of the definition's runtime; a type with no adapter reports the builtin runtime's
+	caps := c.rt(d.Spec.RuntimeType()).Capabilities()
 	a.st.Capabilities = &caps
 	a.running = runs(a.st)
 
 	// 1. accept or refuse
-	violations := policy.Validate(policy.Input{Def: d, Catalog: c.cfg.Catalog, Policy: c.cfg.Policy, Tools: c.cfg.Tools, Earlier: earlier})
+	violations := policy.Validate(policy.Input{Def: d, Catalog: c.cfg.Catalog, Policy: c.cfg.Policy, Tools: c.cfg.Tools, Earlier: earlier, EarlierContainers: earlierC})
 	if len(violations) > 0 {
 		err := a.refused(violations, earlier)
 		return a.keptPrevious, err // the previous generation still runs: the definition keeps its place
@@ -721,21 +854,30 @@ func (e *objectError) Error() string { return e.err.Error() }
 // writeObjects renders the plan, writes every object with server-side apply and prunes what the definition owns and no
 // longer wants. The plan carries the key fingerprint the objects must show.
 func (c *Controller) writeObjects(ctx context.Context, d *api.AgentDefinition, p plan.Plan, labels map[string]string, owner keys.OwnerRef) ([]string, *objectError) {
-	ms, err := c.cfg.Runtime.Desired(p)
+	rt, err := c.runtimeFor(p.RuntimeType)
+	if err != nil {
+		return nil, &objectError{step: "render", err: err}
+	}
+	ms, err := rt.Desired(p)
 	if err != nil {
 		return nil, &objectError{step: "render", err: err}
 	}
 	for _, m := range ms {
-		stamp(m.Object, labels, owner)
+		if m.Namespace != "" && m.Namespace != p.Namespace {
+			stampCross(m.Object, labels, d)
+		} else {
+			stamp(m.Object, labels, owner)
+		}
 	}
 	keep := map[string]bool{}
 	var names []string
 	for _, m := range ms {
 		n := kube.Meta(m.Object).String("name")
-		if err := c.cfg.Kube.Apply(ctx, m.Resource, p.Namespace, n, m.Object); err != nil {
+		ns := manifestNS(m, p.Namespace)
+		if err := c.cfg.Kube.Apply(ctx, m.Resource, ns, n, m.Object); err != nil {
 			return names, &objectError{step: "apply", kind: m.Resource.Kind, name: n, err: err}
 		}
-		keep[m.Resource.Plural+"/"+n] = true
+		keep[ns+"/"+m.Resource.Plural+"/"+n] = true
 		names = append(names, m.Resource.Kind+"/"+n)
 	}
 	if _, err := c.prune(ctx, d, keep); err != nil {
@@ -746,6 +888,9 @@ func (c *Controller) writeObjects(ctx context.Context, d *api.AgentDefinition, p
 
 func definitionLabels(name string, p plan.Plan) map[string]string {
 	l := map[string]string{api.LabelManagedBy: api.ManagedByValue, api.LabelDefinition: name}
+	if p.RuntimeType == api.RuntimeContainer {
+		l[api.LabelDefinitionNamespace] = p.Namespace
+	}
 	for k, v := range p.Labels {
 		l[k] = v
 	}
@@ -763,8 +908,25 @@ func (a *attempt) apply() error {
 	}
 	owner := keys.OwnerRef{APIVersion: api.APIVersion, Kind: api.Kind, Name: name, UID: d.Metadata.UID}
 	labels := definitionLabels(name, p)
+	rt, err := c.runtimeFor(p.RuntimeType)
+	if err != nil {
+		a.set(api.CondApplied, "False", "RenderFailed", err.Error())
+		a.set(api.CondReady, "False", "NotApplied", "")
+		return a.finish("render_failed", retryExp, "err", err)
+	}
+	// where the key Secret goes: the definition's namespace (owned by it), or the runtime's workload namespace (no owner reference
+	// can cross namespaces; the controller deletes it by name)
+	keyNS, keyOwner, keyLabels := p.Namespace, owner, map[string]string{api.LabelManagedBy: api.ManagedByValue, api.LabelDefinition: name}
+	if w := c.workloadNS(p.RuntimeType); w != "" {
+		keyNS, keyOwner = w, keys.OwnerRef{}
+		keyLabels[api.LabelDefinitionNamespace] = p.Namespace
+	}
+	// A change of runtime type moves the key Secret: the new one is made in the new namespace (nothing is "known" there), and the old
+	// one is deleted by name once the new objects are applied.
+	prevType := specType(a.st.Controller.AppliedSpec)
+	switched := a.running && prevType != "" && prevType != p.RuntimeType
 	// the objects are rendered once without the key fingerprint, to see their names for the name check
-	manifests, err := c.cfg.Runtime.Desired(p)
+	manifests, err := rt.Desired(p)
 	if err != nil {
 		a.set(api.CondApplied, "False", "RenderFailed", err.Error())
 		a.set(api.CondReady, "False", "NotApplied", "")
@@ -805,7 +967,7 @@ func (a *attempt) apply() error {
 		}
 	}
 	known := ""
-	if a.st.Controller.KeySecret == p.KeySecret {
+	if a.st.Controller.KeySecret == p.KeySecret && !switched {
 		known = a.st.Controller.KeyFingerprint
 	}
 	reg := entries[p.GatewayUserID]
@@ -835,8 +997,8 @@ func (a *attempt) apply() error {
 		res = keys.Result{Outcome: keys.Unchanged, Fingerprint: keys.Fingerprint(held), Hash: held}
 	} else {
 		res, err = keys.Ensure(ctx, keys.Params{
-			Namespace: p.Namespace, SecretName: p.KeySecret, DataKey: c.cfg.Runtime.KeyDataKey(), User: p.GatewayUserID,
-			Labels: map[string]string{api.LabelManagedBy: api.ManagedByValue, api.LabelDefinition: name}, Owner: owner, Registered: reg.Hash, Known: known,
+			Namespace: keyNS, SecretName: p.KeySecret, DataKey: rt.KeyDataKey(), User: p.GatewayUserID,
+			Labels: keyLabels, Owner: keyOwner, Registered: reg.Hash, Known: known,
 			EntryLabels: p.Labels, RegisteredLabels: reg.Labels, Adopted: adopted, Hold: p.Suspended,
 		}, c.cfg.Secrets, c.cfg.Gateway, c.cfg.Mint)
 	}
@@ -883,6 +1045,28 @@ func (a *attempt) apply() error {
 			return a.finish("prune_failed", retryExp, "err", oe.err)
 		}
 	}
+	if switched {
+		// the key Secret of the old runtime type is in the old namespace: delete it by name (an owner reference does it only in the
+		// definition's own namespace, and then only when the object goes)
+		oldNS := p.Namespace
+		if w := c.workloadNS(prevType); w != "" {
+			oldNS = w
+		}
+		if oldNS != keyNS {
+			if err := c.cfg.Secrets.Delete(ctx, oldNS, p.KeySecret); err != nil && !kube.IsNotFound(err) {
+				a.set(api.CondApplied, "False", "PruneFailed", "delete the key Secret of the previous runtime: "+err.Error())
+				a.set(api.CondReady, "False", "NotApplied", "")
+				return a.finish("prune_failed", retryExp, "err", err)
+			}
+		}
+		if prevType == api.RuntimeContainer && c.cfg.Routes != nil {
+			if err := c.cfg.Routes.Remove(ctx, a.key); err != nil {
+				a.set(api.CondApplied, "False", "PruneFailed", "route list: "+err.Error())
+				a.set(api.CondReady, "False", "NotApplied", "")
+				return a.finish("prune_failed", retryExp, "err", err)
+			}
+		}
+	}
 	a.set(api.CondApplied, "True", "Applied", "")
 	a.setFacts(p)
 
@@ -900,8 +1084,18 @@ func (a *attempt) apply() error {
 		return a.finish("suspended", retryNone, "objects", names)
 	}
 
+	// 5b. the gate's route list names a container agent BEFORE it can be Ready: Ready promises "callable at status.endpoint"
+	if p.RuntimeType == api.RuntimeContainer && c.cfg.Routes != nil {
+		if err := c.cfg.Routes.Ensure(ctx, a.key); err != nil {
+			a.set(api.CondApplied, "False", "ApplyFailed", "route list: "+err.Error())
+			a.set(api.CondReady, "False", "NotApplied", "")
+			a.st.Controller.AppliedSpec = "" // not applied as far as the gate is concerned: no route is kept for it
+			return a.finish("apply_failed", retryExp, "err", err)
+		}
+	}
+
 	// 6. readiness
-	rd, err := c.cfg.Runtime.Readiness(ctx, p)
+	rd, err := rt.Readiness(ctx, p)
 	switch {
 	case err != nil:
 		if prev := a.st.Condition(api.CondReady); prev.Type != "" && a.running && prev.Reason != "NotApplied" && prev.Reason != "NotAccepted" && prev.Reason != "ReadinessUnknown" && prev.Reason != "Suspended" {
@@ -929,9 +1123,9 @@ func (a *attempt) apply() error {
 // setFacts records what this plan applied: the public facts and the controller's own bookkeeping.
 func (a *attempt) setFacts(p plan.Plan) {
 	c := a.c
-	ref := c.cfg.Runtime.Ref(p)
+	ref := c.rt(p.RuntimeType).Ref(p)
 	a.st.AgentRef = &ref
-	a.st.Endpoint = c.cfg.Runtime.Endpoint(p)
+	a.st.Endpoint = c.rt(p.RuntimeType).Endpoint(p)
 	a.st.Revision = p.Revision
 	a.st.EffectiveTools = slices.Clone(p.Tools)
 	a.st.EffectiveEgress = slices.Clone(p.Egress)
@@ -998,7 +1192,7 @@ func (a *attempt) refused(violations []string, earlier []string) error {
 	if havePrev && a.st.Controller.AppliedSpec != specJSON(a.d.Spec) { // the refusal comes from the author's edit
 		pd := *a.d
 		pd.Spec = prev
-		if len(policy.Validate(policy.Input{Def: &pd, Catalog: c.cfg.Catalog, Policy: c.cfg.Policy, Tools: c.cfg.Tools, Earlier: earlier})) == 0 {
+		if len(policy.Validate(policy.Input{Def: &pd, Catalog: c.cfg.Catalog, Policy: c.cfg.Policy, Tools: c.cfg.Tools, Earlier: earlier, EarlierContainers: a.earlierC})) == 0 {
 			if pp, err := plan.Build(&pd, c.cfg.Catalog, c.cfg.Tools, c.cfg.Policy); err == nil {
 				return a.keepPrevious(pp, violations)
 			}
@@ -1045,12 +1239,12 @@ func (a *attempt) keepPrevious(pp plan.Plan, violations []string) error {
 		a.synced()
 		return a.finish("refused_previous_suspended", retryNone, "violations", len(violations))
 	}
-	ref := c.cfg.Runtime.Ref(pp)
-	a.st.AgentRef, a.st.Endpoint = &ref, c.cfg.Runtime.Endpoint(pp)
+	ref := c.rt(pp.RuntimeType).Ref(pp)
+	a.st.AgentRef, a.st.Endpoint = &ref, c.rt(pp.RuntimeType).Endpoint(pp)
 	if a.starting {
 		a.st.Controller.AgentStartedAt = a.now
 	}
-	rd, err := c.cfg.Runtime.Readiness(a.ctx, pp)
+	rd, err := c.rt(pp.RuntimeType).Readiness(a.ctx, pp)
 	if err != nil {
 		a.transient("read readiness", err)
 		return a.finish("transient", retryExp, "err", err)
@@ -1168,13 +1362,40 @@ func stamp(o kube.Object, labels map[string]string, owner keys.OwnerRef) {
 	m["ownerReferences"] = []any{map[string]any{"apiVersion": owner.APIVersion, "kind": owner.Kind, "name": owner.Name, "uid": owner.UID, "controller": true}}
 }
 
+// stampCross is stamp for an object in another namespace than the definition's: an owner reference cannot cross namespaces, so
+// there is none, and the object says whose it is by two labels and the definition's UID.
+func stampCross(o kube.Object, labels map[string]string, d *api.AgentDefinition) {
+	m := kube.Meta(o)
+	l, _ := m["labels"].(map[string]any)
+	if l == nil {
+		l = map[string]any{}
+	}
+	for k, v := range labels {
+		l[k] = v
+	}
+	l[api.LabelDefinitionNamespace] = d.Metadata.Namespace
+	m["labels"] = l
+	an, _ := m["annotations"].(map[string]any)
+	if an == nil {
+		an = map[string]any{}
+	}
+	an[api.AnnotationDefinitionUID] = d.Metadata.UID
+	m["annotations"] = an
+	delete(m, "ownerReferences")
+}
+
 // owned reports whether obj belongs to d: both of our labels AND an owner reference to this very definition (kind, UID,
-// controller). Labels are guessable and copyable; the UID is not.
+// controller). Labels are guessable and copyable; the UID is not. An object in another namespace than the definition's has no
+// owner reference: it belongs to d when it carries both labels, the definition's namespace as a label and d's UID as an annotation.
 func owned(obj kube.Object, d *api.AgentDefinition) bool {
 	m := kube.Meta(obj)
 	l, _ := m["labels"].(map[string]any)
 	if l[api.LabelManagedBy] != api.ManagedByValue || l[api.LabelDefinition] != d.Metadata.Name || d.Metadata.UID == "" {
 		return false
+	}
+	if ns := m.String("namespace"); ns != "" && ns != d.Metadata.Namespace {
+		an, _ := m["annotations"].(map[string]any)
+		return l[api.LabelDefinitionNamespace] == d.Metadata.Namespace && an[api.AnnotationDefinitionUID] == d.Metadata.UID
 	}
 	refs, _ := m["ownerReferences"].([]any)
 	for _, r := range refs {
@@ -1189,7 +1410,7 @@ func owned(obj kube.Object, d *api.AgentDefinition) bool {
 func (c *Controller) conflicts(ctx context.Context, d *api.AgentDefinition, ms []kube.Manifest) (string, error) {
 	for _, m := range ms {
 		n := kube.Meta(m.Object).String("name")
-		cur, err := c.cfg.Kube.Get(ctx, m.Resource, d.Metadata.Namespace, n)
+		cur, err := c.cfg.Kube.Get(ctx, m.Resource, manifestNS(m, d.Metadata.Namespace), n)
 		if kube.IsNotFound(err) {
 			continue
 		}
@@ -1203,12 +1424,37 @@ func (c *Controller) conflicts(ctx context.Context, d *api.AgentDefinition, ms [
 	return "", nil
 }
 
-// prune deletes the objects this definition owns (labels and owner reference) that are not in keep ("plural/name"), in the
-// definition's namespace. A kind the cluster does not know (404 on the list: the CRD is not installed) has nothing to prune.
+// prune deletes the objects this definition owns that are not in keep ("namespace/plural/name"). It walks the union of every
+// runtime's owned kinds, each in that runtime's namespace (the definition's, or the runtime's workload namespace), so what a
+// definition of another runtime type left behind goes too. A kind the cluster does not know (404 on the list: the CRD is not
+// installed) has nothing to prune.
 func (c *Controller) prune(ctx context.Context, d *api.AgentDefinition, keep map[string]bool) ([]string, error) {
 	var deleted []string
-	ns := d.Metadata.Namespace
-	for _, kind := range c.cfg.Runtime.OwnedKinds() {
+	type target struct {
+		kind kube.Resource
+		ns   string
+	}
+	var targets []target
+	seen := map[string]bool{}
+	types := make([]string, 0, len(c.cfg.Runtimes))
+	for t := range c.cfg.Runtimes {
+		types = append(types, t)
+	}
+	slices.Sort(types)
+	for _, t := range types {
+		ns := d.Metadata.Namespace
+		if w := c.workloadNS(t); w != "" {
+			ns = w
+		}
+		for _, kind := range c.cfg.Runtimes[t].OwnedKinds() {
+			if k := ns + "/" + kind.Group + "/" + kind.Version + "/" + kind.Plural; !seen[k] {
+				seen[k] = true
+				targets = append(targets, target{kind, ns})
+			}
+		}
+	}
+	for _, tg := range targets {
+		kind, ns := tg.kind, tg.ns
 		items, _, err := c.cfg.Kube.List(ctx, kind, ns, selector(d.Metadata.Name))
 		if kube.IsNotFound(err) {
 			continue
@@ -1218,7 +1464,7 @@ func (c *Controller) prune(ctx context.Context, d *api.AgentDefinition, keep map
 		}
 		for _, it := range items {
 			n := kube.Meta(it).String("name")
-			if keep[kind.Plural+"/"+n] || !owned(it, d) {
+			if keep[ns+"/"+kind.Plural+"/"+n] || !owned(it, d) {
 				continue
 			}
 			if err := c.cfg.Kube.Delete(ctx, kind, ns, n); err != nil && !kube.IsNotFound(err) {
@@ -1250,6 +1496,22 @@ func (c *Controller) finalize(ctx context.Context, d *api.AgentDefinition) error
 	if _, err := c.prune(ctx, d, nil); err != nil {
 		return fmt.Errorf("remove objects: %w", err)
 	}
+	// a key Secret in a workload namespace has no owner reference: delete it by name
+	if secName, err := plan.KeySecretName(name, d.Metadata.UID); err == nil {
+		for _, t := range []string{api.RuntimeContainer} {
+			if w := c.workloadNS(t); w != "" && c.cfg.Runtimes[t] != nil {
+				if err := c.cfg.Secrets.Delete(ctx, w, secName); err != nil && !kube.IsNotFound(err) {
+					return fmt.Errorf("remove key secret: %w", err)
+				}
+			}
+		}
+	}
+	if c.cfg.Routes != nil {
+		if err := c.cfg.Routes.Remove(ctx, key); err != nil {
+			return fmt.Errorf("route list: %w", err)
+		}
+	}
+	c.noteRoute(key, false)
 	if err := c.cfg.Gateway.Unregister(ctx, user); err != nil {
 		return fmt.Errorf("unregister key: %w", err)
 	}

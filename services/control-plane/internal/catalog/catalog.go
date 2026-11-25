@@ -27,10 +27,20 @@ const MaxOriginLen = 270
 
 var digestRE = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
 
+// ImageRE is the shape of a container agent's image (ADR 0015): a registry host (optional port), at least one path segment,
+// and a sha256 digest. A tag next to the digest is refused, so an image has one meaning.
+var ImageRE = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$`)
+
+// imagePrefixRE is the shape of an operator's registry prefix: the host, at least one path segment, a trailing slash.
+var imagePrefixRE = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+/$`)
+
 type Adapters struct {
-	Runtime      string `json:"runtime"`
-	ModelGateway string `json:"modelGateway"`
-	Tools        string `json:"tools"`
+	// Runtime is the adapter of the builtin runtime type (kept so that an older catalog still loads).
+	Runtime string `json:"runtime"`
+	// Runtimes names the adapter per runtime type (builtin, container). Absent means {builtin: Runtime}.
+	Runtimes     map[string]string `json:"runtimes"`
+	ModelGateway string            `json:"modelGateway"`
+	Tools        string            `json:"tools"`
 }
 
 type Namespaces struct {
@@ -71,8 +81,26 @@ type KagentSettings struct {
 
 // RuntimeSections holds one section per runtime adapter; the one named in adapters.runtime must be present.
 type RuntimeSections struct {
-	Kagent *KagentSettings `json:"kagent"`
+	Kagent    *KagentSettings    `json:"kagent"`
+	Container *ContainerSettings `json:"container"`
 }
+
+// ContainerSettings is the container runtime adapter's own section (runtime.container): where the user's image runs and
+// which pods the per-agent NetworkPolicy lets it talk to. All of it is operator-owned; a definition cannot reach any of it.
+type ContainerSettings struct {
+	Namespace          string            `json:"namespace"`          // the workload namespace
+	RuntimeClassName   string            `json:"runtimeClassName"`   // optional (for example gVisor's runsc)
+	GatewayPodSelector map[string]string `json:"gatewayPodSelector"` // the model gateway's pods
+	GatewayNamespace   string            `json:"gatewayNamespace"`
+	GatewayPort        int               `json:"gatewayPort"`     // the gateway pods' port (default 8080)
+	GateNamespace      string            `json:"gateNamespace"`   // the A2A gate's namespace: the only caller allowed in
+	GatePodSelector    map[string]string `json:"gatePodSelector"` // the A2A gate's pods
+	DNSNamespace       string            `json:"dnsNamespace"`    // default kube-system
+	WorkloadPort       int               `json:"-"`               // the Service port, fixed: the gate builds http://<name>.<ns>:8080
+}
+
+// WorkloadServicePort is the port every container agent's Service listens on; the gate builds its upstream from it.
+const WorkloadServicePort = 8080
 
 // ToolhiveProfile is one tool profile in the tools adapter's own section.
 type ToolhiveProfile struct {
@@ -192,6 +220,7 @@ func (c *Catalog) validate() error {
 			}
 		}
 	}
+	errs = append(errs, c.validateRuntimes()...)
 	if c.Adapters.Tools == "toolhive" {
 		t := c.Tools.Toolhive
 		if t == nil {
@@ -265,15 +294,18 @@ type PolicyEgress struct {
 }
 
 type Policy struct {
-	MaxAgents          int          `json:"maxAgents"`
-	AllowedModels      []string     `json:"allowedModels"`
-	RequireToolProfile bool         `json:"requireToolProfile"`
-	AllowedProfiles    []string     `json:"allowedProfiles"`
-	AllowKnowledge     bool         `json:"allowKnowledge"`
-	AllowNotify        bool         `json:"allowNotify"`
-	AllowedSkills      []string     `json:"allowedSkills"`
-	Memory             PolicyMemory `json:"memory"`
-	Egress             PolicyEgress `json:"egress"`
+	// AllowedRuntimes lists the runtime types a definition may use. Absent or empty means only builtin.
+	AllowedRuntimes    []string       `json:"allowedRuntimes"`
+	Runtimes           PolicyRuntimes `json:"runtimes"`
+	MaxAgents          int            `json:"maxAgents"`
+	AllowedModels      []string       `json:"allowedModels"`
+	RequireToolProfile bool           `json:"requireToolProfile"`
+	AllowedProfiles    []string       `json:"allowedProfiles"`
+	AllowKnowledge     bool           `json:"allowKnowledge"`
+	AllowNotify        bool           `json:"allowNotify"`
+	AllowedSkills      []string       `json:"allowedSkills"`
+	Memory             PolicyMemory   `json:"memory"`
+	Egress             PolicyEgress   `json:"egress"`
 	// ReservedNames are more names a definition may not use: "name" in every namespace, "namespace/name" in that one.
 	ReservedNames []string `json:"reservedNames"`
 	// SuspendAll is the operator's stop switch: every definition is treated as suspended.
@@ -409,6 +441,7 @@ func LoadPolicy(path string) (*Policy, error) {
 			errs = append(errs, fmt.Errorf("reservedNames entry %q must be a name or namespace/name", n))
 		}
 	}
+	errs = append(errs, p.validateRuntimes()...)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("policy %s: %w", path, err)
 	}
