@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/openagentix/openagentix/services/a2a-gate/internal/auth"
@@ -49,6 +50,15 @@ type Options struct {
 	// the request is proxied, so a long upload or a long stream is not cut by it.
 	SniffTimeout time.Duration
 	Transport    http.RoundTripper
+
+	// Bring your own A2A agent (routes.go). All off while RoutesFile is empty.
+	RoutesFile        string          // the controller-written list of container agents
+	WorkloadNamespace string          // where those agents run (DNS label), fixed at start
+	WorkloadPort      int             // default 8080
+	PublicURL         string          // how clients reach the gate: used in the agent cards of container agents
+	RoutesPoll        time.Duration   // how often the file is checked (default 10 s)
+	Ctx               context.Context // stops the poll (default: never)
+	Log               *slog.Logger    // process log: route reloads (default discard)
 }
 
 const (
@@ -70,9 +80,10 @@ type userVal struct {
 }
 
 type handler struct {
-	o     Options
-	proxy *httputil.ReverseProxy
-	slots chan struct{}
+	o      Options
+	proxy  *httputil.ReverseProxy
+	slots  chan struct{}
+	routes atomic.Pointer[RouteSet]
 }
 
 // New builds the gate handler.
@@ -96,11 +107,18 @@ func New(o Options) (http.Handler, error) {
 	if o.Audit == nil {
 		o.Audit = slog.New(slog.DiscardHandler)
 	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
 	h := &handler{o: o, slots: make(chan struct{}, o.MaxInFlight)}
+	if err := h.initRoutes(); err != nil {
+		return nil, err
+	}
 	h.proxy = &httputil.ReverseProxy{
-		Rewrite:       h.rewrite(up),
-		FlushInterval: -1, // SSE: write every chunk through at once
-		Transport:     o.Transport,
+		Rewrite:        h.rewrite(up),
+		FlushInterval:  -1, // SSE: write every chunk through at once
+		Transport:      o.Transport,
+		ModifyResponse: h.modifyResponse,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if rec, ok := w.(*recorder); ok {
 				rec.reason = "upstream"
@@ -119,7 +137,16 @@ var stripHeaders = []string{
 
 func (h *handler) rewrite(up *url.URL) func(*httputil.ProxyRequest) {
 	return func(pr *httputil.ProxyRequest) {
-		pr.SetURL(up)
+		if t, ok := pr.In.Context().Value(keyTarget).(*target); ok {
+			// a listed agent: scheme, host and path come from the fixed template and the route, never from the request
+			pr.SetURL(&url.URL{Scheme: "http", Host: t.host})
+			pr.Out.URL.Path, pr.Out.URL.RawPath = t.path, ""
+			if t.card {
+				pr.Out.Header.Del("Accept-Encoding") // the card is parsed, so it must not arrive compressed
+			}
+		} else {
+			pr.SetURL(up)
+		}
 		pr.Out.URL.RawQuery = "" // kagent reads ?user_id= before X-User-Id: no query reaches it
 		for _, n := range stripHeaders {
 			pr.Out.Header.Del(n)
@@ -329,7 +356,11 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 			return
 		}
 	}
-	h.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), keyUser, uv)))
+	ctx := context.WithValue(r.Context(), keyUser, uv)
+	if t := h.workloadTarget(ns, name, route); t != nil {
+		ctx = context.WithValue(ctx, keyTarget, t)
+	}
+	h.proxy.ServeHTTP(w, r.WithContext(ctx))
 }
 
 func bearer(r *http.Request) (string, bool) {

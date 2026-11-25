@@ -80,6 +80,8 @@ func run(ctx context.Context, getenv func(string) string, d deps) error {
 		}),
 		Audit:       slog.New(slog.NewJSONHandler(d.Stdout, nil)),
 		AuditUserID: cfg.AuditUserID, Salt: salt, SniffBytes: cfg.SniffBytes, MaxBody: cfg.MaxBody, MaxInFlight: cfg.MaxInFlight,
+		RoutesFile: cfg.RoutesFile, WorkloadNamespace: cfg.WorkloadNamespace, WorkloadPort: cfg.WorkloadPort,
+		PublicURL: cfg.PublicURL, Ctx: ctx, Log: d.Log,
 	})
 	if err != nil {
 		return err
@@ -93,7 +95,8 @@ func run(ctx context.Context, getenv func(string) string, d deps) error {
 		callers = append(callers, c.Name)
 	}
 	d.Log.Info("a2a-gate starting", "version", version, "listen", ln.Addr().String(), "upstream", cfg.Upstream,
-		"audience", cfg.Audience, "audit_user_id", cfg.AuditUserID, "callers", callers)
+		"audience", cfg.Audience, "audit_user_id", cfg.AuditUserID, "callers", callers,
+		"container_agents", cfg.RoutesFile != "")
 	if d.OnListen != nil {
 		d.OnListen(ln.Addr().String())
 	}

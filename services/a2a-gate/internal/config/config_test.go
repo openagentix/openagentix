@@ -30,6 +30,45 @@ func TestOverrides(t *testing.T) {
 	}
 }
 
+func TestRoutesConfig(t *testing.T) {
+	base := func() map[string]string {
+		return map[string]string{"A2A_GATE_UPSTREAM": "http://x:1", "A2A_GATE_RULES": "/r.json"}
+	}
+	c, err := Load(env(base()))
+	if err != nil || c.RoutesFile != "" || c.WorkloadPort != 8080 {
+		t.Fatalf("off by default: %+v %v", c, err)
+	}
+	m := base()
+	m["A2A_GATE_ROUTES_FILE"], m["A2A_GATE_WORKLOAD_NAMESPACE"], m["A2A_GATE_PUBLIC_URL"] = "/routes/routes.json", "openagentix-agents", "https://gate.example.com/"
+	c, err = Load(env(m))
+	if err != nil || c.RoutesFile != "/routes/routes.json" || c.WorkloadNamespace != "openagentix-agents" || c.WorkloadPort != 8080 || c.PublicURL != "https://gate.example.com" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	m["A2A_GATE_WORKLOAD_PORT"] = "9000"
+	if c, err = Load(env(m)); err != nil || c.WorkloadPort != 9000 {
+		t.Fatalf("%+v %v", c, err)
+	}
+	bad := map[string]func(map[string]string){
+		"no namespace":  func(m map[string]string) { delete(m, "A2A_GATE_WORKLOAD_NAMESPACE") },
+		"bad namespace": func(m map[string]string) { m["A2A_GATE_WORKLOAD_NAMESPACE"] = "a.evil.com" },
+		"upper ns":      func(m map[string]string) { m["A2A_GATE_WORKLOAD_NAMESPACE"] = "Agents" },
+		"bad port":      func(m map[string]string) { m["A2A_GATE_WORKLOAD_PORT"] = "0" },
+		"huge port":     func(m map[string]string) { m["A2A_GATE_WORKLOAD_PORT"] = "70000" },
+		"text port":     func(m map[string]string) { m["A2A_GATE_WORKLOAD_PORT"] = "http" },
+		"no public url": func(m map[string]string) { delete(m, "A2A_GATE_PUBLIC_URL") },
+		"ftp url":       func(m map[string]string) { m["A2A_GATE_PUBLIC_URL"] = "ftp://x" },
+		"url query":     func(m map[string]string) { m["A2A_GATE_PUBLIC_URL"] = "https://x?a=b" },
+		"url userinfo":  func(m map[string]string) { m["A2A_GATE_PUBLIC_URL"] = "https://u:p@x" },
+	}
+	for name, mut := range bad {
+		m := map[string]string{"A2A_GATE_UPSTREAM": "http://x:1", "A2A_GATE_RULES": "/r.json", "A2A_GATE_ROUTES_FILE": "/r", "A2A_GATE_WORKLOAD_NAMESPACE": "ns", "A2A_GATE_PUBLIC_URL": "https://g"}
+		mut(m)
+		if _, err := Load(env(m)); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
 func TestErrors(t *testing.T) {
 	base := func() map[string]string {
 		return map[string]string{"A2A_GATE_UPSTREAM": "http://x:1", "A2A_GATE_RULES": "/r.json"}

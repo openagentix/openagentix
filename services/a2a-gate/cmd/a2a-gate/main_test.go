@@ -87,6 +87,57 @@ func TestRunServesAndStops(t *testing.T) {
 	}
 }
 
+func TestRunRoutesBYOAgent(t *testing.T) {
+	var gotHost, gotPath string
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "rules.json"), []byte(`{"callers":[{"name":"k","key":true,"agents":["kagent/echo-go"],"userId":{"fixed":"kourier:k"}}]}`), 0o600)
+	os.Mkdir(filepath.Join(dir, "keys"), 0o700)
+	h := sha256.Sum256([]byte("the-key"))
+	os.WriteFile(filepath.Join(dir, "keys", "k"), []byte(hex.EncodeToString(h[:])), 0o600)
+	os.WriteFile(filepath.Join(dir, "routes.json"), []byte(`{"container":["kagent/echo-go"]}`), 0o600)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost, gotPath = "kagent", r.URL.Path
+	}))
+	defer up.Close()
+	env := map[string]string{
+		"A2A_GATE_UPSTREAM": up.URL, "A2A_GATE_RULES": filepath.Join(dir, "rules.json"), "A2A_GATE_KEYS_DIR": filepath.Join(dir, "keys"),
+		"A2A_GATE_ADDR": "127.0.0.1:0", "A2A_GATE_ROUTES_FILE": filepath.Join(dir, "routes.json"),
+		"A2A_GATE_WORKLOAD_NAMESPACE": "openagentix-agents", "A2A_GATE_PUBLIC_URL": "https://gate.example.com",
+	}
+	var errb bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addr := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, func(k string) string { return env[k] }, deps{Stdout: io.Discard, Log: slog.New(slog.NewJSONHandler(&errb, nil)), OnListen: func(a string) { addr <- a }, Reviewer: noReviewer{}})
+	}()
+	a := <-addr
+	req, _ := http.NewRequest("POST", "http://"+a+"/agents/kagent/echo-go", strings.NewReader(`{"method":"SendMessage"}`))
+	req.Header.Set("Authorization", "Bearer the-key")
+	// the workload service does not resolve in a test: a 502 shows the gate tried it and did not fall back to kagent
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || gotHost != "" || gotPath != "" {
+		t.Errorf("listed agent: status %d, kagent saw %q %q", resp.StatusCode, gotHost, gotPath)
+	}
+	cancel()
+	<-done
+}
+
+func TestRunRefusesRoutesWithoutNamespace(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "rules.json"), []byte(`{"callers":[{"name":"k","key":true,"agents":["kagent/a"],"userId":{"fixed":"k"}}]}`), 0o600)
+	env := map[string]string{"A2A_GATE_UPSTREAM": "http://x:1", "A2A_GATE_RULES": filepath.Join(dir, "rules.json"), "A2A_GATE_ROUTES_FILE": "/nope"}
+	err := run(context.Background(), func(k string) string { return env[k] }, deps{Stdout: io.Discard, Log: slog.New(slog.DiscardHandler), Reviewer: noReviewer{}})
+	if err == nil || !strings.Contains(err.Error(), "A2A_GATE_WORKLOAD_NAMESPACE") {
+		t.Fatalf("%v", err)
+	}
+}
+
 type noReviewer struct{}
 
 func (noReviewer) Review(context.Context, string, string) (string, error) {

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Config holds all settings.
@@ -21,7 +23,15 @@ type Config struct {
 	MaxBody     int64
 	MaxInFlight int // requests handled at once; the next gets 503
 	LogLevel    string
+
+	// Bring your own A2A agent: all empty/zero (feature off) unless RoutesFile is set.
+	RoutesFile        string // A2A_GATE_ROUTES_FILE, written by the controller
+	WorkloadNamespace string // A2A_GATE_WORKLOAD_NAMESPACE, a DNS label
+	WorkloadPort      int    // A2A_GATE_WORKLOAD_PORT, default 8080
+	PublicURL         string // A2A_GATE_PUBLIC_URL, the address clients use for the gate
 }
+
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // MaxSniffBytes is the ceiling of A2A_GATE_SNIFF_BYTES: the gate must never buffer a large part of a request.
 const MaxSniffBytes = 1 << 20
@@ -39,6 +49,10 @@ func Load(getenv func(string) string) (Config, error) {
 		MaxBody:     8 << 20,
 		MaxInFlight: 128,
 		LogLevel:    or(getenv("A2A_GATE_LOG_LEVEL"), "info"),
+
+		RoutesFile:        getenv("A2A_GATE_ROUTES_FILE"),
+		WorkloadNamespace: getenv("A2A_GATE_WORKLOAD_NAMESPACE"),
+		WorkloadPort:      8080,
 	}
 	u, err := url.Parse(c.Upstream)
 	if c.Upstream == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -70,6 +84,24 @@ func Load(getenv func(string) string) (Config, error) {
 			return c, errors.New("A2A_GATE_MAX_BODY must be a positive number of bytes")
 		}
 		c.MaxBody = n
+	}
+	if c.RoutesFile != "" {
+		if !dnsLabel.MatchString(c.WorkloadNamespace) {
+			return c, errors.New("A2A_GATE_WORKLOAD_NAMESPACE must be a DNS label when A2A_GATE_ROUTES_FILE is set")
+		}
+		if v := getenv("A2A_GATE_WORKLOAD_PORT"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 65535 {
+				return c, errors.New("A2A_GATE_WORKLOAD_PORT must be 1..65535")
+			}
+			c.WorkloadPort = n
+		}
+		pu, err := url.Parse(getenv("A2A_GATE_PUBLIC_URL"))
+		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || pu.User != nil ||
+			pu.RawQuery != "" || pu.ForceQuery || pu.Fragment != "" {
+			return c, errors.New("A2A_GATE_PUBLIC_URL must be an http or https URL without credentials, query or fragment when A2A_GATE_ROUTES_FILE is set")
+		}
+		c.PublicURL = strings.TrimRight(pu.String(), "/")
 	}
 	return c, nil
 }
