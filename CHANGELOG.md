@@ -7,6 +7,7 @@ All notable changes to OpenAgentix are documented here. The format follows [Keep
 No default changed for users who leave the new `controlPlane` and `console` blocks off. The default chart render is the same as in 0.2.0.
 
 ### Added
+- Bring your own agent, slice 2 (issue #102, umbrella #43): `tools/a2a-conform`, a conformance checker for a container agent. `a2a-conform [--fake-model :9099] http://localhost:8080` checks the agent card, its fields and the JSONRPC 1.0 interface, `SendMessage` (message or task, `GetTask`), streaming against the card, the three JSON-RPC error shapes and the port, prints a pass/fail table with a plain-English fix per row, and lists the checks it cannot make (user, read-only root, environment, network) as manual rows. It is a Go module that `hack/ci/go-modules.sh` picks up, so `make test-go` and CI run its tests. New guide page `docs/diary/guide/bring-your-own-agent.md`. It does not run the image or check anything inside the container.
 - Chart: `platform` (empty by default; `kubernetes` or `openshift`). With `openshift`, no pod pins `runAsUser`, `runAsGroup` or `fsGroup` (the restricted-v2 SCC assigns them), DNS egress goes to `openshift-dns` on port 5353, and `console.route` adds a Route with a NetworkPolicy rule for the router. Container agents are refused with `openshift`. The manifests render and are covered by render tests; nothing was run on OpenShift. The default render is byte-identical. See [OpenShift](docs/diary/guide/openshift.md) for what cannot work there.
 
 ### Changed
