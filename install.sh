@@ -76,6 +76,7 @@ cd "$ROOT"
 
 CLUSTER=${CLUSTER:-openagentix}
 CTX=${KUBE_CONTEXT:-kind-$CLUSTER}
+export CLUSTER KUBE_CONTEXT=$CTX   # the component scripts (runtime, gateway, tools) read both
 NODE=${CLUSTER}-control-plane
 K=${KUBECTL:-kubectl}
 RELEASE=openagentix
@@ -99,25 +100,49 @@ missing=(); for c in "${need[@]}"; do command -v "$c" >/dev/null || missing+=("$
 
 CLUSTER_UP=0; kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && CLUSTER_UP=1
 secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K get secret -n "$1" "$2" >/dev/null 2>&1; }
+
+# The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
+for arg in "$@"; do case "$arg" in --quickstart) PROFILE=quickstart;; *) die "unknown argument: $arg (use --quickstart, or the environment variables in the README)";; esac; done
+PROFILE=${PROFILE:-}
+QS=0; QS_MODEL=""; QS_TMP=$(mktemp -d); trap 'rm -rf "$QS_TMP"' EXIT
+VALS=()
+case "$PROFILE" in
+  "") ;;
+  quickstart) QS=1; VALS+=(-f components/quickstart/values.yaml) ;;
+  *) die "unknown PROFILE '$PROFILE' (known: quickstart)" ;;
+esac
+for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
+if [ "$QS" = 1 ]; then
+  . components/quickstart/model.sh
+  QS_MODEL=$(qs_pick_model) || die "model configuration: see the line above"
+  QS_OLLAMA_HOST=host.docker.internal
+  if [ "$QS_MODEL" = ollama ] && [ "$(uname -s)" = Linux ]; then   # no host.docker.internal on Linux: the kind network's gateway
+    QS_OLLAMA_HOST=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true); QS_OLLAMA_HOST=${QS_OLLAMA_HOST:-172.18.0.1}
+  fi
+  qs_model_values "$QS_MODEL" "$QS_OLLAMA_HOST" > "$QS_TMP/model-values.json"
+  [ ! -s "$QS_TMP/model-values.json" ] || VALS+=(-f "$QS_TMP/model-values.json")
+fi
+
+# What is required is decided from what the chart renders, before anything is created.
+render(){ helm template $RELEASE $CHART -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} "$@" | yq -c 'select(.!=null)'; }
+RENDERED=$(render) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
+. components/quickstart/preflight.sh
 problems=()
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && ! secret_exists $GW_NS anthropic-api-key; then
-  problems+=("ANTHROPIC_API_KEY is not set and Secret $GW_NS/anthropic-api-key does not exist. Export it: export ANTHROPIC_API_KEY=sk-ant-...")
-fi
-if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && ! secret_exists $BRIDGE_NS $BRIDGE_SECRET; then
-  problems+=("TELEGRAM_BOT_TOKEN is not set and Secret $BRIDGE_NS/$BRIDGE_SECRET does not exist. Create a bot with @BotFather, then: export TELEGRAM_BOT_TOKEN=...")
-fi
+while IFS= read -r p; do [ -z "$p" ] || problems+=("$p"); done < <(preflight_secret_problems "$RENDERED" secret_exists; preflight_skill_problems "$RENDERED" "${SKIP_SKILL:-0}")
 if [ ${#problems[@]} -gt 0 ]; then
   printf '\nERROR: cannot start, required configuration is missing:\n' >&2
   for p in "${problems[@]}"; do printf '  - %s\n' "$p" >&2; done
   printf 'Nothing was changed.\n' >&2; exit 1
 fi
-[ -n "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ] || echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
+if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
+  echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
+fi
 
 # --- 1. kind cluster ------------------------------------------------------------------------------------
 log "cluster $CLUSTER"
 if [ "$CLUSTER_UP" = 0 ]; then
   [ "${CREATE_CLUSTER:-1}" = 1 ] || die "kind cluster '$CLUSTER' does not exist and CREATE_CLUSTER=0"
-  kind create cluster --config hack/kind-config.yaml
+  kind create cluster --name "$CLUSTER" --config hack/kind-config.yaml
 fi
 $K config use-context "$CTX" >/dev/null || die "kube context $CTX not found"
 docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null   # gVisor pod networking (see components/runtime/NOTES.md)
@@ -142,10 +167,7 @@ else echo "ToolHive: present or skipped"; fi
 $K config use-context "$CTX" >/dev/null
 
 # --- 3. what will the chart render? (agents, namespaces, images) -------------------------------------------
-VALS=(); for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
 # --api-versions: the Agent Kourier CRDs are installed later in this run, but the objects they define must be planned now.
-render(){ helm template $RELEASE $CHART -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} "$@" | yq -c 'select(.!=null)'; }
-RENDERED=$(render) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
 AGENT_KEYS=$(jq -r 'select(.kind=="ModelConfig")|[.metadata.annotations["openagentix.io/agent"],.spec.apiKeySecret,.metadata.namespace]|@tsv' <<<"$RENDERED")
 NAMESPACES=$(jq -r 'select(.metadata.namespace!=null)|.metadata.namespace' <<<"$RENDERED" | sort -u)
 BRIDGE_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].image' <<<"$RENDERED")
@@ -236,6 +258,8 @@ put_secret(){
 log "secrets"
 put_secret $GW_NS anthropic-api-key Authorization ANTHROPIC_API_KEY    # key name must be 'Authorization'
 put_secret $GW_NS gemini-api-key Authorization GOOGLE_API_KEY
+put_secret $GW_NS openai-api-key Authorization OPENAI_API_KEY
+put_secret $GW_NS quickstart-model-key Authorization MODEL_API_KEY
 put_secret $BRIDGE_NS $BRIDGE_SECRET TELEGRAM_BOT_TOKEN TELEGRAM_BOT_TOKEN
 put_secret $BRIDGE_NS $BRIDGE_SECRET TELEGRAM_ALLOWED_CHAT_IDS TELEGRAM_ALLOWED_CHAT_IDS
 
@@ -403,48 +427,69 @@ fi
 
 # --- 5. images ----------------------------------------------------------------------------------------------
 SET=()
+# Images are queued here and built in parallel by run_builds (BUILD_JOBS at a time, default 3; 1 = one after the other).
+BUILD_Q=()
+queue_build(){ BUILD_Q+=("$1|$2|${3:-}"); }   # image | context | optional Dockerfile
+run_builds(){
+  [ ${#BUILD_Q[@]} -gt 0 ] || return 0
+  local jobs=${BUILD_JOBS:-3} spec img ctx df running=0 pids=() imgs=() p fail=0   # no `wait -n`: macOS ships bash 3.2
+  log "building ${#BUILD_Q[@]} image(s), $jobs at a time"
+  for spec in "${BUILD_Q[@]}"; do
+    IFS='|' read -r img ctx df <<<"$spec"
+    ( docker build -q -t "$img" ${df:+-f "$df"} "$ctx" >/dev/null ) &
+    pids+=($!); imgs+=("$img"); running=$((running+1))
+    if [ "$running" -ge "$jobs" ]; then for p in "${pids[@]}"; do wait "$p" || fail=1; done; pids=(); running=0; fi
+  done
+  for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || fail=1; done
+  for img in "${imgs[@]}"; do docker image inspect "$img" >/dev/null 2>&1 || fail=1; done
+  [ "$fail" = 0 ] || die "an image build failed: re-run with BUILD_JOBS=1 to see which one"
+  kind load docker-image "${imgs[@]}" --name "$CLUSTER"
+}
 if [ "${SKIP_BRIDGE_IMAGE:-0}" != 1 ] && [[ "$BRIDGE_IMAGE" == openagentix/telegram-bridge:* ]]; then
   log "bridge image $BRIDGE_IMAGE"
-  docker build -q -t "$BRIDGE_IMAGE" bridges/telegram >/dev/null
-  kind load docker-image "$BRIDGE_IMAGE" --name "$CLUSTER"
+  queue_build "$BRIDGE_IMAGE" bridges/telegram
 fi
 # Schedules: the CronJobs run tools/a2a-call. The image is built only when the chart renders a CronJob for it (empty `schedules` = no
 # build, no namespace, no pods), then keyed on the source hash like the bridge and the kb.
 A2A_CALL_IMAGE=$(jq -r 'select(.kind=="CronJob")|.spec.jobTemplate.spec.template.spec.containers[0].image' <<<"$RENDERED" | sort -u | head -1)
 if [ "${SKIP_A2A_CALL_IMAGE:-0}" != 1 ] && [[ "$A2A_CALL_IMAGE" == openagentix/a2a-call:* ]]; then
   log "a2a-call image $A2A_CALL_IMAGE (schedules)"
-  docker build -q -t "$A2A_CALL_IMAGE" tools/a2a-call >/dev/null
-  kind load docker-image "$A2A_CALL_IMAGE" --name "$CLUSTER"
+  queue_build "$A2A_CALL_IMAGE" tools/a2a-call
 fi
 KB_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${KB_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_KB_IMAGE:-0}" != 1 ] && [[ "$KB_IMAGE" == openagentix/kb:* ]]; then
   log "kb image $KB_IMAGE"
-  docker build -q -t "$KB_IMAGE" services/kb >/dev/null
-  kind load docker-image "$KB_IMAGE" --name "$CLUSTER"
+  queue_build "$KB_IMAGE" services/kb
 fi
 NOTIFY_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${NOTIFY_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_NOTIFY_IMAGE:-0}" != 1 ] && [[ "$NOTIFY_IMAGE" == openagentix/notify:* ]]; then
   log "notify image $NOTIFY_IMAGE"
-  docker build -q -t "$NOTIFY_IMAGE" services/notify >/dev/null
-  kind load docker-image "$NOTIFY_IMAGE" --name "$CLUSTER"
+  queue_build "$NOTIFY_IMAGE" services/notify
 fi
 A2A_GATE_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${A2A_GATE_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_A2A_GATE_IMAGE:-0}" != 1 ] && [[ "$A2A_GATE_IMAGE" == openagentix/a2a-gate:* ]]; then
   log "a2a-gate image $A2A_GATE_IMAGE"
-  docker build -q -t "$A2A_GATE_IMAGE" services/a2a-gate >/dev/null
-  kind load docker-image "$A2A_GATE_IMAGE" --name "$CLUSTER"
+  queue_build "$A2A_GATE_IMAGE" services/a2a-gate
+fi
+STUB_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image' <<<"$RENDERED")   # empty when gateway.stubModel.enabled=false
+if [ "${SKIP_STUB_MODEL_IMAGE:-0}" != 1 ] && [[ "$STUB_IMAGE" == openagentix/stub-model:* ]]; then
+  log "stub-model image $STUB_IMAGE"
+  queue_build "$STUB_IMAGE" services/stub-model
 fi
 CP_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CP_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_CONTROL_PLANE_IMAGE:-0}" != 1 ] && [[ "$CP_IMAGE" == openagentix/control-plane:* ]]; then
   log "control-plane image $CP_IMAGE"
-  docker build -q -t "$CP_IMAGE" services/control-plane >/dev/null
-  kind load docker-image "$CP_IMAGE" --name "$CLUSTER"
+  queue_build "$CP_IMAGE" services/control-plane
 fi
 CN_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CN_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:* ]]; then
   log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
-  docker build -q -t "$CN_IMAGE" -f services/console/Dockerfile . >/dev/null
-  kind load docker-image "$CN_IMAGE" --name "$CLUSTER"
+  queue_build "$CN_IMAGE" . services/console/Dockerfile
+fi
+run_builds   # the queued images are built BUILD_JOBS at a time, then loaded into kind in one call
+if [ -n "$STUB_IMAGE" ]; then
+  STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
+  SET+=(--set-string "gateway.stubModel.sourceHash=$STUB_HASH")
 fi
 if [ -n "$BRIDGE_IMAGE" ]; then
   # Same for the bridge (image tag "dev"): the pod template carries a hash of bridges/telegram, so changed code replaces the pod.
@@ -633,6 +678,44 @@ if [ -n "$CH_CM" ]; then
   $K get bindings.agentkourier.dev -n "$CH_NS"
 fi
 
+if [ "$QS" = 1 ]; then
+  log "quick start agent"
+  $K create serviceaccount quickstart-ask -n "$RELEASE_NS" --dry-run=client -o yaml | $K apply -f - >/dev/null   # the identity hack/ask.sh uses (the A2A gate rule is in the profile)
+  QS_DESC="Looks up known vulnerabilities of a package. Model: $(qs_model_label "$QS_MODEL")"
+  yq --arg d "$QS_DESC" '.spec.description=$d' components/quickstart/agent.yaml | $K apply -f - >/dev/null
+  $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
+    || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; }
+fi
+
 log "DONE"
-$K get pods -n $BRIDGE_NS
+if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null; then $K get pods -n $BRIDGE_NS; fi
 $K get agent -n $KAGENT_NS
+if [ "$QS" = 1 ]; then
+  QS_SECS=$(( $(date +%s) - t0 ))
+  cat <<EOT
+
+============================================================================
+OpenAgentix quick start is up in $((QS_SECS/60)) min $((QS_SECS%60)) s.${QS_NOT_READY:+  (The agent was not Ready yet when the wait ended: see the WARN above.)}
+
+  MODEL: $(qs_model_label "$QS_MODEL")
+EOT
+  if [ "$QS_MODEL" = stub ]; then cat <<EOT
+         The stub is for trying the platform's controls (tool profile, egress, budgets, the gate). It is NOT a language model and its
+         answers are canned. For real answers, run the same command with a model:
+           ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh        (or OPENAI_API_KEY, GOOGLE_API_KEY, MODEL_BASE_URL + MODEL_NAME [+ MODEL_API_KEY],
+           MODEL_PROVIDER=ollama MODEL_NAME=<model>  for a local Ollama; see README "Try it in 10 minutes")
+EOT
+  fi
+  cat <<EOT
+
+  Ask the agent (no chat app needed):
+    hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
+  Open the console:
+    $K port-forward -n $CN_NS svc/openagentix-console 8080:8080       then open http://127.0.0.1:8080
+    sign-in token (read it yourself; this script does not print it):
+    $K get secret -n $CN_NS $CN_TOKEN_S -o jsonpath='{.data.$CN_TOKEN_K}' | base64 -d; echo
+  Remove everything:
+    kind delete cluster --name $CLUSTER
+============================================================================
+EOT
+fi

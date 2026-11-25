@@ -10,7 +10,7 @@ GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 SKIP_FIRST_AGENT=${SKIP_FIRST_AGENT:-0}
 [ "$SKIP_FIRST_AGENT" = 1 ] || : "${GOOGLE_API_KEY:?export GOOGLE_API_KEY first (or SKIP_FIRST_AGENT=1)}"
 
-CLUSTER=openagentix
+CLUSTER=${CLUSTER:-openagentix}
 VER=1.0.1                      # kagent + substrate charts (docs say 1.0.0; 1.0.1 is the latest patch)
 KAGENT_OCI=oci://ghcr.io/kagent-dev/kagent/helm
 SUB_OCI=oci://ghcr.io/kagent-dev/substrate/helm
@@ -35,7 +35,7 @@ fi
 
 # --- 1. kind cluster: v1.37 node, no feature gates needed (CTB/PodCertificateRequest are GA in certificates.k8s.io/v1)
 log "kind cluster"
-kind get clusters | grep -qx "$CLUSTER" || kind create cluster --config ../../hack/kind-config.yaml
+kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --config ../../hack/kind-config.yaml
 $K config use-context "kind-$CLUSTER" >/dev/null
 # Upstream hack/create-kind-cluster.sh does this for gVisor loopback pod networking. Not in the docs.
 docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null

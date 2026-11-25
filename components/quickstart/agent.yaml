@@ -1,0 +1,20 @@
+# The quick start agent (ADR 0014): one AgentDefinition, applied by install.sh at the end of PROFILE=quickstart. The control plane checks it
+# against the policy in components/quickstart/values.yaml (one model, one tool profile, one tool) and builds the agent from it.
+# install.sh sets spec.description to say which model is behind the agent. Edit this file or `kubectl edit agentdefinition quickstart -n kagent`
+# to change the instructions; the console shows the same object.
+apiVersion: openagentix.io/v1alpha1
+kind: AgentDefinition
+metadata:
+  name: quickstart
+  namespace: kagent
+  labels:
+    openagentix.io/team: quickstart
+    openagentix.io/project: demo
+spec:
+  description: Looks up known vulnerabilities of a package
+  model: quickstart-model
+  instructions: |
+    You look up known vulnerabilities of software packages with the tool you have.
+    Answer in two sentences. Say which tool you used. If the tool returns nothing, say so instead of guessing.
+  toolProfile: lookup
+  tools: [osv_query_vulnerability]
