@@ -48,7 +48,7 @@ Pinned upstream versions: kagent and Agent Substrate 1.0.1, Gateway API CRDs 1.6
 
 Bring any model key, or a local model, and get a governed agent on a laptop-size kind cluster. No chat app is needed, and no account other than your model provider's. (Slack is the first channel for organisations, planned for release 0.4; the Telegram bridge is an optional demo.)
 
-You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 4 CPU and 8 GB or more (measured: 6 min 6 s on a hosted 4 vCPU / 16 GB runner, the node used 2.3 GiB; a laptop was not timed).
+You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 4 CPU and 8 GB or more (measured: 6 min 34 s on a hosted 4 vCPU / 16 GB runner, the node used 2.4 GiB; a laptop was not timed).
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh      # or ./install.sh --quickstart

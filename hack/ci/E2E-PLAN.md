@@ -26,6 +26,7 @@ workflow; nightly at 03:17 UTC; by hand.
 |---|---|---|---|
 | first (commit e7dadef) | install reached the agent step in 355 s, agent never Ready | n/a | found a real bug: the control plane's key Secret carried the definition's labels and the admission guard refused it (422); fixed in `services/control-plane` (test first) |
 | second (commit 229e825) | **green, 10 of 10 smoke checks** | 366 s (6 min 6 s) from the start of `install.sh`; cold runner, nothing cached | see "Where the time goes" |
+| third (commit 091b596, the final profile with observability on) | **green, 10 of 10 smoke checks** | 394 s (6 min 34 s) | a first attempt of this commit range failed on a race (the quota on definitions had no status yet), fixed with a retry in `install.sh` |
 
 Where the time goes (second run, cumulative seconds from the start): kind cluster, CRDs, Substrate and its PostgreSQL, kagent and its
 PostgreSQL 128 s; agentgateway 55 s more (183 s); the four image builds (a2a-gate, stub-model, control-plane, console; 3 at a time, the

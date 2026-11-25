@@ -63,12 +63,12 @@ All numbers are from the e2e job on a GitHub-hosted `ubuntu-24.04` runner (4 vCP
 
 | What | Measured |
 |---|---|
-| `./install.sh` start to the agent Ready (stub, no key) | 366 s (6 min 6 s) |
-| the same with observability off | 366 s; with it on, 390 s in a single run (+24 s), so the profile keeps it on |
-| node memory after the install and the smoke test | 2.326 GiB without observability, 2.366 GiB with it |
+| `./install.sh` start to the agent Ready (stub, no key, final profile with observability) | 394 s (6 min 34 s) |
+| the same with observability off | 366 s; with it on 390 s and 394 s in two runs (about +25 s), so the profile keeps it on |
+| node memory after the install and the smoke test | 2.326 GiB without observability, 2.361 to 2.366 GiB with it |
 | the smoke test (10 checks) | passed, 5 s |
 
-Where the 366 s go (cumulative from the start): kind, Substrate and kagent with their PostgreSQL 128 s; agentgateway 183 s; the four image builds (3 at a time) 289 s; `helm upgrade` 296 s; the tool profile vMCP 355 s; the agent Ready 366 s. Before this work the same install with every feature took about 23 minutes (README, 2026-11-25). The Substrate gVisor sandbox works on the hosted runner without any special setting.
+Where the 366 s of the run without observability go (cumulative from the start): kind, Substrate and kagent with their PostgreSQL 128 s; agentgateway 183 s; the four image builds (3 at a time) 289 s; `helm upgrade` 296 s; the tool profile vMCP 355 s; the agent Ready 366 s. Before this work the same install with every feature took about 23 minutes (README, 2026-11-25). The Substrate gVisor sandbox works on the hosted runner without any special setting.
 
 ## What is not covered
 
