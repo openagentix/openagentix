@@ -13,9 +13,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// syncBuf is a bytes.Buffer safe for a server goroutine to write while the test reads.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// waitFor polls until the buffer holds want. Audit lines are written when a handler returns, after the response is sent.
+func (s *syncBuf) waitFor(t *testing.T, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := s.String(); strings.Contains(got, want) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return s.String()
+}
 
 func TestRunServesAndStops(t *testing.T) {
 	var gotUser string
@@ -33,7 +56,7 @@ func TestRunServesAndStops(t *testing.T) {
 		"A2A_GATE_UPSTREAM": up.URL, "A2A_GATE_RULES": filepath.Join(dir, "rules.json"), "A2A_GATE_KEYS_DIR": filepath.Join(dir, "keys"),
 		"A2A_GATE_ADDR": "127.0.0.1:0",
 	}
-	var out, errb bytes.Buffer
+	var out, errb syncBuf
 	ctx, cancel := context.WithCancel(context.Background())
 	addr := make(chan string, 1)
 	done := make(chan error, 1)
@@ -72,9 +95,10 @@ func TestRunServesAndStops(t *testing.T) {
 		t.Errorf("no token: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	time.Sleep(50 * time.Millisecond)
-	if !strings.Contains(out.String(), `"msg":"audit"`) || strings.Contains(out.String(), "the-key") {
-		t.Errorf("audit output: %s", out.String())
+	// the 401 is the last request, so its audit line is the last to land
+	got := out.waitFor(t, `"msg":"audit"`)
+	if !strings.Contains(got, `"msg":"audit"`) || strings.Contains(got, "the-key") {
+		t.Errorf("audit output: %s", got)
 	}
 	cancel()
 	select {
@@ -104,7 +128,7 @@ func TestRunRoutesBYOAgent(t *testing.T) {
 		"A2A_GATE_ADDR": "127.0.0.1:0", "A2A_GATE_ROUTES_FILE": filepath.Join(dir, "routes.json"),
 		"A2A_GATE_WORKLOAD_NAMESPACE": "openagentix-agents", "A2A_GATE_PUBLIC_URL": "https://gate.example.com",
 	}
-	var errb bytes.Buffer
+	var errb syncBuf
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	addr := make(chan string, 1)
