@@ -24,6 +24,7 @@ import (
 	"github.com/openagentix/openagentix/services/console/ext"
 	"github.com/openagentix/openagentix/services/console/internal/backend"
 	"github.com/openagentix/openagentix/services/console/internal/model"
+	"github.com/openagentix/openagentix/services/console/internal/observe"
 	"github.com/openagentix/openagentix/services/console/internal/platform"
 	"github.com/openagentix/openagentix/services/console/internal/predict"
 )
@@ -44,6 +45,7 @@ var Routes = []string{
 	"GET /api/v1/session",
 	"GET /api/v1/platform",
 	"GET /api/v1/agents",
+	"GET /api/v1/metrics/summary",
 	"POST /api/v1/agents",
 	"POST /api/v1/agents/validate",
 	"GET /api/v1/agents/{name}",
@@ -69,6 +71,8 @@ type Options struct {
 	Context        string
 	Version        string
 	RequestTimeout time.Duration
+	// Observe reads metrics; nil: not configured (GET /api/v1/metrics/summary answers 503 and /platform says so).
+	Observe observe.Observability
 
 	// AllowedHosts are host names (optionally with a port) accepted in the Host header besides localhost, 127.0.0.1 and
 	// [::1]; a future Ingress name goes here. Any other Host is answered 421 before routing.
@@ -114,6 +118,7 @@ func New(o Options) *Server {
 	s.handle("GET /api/v1/session", s.api(ext.ActionRead, s.session))
 	s.handle("GET /api/v1/platform", s.api(ext.ActionRead, s.platform))
 	s.handle("GET /api/v1/agents", s.api(ext.ActionRead, s.list))
+	s.handle("GET /api/v1/metrics/summary", s.api(ext.ActionRead, s.metricsSummary))
 	s.handle("POST /api/v1/agents", s.api(ext.ActionCreate, s.create))
 	s.handle("POST /api/v1/agents/validate", s.api(ext.ActionValidate, s.validate))
 	s.handle("GET /api/v1/agents/{name}", s.api(ext.ActionRead, s.get))
@@ -479,7 +484,13 @@ func (s *Server) platform(w http.ResponseWriter, r *http.Request, _ *call) {
 	if !ok {
 		return
 	}
-	writeJSON(w, 200, platform.Summarize(b, s.o.Demo))
+	type metricsInfo struct {
+		Available bool `json:"available"`
+	}
+	writeJSON(w, 200, struct {
+		platform.Summary
+		Metrics metricsInfo `json:"metrics"`
+	}{Summary: platform.Summarize(b, s.o.Demo), Metrics: metricsInfo{Available: s.o.Observe != nil}})
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request, _ *call) {
@@ -747,4 +758,27 @@ func matchPath(pattern, p string) bool {
 func HTTPServer(h http.Handler) *http.Server {
 	return &http.Server{Handler: h, MaxHeaderBytes: MaxHeaderBytes, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second}
+}
+
+// metricsSummary answers GET /api/v1/metrics/summary. The only input is `window`, from a fixed list; the queries are
+// written in package observe. Whatever the store said or failed with stays in the log.
+func (s *Server) metricsSummary(w http.ResponseWriter, r *http.Request, _ *call) {
+	win, ok := observe.ParseWindow(r.URL.Query().Get("window"))
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid", "window must be 24h or 7d.")
+		return
+	}
+	const unavailable = "Metrics are not available: the console cannot read the metrics store. Check that observability is on and that console.metrics.url is set in chart values."
+	if s.o.Observe == nil {
+		writeErr(w, http.StatusServiceUnavailable, "metrics_unavailable", unavailable)
+		return
+	}
+	m, err := s.o.Observe.Metrics(r.Context(), win)
+	if err != nil {
+		rid, _ := r.Context().Value(ridKey{}).(string)
+		s.o.Log.Warn("metrics store", "request_id", rid, "err", err)
+		writeErr(w, http.StatusServiceUnavailable, "metrics_unavailable", unavailable)
+		return
+	}
+	writeJSON(w, 200, m)
 }

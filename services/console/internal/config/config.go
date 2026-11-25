@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -36,12 +37,13 @@ type Config struct {
 
 	// AllowedHosts are Host names accepted besides localhost, 127.0.0.1 and [::1] (CONSOLE_ALLOWED_HOSTS).
 	AllowedHosts        []string
-	AuthFailLimit       int  // failed sign-ins per address per minute before 429 (default 10)
-	AuthFailLimitGlobal int  // the same over all addresses (default 100)
-	ValidatePerMinute   int  // POST /agents/validate per identity per minute (default 60)
-	HSTS                bool // send Strict-Transport-Security
-	ListMax             int  // most objects of one kind a list reads (default 500)
-	AllowInsecureKube   bool // dev only: accept an http:// Kubernetes API address
+	AuthFailLimit       int    // failed sign-ins per address per minute before 429 (default 10)
+	AuthFailLimitGlobal int    // the same over all addresses (default 100)
+	ValidatePerMinute   int    // POST /agents/validate per identity per minute (default 60)
+	HSTS                bool   // send Strict-Transport-Security
+	MetricsURL          string // CONSOLE_METRICS_URL: base URL of a Prometheus-compatible query API; empty: no metrics
+	ListMax             int    // most objects of one kind a list reads (default 500)
+	AllowInsecureKube   bool   // dev only: accept an http:// Kubernetes API address
 }
 
 const (
@@ -95,6 +97,9 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if c.ValidatePerMinute, err = intEnv(getenv, "CONSOLE_VALIDATE_PER_MINUTE", 60, 1, 10000); err != nil {
 		return c, err
+	}
+	if c.MetricsURL, err = urlEnv(getenv, "CONSOLE_METRICS_URL"); err != nil {
+		return Config{}, err
 	}
 	if c.ListMax, err = intEnv(getenv, "CONSOLE_LIST_MAX", 500, 1, 5000); err != nil {
 		return c, err
@@ -168,4 +173,17 @@ func Load(getenv func(string) string) (Config, error) {
 		return c, errors.New("CONSOLE_KUBE_API must be an https URL")
 	}
 	return c, nil
+}
+
+// urlEnv reads an optional http or https base URL (no user info, no query).
+func urlEnv(getenv func(string) string, name string) (string, error) {
+	v := strings.TrimSpace(getenv(name))
+	if v == "" {
+		return "", nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%s must be an http or https URL without credentials or query", name)
+	}
+	return v, nil
 }
