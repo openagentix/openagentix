@@ -70,6 +70,34 @@ All numbers are from the e2e job on a GitHub-hosted `ubuntu-24.04` runner (4 vCP
 
 Where the 366 s of the run without observability go (cumulative from the start): kind, Substrate and kagent with their PostgreSQL 128 s; agentgateway 183 s; the four image builds (3 at a time) 289 s; `helm upgrade` 296 s; the tool profile vMCP 355 s; the agent Ready 366 s. Before this work the same install with every feature took about 23 minutes (README, 2026-11-25). The Substrate gVisor sandbox works on the hosted runner without any special setting.
 
+## Time to first working agent, by phase
+
+Issue #35 asks where the time goes. Each `e2e` and `e2e-k3s` job now prints a table of phases in its job summary and log, with the same numbers as a small JSON file (`hack/ci/phases.sh`, tested by `hack/ci/phases-test.sh`). The phases are seconds from the start of `./install.sh`:
+
+| Phase | What marks it |
+|---|---|
+| cluster ready | the cluster exists; the `prerequisites` step starts |
+| install done | the chart and the tool profile are installed; the wait for agents starts |
+| first agent Ready | the `quickstart` AgentDefinition is Ready (the installer logs `quick start agent Ready`) |
+| first answer | the first answer came back through the A2A gate; `hack/ci/smoke.sh` prints the time |
+| install.sh finished | the install printed its summary |
+
+The table below comes from real runs that were made before the markers existed, so it is rebuilt from their logs. The step lines of `install.sh` give the first, second and last rows. "First agent Ready" is not logged in these runs: the step for the sample container agent starts right after the quick start agent is Ready, so that line is an upper bound. "First answer" is the time of the first `answer:` line of the smoke test minus the time of the first `=== cluster` line, from the log timestamps, so it is good to about 2 s. All runs had the sample container agent on (`QUICKSTART_BYO=1`), the stub model and no key.
+
+| Runner and cluster | Run | cluster ready | install done | Ready by | first answer | install.sh finished |
+|---|---|---|---|---|---|---|
+| kind | 45637714320 | 25 s | 314 s | 350 s | 362 s | 361 s |
+| kind | 45641330819 | 24 s | 358 s | 379 s | 392 s | 390 s |
+| kind | 45645087219 | 23 s | 343 s | 385 s | 397 s | 396 s |
+| kind | 45660557986 | 25 s | 377 s | 397 s | 410 s | 408 s |
+| k3s (k3d) | 45637714303 | 14 s | 301 s | 334 s | 346 s | 345 s |
+| k3s (k3d) | 45641331356 | 15 s | 332 s | 353 s | 366 s | 364 s |
+| k3s (k3d) | 45641483961 | 14 s | 329 s | 340 s | 353 s | 351 s |
+
+Reading it: on a hosted runner with nothing cached, a first working agent takes 6 to 7 minutes on kind (362 to 410 s) and about 6 minutes on k3s (346 to 366 s). The question itself takes under a second with the stub. The time is the install: building the images, the tool profile and the runtime. The cluster is ready in about 25 s.
+
+Limits. This is a hosted `ubuntu-24.04` runner (4 vCPU, 16 GB), a cold image cache every time, and the stub model, so no model call and no key. `git clone` and the tool installs are not in the numbers (the clock starts at `./install.sh`). A laptop was not timed, nor a warm re-install, nor a slow network. The runs spread by about 50 s, so read the numbers as a range. They are not a promise for your machine. The same table is not yet produced from runs that use the new script; its first output will be added here from a real run.
+
 ## What is not covered
 
 - The Ollama path is built from the documented host addresses and has not been run.

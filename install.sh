@@ -732,6 +732,7 @@ if [ "$QS" = 1 ]; then
   done
   $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
     || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition quickstart -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
+  [ -n "${QS_NOT_READY:-}" ] || log "quick start agent Ready"   # a marker for hack/ci/phases.sh (time to first working agent)
   if [ "$QS_BYO" = 1 ]; then
     log "sample container agent (bring your own agent)"
     BYO_REF=$(hack/kind-image-digest.sh "$CLUSTER" "$BYO_REPO" "${BYO_IMAGE##*:}") || die "no digest for the sample image: see the line above"

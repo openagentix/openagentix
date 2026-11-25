@@ -13,6 +13,8 @@ on:
       - services/**
       - console/**
       - hack/ci/smoke.sh
+      - hack/ci/phases.sh
+      - hack/demo.sh
       - hack/ask.sh
       - hack/kind-config.yaml
       - .github/workflows/e2e.yml
@@ -54,6 +56,7 @@ jobs:
           set -o pipefail
           start=$(date +%s)
           ./install.sh 2>&1 | tee install.log
+          echo "install_start=$start" >> "$GITHUB_OUTPUT"
           echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: smoke test
         id: smoke
@@ -64,19 +67,35 @@ jobs:
           start=$(date +%s)
           hack/ci/smoke.sh 2>&1 | tee smoke.log
           echo "smoke_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: demo walkthrough (hack/demo.sh)
+        id: demo
+        run: |
+          set -o pipefail
+          hack/demo.sh 2>&1 | tee demo.log
       - name: runner resources after the install
         if: always()
         run: |
           free -m | head -2
           docker stats --no-stream --format '{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}' || true
           uptime
+      - name: phases (time to first working agent, issue #35)
+        if: always()
+        env:
+          INSTALL_START: ${{ steps.install.outputs.install_start }}
+        run: |
+          if [ -n "${INSTALL_START:-}" ] && [ -f install.log ]; then
+            hack/ci/phases.sh --install-log install.log --smoke-log smoke.log --install-start "$INSTALL_START" --json phases.json --title "Time to first working agent (phases)" > phases.md || true
+            cat phases.md phases.json 2>/dev/null || true
+          fi
       - name: job summary (time to first working agent)
         if: always()
         env:
           INSTALL_S: ${{ steps.install.outputs.install_seconds }}
           SMOKE_S: ${{ steps.smoke.outputs.smoke_seconds }}
+          INSTALL_START: ${{ steps.install.outputs.install_start }}
         run: |
           {
+            if [ -f phases.md ]; then cat phases.md; echo '```json'; cat phases.json; echo '```'; echo; fi
             echo "## Quick start, keyless (stub model)"
             echo
             echo "- time from \`./install.sh\` start to the agent Ready and the summary: **${INSTALL_S:-n/a} s** (cold runner: nothing cached)"
@@ -90,6 +109,10 @@ jobs:
             echo "### Smoke test"
             echo '```'
             cat smoke.log 2>/dev/null || true
+            echo '```'
+            echo "### Demo walkthrough (hack/demo.sh)"
+            echo '```'
+            cat demo.log 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: diagnostics
