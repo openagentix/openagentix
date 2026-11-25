@@ -2,6 +2,13 @@
 # Secrets are created by ../../install.sh from environment variables (or by you, see README).
 # Namespaces are NOT created by the chart: they must exist (install.sh creates them).
 
+# ---- Platform ----------------------------------------------------------------------------------
+# "" (or "kubernetes"): the chart as it always was. "openshift": the manifests follow the restricted-v2 SCC (issue #32): no pod pins
+# runAsUser, runAsGroup or fsGroup (OpenShift assigns them from the namespace range), DNS egress goes to openshift-dns on port 5353,
+# and console.route can add a Route. The manifests render and are checked by tests; they have NOT been run on an OpenShift cluster.
+# What cannot work there is in docs/diary/guide/openshift.md. Container agents (controlPlane.containerAgents) are refused on openshift.
+platform: ""
+
 # ---- NetworkPolicies ---------------------------------------------------------------------------
 # Ingress-only policies for the two services that were open to every pod in the cluster. They need a CNI that
 # enforces NetworkPolicy (kindnet on kind 1.37 does; verify yours). Sources were found by reading the logs of the
@@ -591,6 +598,9 @@ console:
   namespace: ""                       # empty = the release namespace. It must be the control plane's namespace: the console mounts the two ConfigMaps that live there
   tokenSecret: {name: console-token, key: token}   # the login token (at least 32 characters, the console refuses a weaker one); created by install.sh, mounted as a file
   viewer: false                       # true: every write is refused and the Role has no write verb
+  # platform: openshift only. A Route to the console (edge TLS, plain HTTP redirected). host is required; it is added to the allowed hosts
+  # by the chart, and the NetworkPolicy admits the OpenShift router namespaces (label network.openshift.io/policy-group=ingress) on 8080.
+  route: {enabled: false, host: ""}
   allowedHosts: []                    # more Host names the console answers (an Ingress name); localhost, 127.0.0.1 and [::1] are always accepted. The probes send Host: localhost
   # The API server addresses the console may reach (NetworkPolicy egress), set by install.sh like controlPlane.apiServerCIDRs. Empty: the
   # API server ports towards ANY address (a closed policy would cut the console off).

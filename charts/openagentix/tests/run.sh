@@ -2057,6 +2057,43 @@ eq "the workload namespace may not be a platform namespace" "$(render_err "${CP9
 eq "an image prefix without a trailing slash is refused" "$(render_err "${CP9[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.runtimes.container.images={registry.local/oa}' | /usr/bin/grep -c 'trailing slash')" 1
 eq "an unknown runtime type is refused" "$(render_err "${CP9[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.allowedRuntimes={vm}' | /usr/bin/grep -c 'not a runtime type')" 1
 
+echo "# platform: openshift (issue #32): manifests only, not run on OpenShift"
+OSALL=("${CP9[@]}" -f "$REPO/components/console/demo-values.yaml")
+OS0=$(helm template openagentix "$CHART" -n openagentix-system "${OSALL[@]}" 2>&1 | shasum -a 256)
+eq "platform is empty by default" "$(yq -c .platform "$CHART/values.yaml")" '""'
+eq "platform=\"\" renders byte-identical to the default (all features on)" "$(helm template openagentix "$CHART" -n openagentix-system "${OSALL[@]}" --set platform= 2>&1 | shasum -a 256)" "$OS0"
+eq "platform=kubernetes renders byte-identical to the default (all features on)" "$(helm template openagentix "$CHART" -n openagentix-system "${OSALL[@]}" --set platform=kubernetes 2>&1 | shasum -a 256)" "$OS0"
+eq "default (all features on) still pins the ids, so the check below can see a change" "$(q "$(docs "${OSALL[@]}")" '[.. | objects | select(has("runAsUser"))] | length > 5')" true
+eq "an unknown platform fails the render, and says why" "$(render_err --set platform=nomad | /usr/bin/grep -c 'platform must be')" 1
+OD=$(docs "${OSALL[@]}" --set platform=openshift)
+eq "openshift: the render is not empty and has the console and the control plane" "$(count "$OD" '.kind=="Deployment" and (.metadata.name=="openagentix-console" or .metadata.name=="openagentix-control-plane")')" 2
+eq "openshift: no runAsUser anywhere (the SCC assigns it from the namespace range)" "$(q "$OD" '[.. | objects | select(has("runAsUser"))] | length')" 0
+eq "openshift: no runAsGroup anywhere" "$(q "$OD" '[.. | objects | select(has("runAsGroup"))] | length')" 0
+eq "openshift: no fsGroup anywhere" "$(q "$OD" '[.. | objects | select(has("fsGroup"))] | length')" 0
+eq "openshift: no hostPath, hostNetwork, hostPID or privileged anywhere" "$(q "$OD" '[.. | objects | select(has("hostPath") or has("hostNetwork") or has("hostPID") or (.privileged? == true))] | length')" 0
+PODS='.[] | select(.kind=="Deployment" or .kind=="StatefulSet") | .spec.template.spec'
+eq "openshift: every pod keeps runAsNonRoot and seccomp RuntimeDefault" "$(q "$OD" "[$PODS | select(.securityContext.runAsNonRoot==true and .securityContext.seccompProfile.type==\"RuntimeDefault\")] | length") $(q "$OD" "[$PODS] | length")" "$(q "$OD" "[$PODS] | length") $(q "$OD" "[$PODS] | length")"
+CTRS='.[] | select(.kind=="Deployment" or .kind=="StatefulSet") | .spec.template.spec.containers[]'
+eq "openshift: every container drops ALL, forbids escalation" "$(q "$OD" "[$CTRS | select(.securityContext.allowPrivilegeEscalation==false and .securityContext.capabilities.drop==[\"ALL\"])] | length") $(q "$OD" "[$CTRS] | length")" "$(q "$OD" "[$CTRS] | length") $(q "$OD" "[$CTRS] | length")"
+eq "openshift: DNS egress goes to openshift-dns on 5353 in the control plane policy" "$(q "$OD" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-control-plane")|.spec.egress[0]|[.to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], .to[0].podSelector.matchLabels["dns.operator.openshift.io/daemonset-dns"], (.ports|map(.port|tostring)|join(","))]|join(" ")')" "openshift-dns default 5353,5353"
+eq "openshift: DNS egress goes to openshift-dns on 5353 in the console policy" "$(q "$OD" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|.spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]')" openshift-dns
+eq "openshift: DNS egress goes to openshift-dns in the notify policy" "$(q "$OD" '[.[]|select(.kind=="NetworkPolicy" and .metadata.namespace=="openagentix-notify")|.spec.egress[]?|.to[]?|.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]]|map(select(.=="openshift-dns" or .=="kube-system"))|unique|join(",")')" openshift-dns
+eq "default: DNS egress still goes to kube-system on 53" "$(q "$(docs "${OSALL[@]}")" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|.spec.egress[0]|[.to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"], (.ports|map(.port|tostring)|join(","))]|join(" ")')" "kube-system 53,53"
+eq "openshift: no Route unless asked" "$(count "$OD" '.kind=="Route"')" 0
+eq "default: no Route either" "$(count "$(docs "${OSALL[@]}")" '.kind=="Route"')" 0
+eq "console.route without platform=openshift fails, and says why" "$(render_err "${OSALL[@]}" --set console.route.enabled=true --set console.route.host=c.apps.example.com | /usr/bin/grep -c 'console.route needs platform: openshift')" 1
+eq "console.route without a host fails, and says why" "$(render_err "${OSALL[@]}" --set platform=openshift --set console.route.enabled=true | /usr/bin/grep -c 'console.route.host')" 1
+RD=$(docs "${OSALL[@]}" --set platform=openshift --set console.route.enabled=true --set console.route.host=oa-console.apps.example.com)
+RT='.[]|select(.kind=="Route")'
+eq "route: one Route in the console namespace" "$(count "$RD" '.kind=="Route"') $(q "$RD" "$RT|.metadata.namespace")" "1 openagentix-system"
+eq "route: apiVersion route.openshift.io/v1" "$(q "$RD" "$RT|.apiVersion")" route.openshift.io/v1
+eq "route: host, target service and port" "$(q "$RD" "$RT|[.spec.host,.spec.to.kind,.spec.to.name,.spec.port.targetPort]|join(\" \")")" "oa-console.apps.example.com Service openagentix-console http"
+eq "route: edge TLS, plain HTTP redirected" "$(q "$RD" "$RT|[.spec.tls.termination,.spec.tls.insecureEdgeTerminationPolicy]|join(\" \")")" "edge Redirect"
+eq "route: the host is on the console's allowed host list" "$(q "$RD" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-console")|.spec.template.spec.containers[0].env[]|select(.name=="CONSOLE_ALLOWED_HOSTS")|.value')" "oa-console.apps.example.com"
+eq "route: the console policy admits the router namespaces on 8080, and only then" "$(q "$RD" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|.spec.ingress|map(.ports|=map([.protocol,.port]))|tostring')" '[{"from":[{"namespaceSelector":{"matchLabels":{"network.openshift.io/policy-group":"ingress"}}}],"ports":[["TCP",8080]]}]'
+eq "no route: the console policy still admits no ingress" "$(q "$OD" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|.spec.ingress|tostring')" '[]'
+eq "container agents on openshift fail the render, and say why" "$(render_err "${CP9[@]}" "${CA[@]}" --set platform=openshift | /usr/bin/grep -c 'containerAgents is not supported with platform: openshift')" 1
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

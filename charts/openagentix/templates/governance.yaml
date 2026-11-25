@@ -75,9 +75,11 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532   # the key hashes are mounted with mode 0440
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: a2a-gate

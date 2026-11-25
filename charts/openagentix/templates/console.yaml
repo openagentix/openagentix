@@ -10,6 +10,15 @@
 {{- range $x := $c.allowedHosts }}
 {{- if not (and (kindIs "string" $x) (regexMatch "^[A-Za-z0-9.:\\[\\]-]+$" $x)) }}{{ fail (printf "console.allowedHosts entry %v is not a host name (no scheme, path or comma; for example console.example.org or console.example.org:8443)" $x) }}{{ end }}
 {{- end }}
+{{- $rt := $c.route | default dict }}
+{{- $routeOn := false }}
+{{- if $rt.enabled }}
+{{- if not (include "oa.openshift" .) }}{{ fail "console.route needs platform: openshift (a Route is an OpenShift kind; elsewhere reach the console with kubectl port-forward or your own Ingress and console.allowedHosts)" }}{{ end }}
+{{- if not (and (kindIs "string" $rt.host) (regexMatch "^[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?$" $rt.host)) }}{{ fail "console.route.host must be a host name (no scheme, port or path): the console answers only the hosts on its list" }}{{ end }}
+{{- $routeOn = true }}
+{{- end }}
+{{- $hosts := $c.allowedHosts }}
+{{- if $routeOn }}{{ $hosts = append $hosts $rt.host }}{{ end }}
 {{- $ts := $c.tokenSecret | default dict }}
 {{- $mOver := (($c.metrics | default dict).url | default "") }}
 {{- if and $mOver (not (and (kindIs "string" $mOver) (regexMatch "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$" $mOver))) }}{{ fail "console.metrics.url must be an http or https URL of the form scheme://host[:port], without credentials, path or query" }}{{ end }}
@@ -119,9 +128,11 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: console
@@ -143,8 +154,8 @@ spec:
             {{- if $mURL }}
             - {name: CONSOLE_METRICS_URL, value: {{ $mURL | quote }}}
             {{- end }}
-            {{- if $c.allowedHosts }}
-            - {name: CONSOLE_ALLOWED_HOSTS, value: {{ join "," $c.allowedHosts | quote }}}
+            {{- if $hosts }}
+            - {name: CONSOLE_ALLOWED_HOSTS, value: {{ join "," $hosts | quote }}}
             {{- end }}
           volumeMounts:
             - {name: token, mountPath: /etc/console/token, readOnly: true}
@@ -194,6 +205,24 @@ spec:
   selector: {app: console}
   ports:
     - {name: http, port: 8080, targetPort: http}
+{{- if $routeOn }}
+---
+# OpenShift only (console.route.enabled, platform: openshift). Edge TLS with the router's certificate; plain HTTP is redirected.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $ns }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  host: {{ $rt.host | quote }}
+  to: {kind: Service, name: {{ $sa }}, weight: 100}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+  wildcardPolicy: None
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 ---
 # No ingress (port-forward does not pass through a NetworkPolicy; the kubelet's probes are not blocked either). Egress: DNS and the API server.
@@ -209,14 +238,33 @@ spec:
   podSelector:
     matchLabels: {app: console}
   policyTypes: [Ingress, Egress]
+  {{- if $routeOn }}
+  # The OpenShift router pods run in namespaces that carry this label. Only port 8080 of the console is open to them.
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {network.openshift.io/policy-group: ingress}}
+      ports:
+        - {protocol: TCP, port: 8080}
+  {{- else }}
   ingress: []
+  {{- end }}
   egress:
+    {{- if include "oa.openshift" $ }}
+    # OpenShift: the DNS pods are in openshift-dns and listen on 5353 (a NetworkPolicy sees the pod port, not the service port)
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-dns}}
+          podSelector: {matchLabels: {dns.operator.openshift.io/daemonset-dns: default}}
+      ports:
+        - {protocol: UDP, port: 5353}
+        - {protocol: TCP, port: 5353}
+    {{- else }}
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
           podSelector: {matchLabels: {k8s-app: kube-dns}}
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
+    {{- end }}
     {{- if $mBundled }}
     # The bundled metrics store's query port, nothing else in that namespace.
     - to:

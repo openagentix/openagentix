@@ -6,6 +6,9 @@ All notable changes to OpenAgentix are documented here. The format follows [Keep
 
 No default changed for users who leave the new `controlPlane` and `console` blocks off. The default chart render is the same as in 0.2.0.
 
+### Added
+- Chart: `platform` (empty by default; `kubernetes` or `openshift`). With `openshift`, no pod pins `runAsUser`, `runAsGroup` or `fsGroup` (the restricted-v2 SCC assigns them), DNS egress goes to `openshift-dns` on port 5353, and `console.route` adds a Route with a NetworkPolicy rule for the router. Container agents are refused with `openshift`. The manifests render and are covered by render tests; nothing was run on OpenShift. The default render is byte-identical. See [OpenShift](docs/diary/guide/openshift.md) for what cannot work there.
+
 ### Changed
 - Container agents, A2A gate: a container agent has 300 s to start its answer, streaming calls included (the body is not timed); `controlPlane.containerAgents.responseTimeoutSeconds` changes it. Each container agent handles 32 calls at once (`maxInFlightPerAgent`), and all container agents together share half of the gate's slots, so the built-in agents keep theirs. The cost: 32 slow calls make one agent answer 503 for every caller until they end. Only `Content-Type`, `Accept`, `A2A-Version`, `A2A-Extensions`, `Traceparent` and `Tracestate` from the caller (plus the gate's own `X-User-Id`) reach a container agent. Only `Content-Type`, `Content-Length`, `Cache-Control`, `Date` and `X-Accel-Buffering` come back from it, plus `X-Content-Type-Options: nosniff`; a redirect from it becomes a 502.
 - Container agents: the image is pulled again on every start (`imagePullPolicy: Always`). The chart value `controlPlane.containerAgents.imagePullPolicy` sets it; the quick start uses `IfNotPresent` because its image exists only on the node. Container agents that already run restart once on upgrade, and while the registry is down a restarted agent cannot start.
