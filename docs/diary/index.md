@@ -1,14 +1,45 @@
 ---
-title: Feature diary
+title: OpenAgentix
 sidebar_position: 1
-description: What OpenAgentix is, how its parts fit together, and where to read about each one.
+description: OpenAgentix is an open-source control plane for running AI agents on Kubernetes under the rules your platform team sets. What it gives you, how to try it, and what is proven.
 ---
 
-# OpenAgentix feature diary
+# OpenAgentix
 
-OpenAgentix is a Kubernetes-native platform for running AI agents. It puts existing open-source projects behind one installer and one Helm chart. The aim in the original product brief is a replacement for the managed agent services of the large clouds, running on your own cluster.
+OpenAgentix is an open-source control plane for running AI agents on Kubernetes under the rules your platform team sets.
 
-This diary records what was built, how each part was proven, and what is still missing. The current state is release `v0.2.0` (2026-11-25): the MVP of `v0.1.0` plus the knowledge base and graph, memory, channels, schedules, notifications, observability and governance. After that release, and not yet in a release, come the control plane and the console (both off by default). It runs on one kind node. Read [what works](./what-works.md) before you rely on anything.
+## What you get
+
+- **No provider keys in agent pods, and cost per agent.** Each agent gets its own key for a model gateway, with a token budget. The gateway records tokens and cost per agent and refuses calls when the budget is used up.
+- **Tools and network closed by default.** An agent sees only the tools in the tool profile you approved. Its sandbox reaches only what its model and tools need, plus hosts you list.
+- **Known callers and a record.** A gate checks who calls an agent and which user they may speak for, and writes one audit line per request. Tool calls are audited too.
+- **Agents as Kubernetes resources.** A short `AgentDefinition` is checked against a platform policy. If it breaks a rule, it is refused with a reason and nothing is created. Keep it in Git and apply it like any manifest.
+- **One shared stack instead of one per team.** Runtime, gateways, telemetry and a web console come from one install. They are existing open-source projects behind adapters, on open standards (MCP, A2A, OpenTelemetry).
+
+Read more: [Why OpenAgentix](/guide/why), [Concepts](/guide/concepts), [Use cases](/guide/use-cases), [FAQ](/guide/faq).
+
+## Try it
+
+You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq`, `openssl`, `curl` and `python3`, and Docker with 4 CPU and 8 GB. No model key is needed to start.
+
+```sh
+git clone https://github.com/openagentix/openagentix && cd openagentix
+PROFILE=quickstart ./install.sh                     # no key: a scripted stub model answers
+hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
+```
+
+The installer ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. For real answers, run it again with your key, for example `ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh`, or with any OpenAI-compatible endpoint. Details: [Quick start](./features/quick-start.md).
+
+## Status
+
+- Early project with one maintainer. Last release `v0.2.0` (2026-11-25). The control plane, the console and the quick start came after it and are not yet in a release.
+- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). Not yet tried on k3s, a managed cloud, OpenShift, several nodes or under load.
+- Agents run on kagent with Agent Substrate. Bringing your own A2A agent is planned for 0.3.
+- Not built yet: human approval, identity per agent, budgets in money, a Slack channel proven on a real workspace.
+
+## About this diary
+
+This diary records what was built, how each part was proven, and what is still missing. Read [what works](./what-works.md) before you rely on anything.
 
 ## Component map
 
@@ -66,6 +97,7 @@ Two layers. `install.sh` creates the kind cluster, installs the upstream release
 |---|---|
 | [What works](./what-works.md) | One table: every capability, its state, proof, location and main gap |
 | [Timeline](./timeline.md) | Dated diary of milestones, oldest first |
+| [Quick start](./features/quick-start.md) | One command, no key and no chat token: a governed agent in minutes |
 | [Runtime](./features/runtime.md) | kagent on Agent Substrate, A2A, why not Google AX |
 | [Model gateway](./features/model-gateway.md) | agentgateway, virtual keys, budgets, cost, embedding aliases |
 | [Tools](./features/tools.md) | ToolHive vMCP, code mode, skills, tool-layer identity |

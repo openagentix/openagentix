@@ -1,10 +1,60 @@
 # OpenAgentix
 
-OpenAgentix is a Kubernetes-native platform for running AI agents. It puts existing open-source pieces behind one install: an agent runtime (kagent on Agent Substrate, with gVisor sandboxes), a model gateway (agentgateway), an MCP tool layer (ToolHive with code mode), OCI-packaged skills, and a Telegram bridge that lets people talk to an agent from a phone.
+OpenAgentix is an open-source control plane for running AI agents on Kubernetes under the rules your platform team sets.
 
-This repository is an MVP. It runs on a single-node kind cluster. Read "Known limitations" before you point anything real at it.
+**What you get**
+
+- **No provider keys in agent pods, and cost per agent.** Each agent gets its own key for a model gateway, with a token budget. The gateway records tokens and cost per agent and refuses calls when the budget is used up.
+- **Tools and network closed by default.** An agent sees only the tools in the tool profile you approved. Its sandbox reaches only what its model and tools need, plus hosts you list.
+- **Known callers and a record.** A gate checks who calls an agent and which user they may speak for, and writes one audit line per request. Tool calls are audited too.
+- **Agents as Kubernetes resources.** A short `AgentDefinition` is checked against a platform policy. If it breaks a rule, it is refused with a reason and nothing is created. Keep it in Git and apply it like any manifest.
+- **One shared stack instead of one per team.** Runtime, gateways, telemetry and a web console come from one install. They are existing open-source projects behind adapters, on open standards (MCP, A2A, OpenTelemetry).
+
+```mermaid
+flowchart LR
+  C["Caller: script, schedule, webhook"] --> G["A2A gate: caller rule, audit"]
+  G --> A["Agent in a sandbox"]
+  A -->|"own virtual key, budget"| M["Model gateway"] --> P["Your model, local model or stub"]
+  A -->|"tool profile"| T["Tool gateway (MCP)"] --> S["Tool servers"]
+  A -.->|"egress allowlist"| H["Allowed hosts"]
+  D["AgentDefinition"] --> CP["Control plane + platform policy"] --> A
+  U["Console"] --> CP
+```
+
+**Try it** (needs `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq`, `openssl`, `curl`, `python3`; Docker with 4 CPU and 8 GB):
+
+```sh
+git clone https://github.com/openagentix/openagentix && cd openagentix
+PROFILE=quickstart ./install.sh                     # no key needed: a scripted stub model answers
+hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
+```
+
+The installer ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. `hack/ask.sh` prints the answer and `(answered in Ns through the A2A gate)`. With the stub, the answer says it comes from the stub and names the tool it used. For real answers, run the install again with your key (`ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh`) or any OpenAI-compatible endpoint. Details: [Try it in 10 minutes](#try-it-in-10-minutes).
+
+**Status and limits**
+
+- Early project with one maintainer. Last release `v0.2.0`; the control plane, console and quick start are on `main` and not yet in a release.
+- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). Not yet tried on k3s, a managed cloud, OpenShift, several nodes or under load.
+- Agents run on kagent with Agent Substrate (gVisor sandboxes). Bringing your own A2A agent is planned for 0.3.
+- Not built yet: human approval, identity per agent, budgets in money (budgets are in tokens), a Slack channel proven on a real workspace.
+- Demo-grade parts: development databases, one replica of most services. Read [what works](docs/diary/what-works.md) before you rely on anything.
+
+**Read next:** [Why OpenAgentix](docs/diary/guide/why.md) · [Concepts](docs/diary/guide/concepts.md) · [Use cases](docs/diary/guide/use-cases.md) · [FAQ](docs/diary/guide/faq.md) · [What works](docs/diary/what-works.md) · [Docs site](https://openagentix.github.io/openagentix/) · [Roadmap](docs/roadmap.md)
+
+---
+
+# Reference
+
+Everything below is the detailed reference for each part: how it is packaged, every install option, and every feature with its commands, values and limits. Each feature also has a page in the [feature diary](docs/diary/index.md).
+
+- Getting started: [Architecture](#architecture), [How it is packaged](#how-it-is-packaged), [Try it in 10 minutes](#try-it-in-10-minutes), [Prerequisites](#prerequisites), [Full demo install](#full-demo-install)
+- Features: [Knowledge base](#knowledge-base), [Memory](#memory), [Prompt caching](#prompt-caching), [Channels and triggers](#channels-and-triggers), [Schedules](#schedules), [Notifications](#notifications), [Observability](#observability), [Add an agent](#add-an-agent)
+- Governance: [A2A gate](#a2a-gate-opt-in), [Tool profiles and egress per agent](#tool-profiles-and-egress-per-agent-opt-in), [Control plane and agent builder](#control-plane-and-agent-builder), [Console](#console), [Security](#security)
+- Operations: [Tests](#tests), [Adopting an existing hand-applied install](#adopting-an-existing-hand-applied-install), [Known limitations](#known-limitations), [Repository layout](#repository-layout), [Community](#community), [License](#license)
 
 ## Architecture
+
+This is the full demo with every optional part on. The quick start uses a smaller set (see below).
 
 ```
 Telegram user
@@ -77,7 +127,7 @@ Measured times and what they are made of: `docs/diary/features/quick-start.md`. 
 - Docker needs about 7.5 GB of memory or more (tested with a 7.7 GiB VM). The full stack idles at roughly 2.3 GiB in the node; each agent sandbox adds more. The knowledge base adds about 0.2 GiB working set when idle (see "Knowledge base"); `knowledge.enabled=false` leaves it out.
 - For the full demo below: an Anthropic API key, and a Telegram bot token from @BotFather (the installer asks for a token only when the Telegram bridge is on, and for a provider key only when a gateway model uses it).
 
-## Quickstart (the full demo)
+## Full demo install
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -102,6 +152,8 @@ kubectl run a2a-test --rm -i --restart=Never -n openagentix-gateway --image=curl
 
 Expect `TASK_STATE_COMPLETED` and an answer that says 4. Then message your bot on Telegram.
 
+Note: the controller's NetworkPolicy (`openagentix-kagent-controller`, on by default) admits only named callers on port 8083 (the bridge pod by its label `app=telegram-bridge`, Kourier, schedule pods, the A2A gate when it is on, and `networkPolicy.extraA2ACallers`). The test pod above is none of these, so by reading the chart the call should time out; this was not re-run for this note. Send a test from an admitted caller, list the test namespace in `networkPolicy.extraA2ACallers`, or use the quick start, where `hack/ask.sh` goes through the gate.
+
 To remove OpenAgentix: `./uninstall.sh`. It removes only the `openagentix` Helm release. kind, kagent, Substrate, agentgateway, ToolHive, namespaces and all Secrets stay. `PURGE_SECRETS=1` also deletes the Secrets and the key ConfigMap that `install.sh` created (the knowledge base's database credentials stay); `PURGE_DATA=1` deletes the knowledge base volumes and database credentials.
 
 ## Knowledge base
@@ -118,7 +170,7 @@ The `knowledge` block (default on) deploys a small document store with hybrid se
 
 Agents that set `knowledge: true` (the demo `assistant` does) get the tools `knowledge_kb_search`, `knowledge_kb_get_document` and `knowledge_kb_list_collections` and a short addition to their system prompt: search the knowledge base for questions about OpenAgentix itself and cite document titles. The name is the entry name plus the vMCP prefix (`mcp.virtual.prefixFormat` with `{workload}` = `knowledge.mcp.entryName`) plus the kb's own tool name.
 
-`install.sh` creates four Secrets in `openagentix-knowledge` (five with the knowledge graph on: see below) only when they are absent, so re-runs never rotate them: `kb-admin` (ingest token), `kb-postgres` (database password), `kb-database` (connection URL built from it) and `kb-virtual-key` (the kb's gateway key; its hash is added to `llm-api-keys`). It then ingests `components/knowledge/sample/` into the collection `openagentix`. Try it with the A2A command from the quickstart and the question "What is the OpenAgentix knowledge base canary code?". Expect `HERON-4412-KB-RETRIEVED` and a `knowledge_kb_search` call in the task's tool-call records.
+`install.sh` creates four Secrets in `openagentix-knowledge` (five with the knowledge graph on: see below) only when they are absent, so re-runs never rotate them: `kb-admin` (ingest token), `kb-postgres` (database password), `kb-database` (connection URL built from it) and `kb-virtual-key` (the kb's gateway key; its hash is added to `llm-api-keys`). It then ingests `components/knowledge/sample/` into the collection `openagentix`. Try it with the A2A command from the full demo install and the question "What is the OpenAgentix knowledge base canary code?". Expect `HERON-4412-KB-RETRIEVED` and a `knowledge_kb_search` call in the task's tool-call records.
 
 **Ingest your own documents.** Put markdown files in a directory and run:
 
@@ -391,7 +443,7 @@ The bot that sends is the bridge's bot. Sending (`sendMessage`) and the bridge's
 - The vMCP's Cedar policy is permit-all by default and kagent's identity is per session, not per agent: the per-agent opt-in limits which agents are *offered* the tools, not who can call the vMCP. `mcp.virtual.incomingAuth.toolAccess` can restrict the tool names per atespace.
 - One replica by design: rate limits and idempotency keys live in the process and a restart forgets them. Callers are not told apart, so one agent can use up a destination's budget for the others.
 - A prompt-injected agent can still send a misleading message to an allowed destination; the header tells the reader it was automated, the content is the agent's.
-- Telegram bare domains, e-mail addresses and phone numbers are not touched and may still be tappable (see the service README). I cannot see a Telegram client: "delivered" means Telegram's API accepted the message.
+- Telegram bare domains, e-mail addresses and phone numbers are not touched and may still be tappable (see the service README). The project cannot see a Telegram client: "delivered" means Telegram's API accepted the message.
 
 ## Observability
 
@@ -446,7 +498,7 @@ It reads Jaeger through a port-forward it stops itself, and without Jaeger falls
 
 **Footprint** (kind, 1 arm64 node): requests +144 Mi (VictoriaMetrics 96 Mi request, 256 Mi limit; Jaeger 48 Mi, 192 Mi); measured working set about an hour in: VictoriaMetrics 153 to 156 MB, Jaeger 27 to 34 MB. A 2 Gi volume holds 7 days of metrics. If the node is short of memory, drop Jaeger first: set `observability.bundled.enabled=false` and point `otlp.endpoint` at another backend, or `observability.tracing.enabled=false`.
 
-**Limits.** Traces are in memory (2 000, gone on restart). OTLP from the sandboxes is proven over http/protobuf only. The PodMonitors are rendered and unit-tested but were not run (the demo cluster has no Prometheus operator). Kourier traces and the Telegram path were not exercised live. kb and notify emit nothing yet. No dashboards, no alerts, no per-user view.
+**Limits.** Traces are in memory (2 000, gone on restart). OTLP from the sandboxes is proven over http/protobuf only. The PodMonitors are rendered and unit-tested but were not run (the demo cluster has no Prometheus operator). Kourier traces and the Telegram path were not exercised live. The kb and notify metrics and the local dashboard are built and tested offline, not yet run on the cluster. No alerts, no per-user view.
 
 ## Add an agent
 
@@ -539,7 +591,7 @@ Proven on the kind demo cluster (2026-11-25): a definition became a Ready agent 
 
 ## Console
 
-The console is a web page for the agent builder: an agents registry, a builder whose options follow the policy, a YAML view, pause and delete. Other areas say "not available yet". It is a small Go API with a bearer token and a strict Content-Security-Policy, plus a Svelte app in one image. It needs the control plane and is off by default (`console.enabled`). It has no ingress. The installer creates the token Secret `console-token`; open the console with a port-forward:
+The console is a web page for the agent builder: an agents registry, a builder whose options follow the policy, a YAML view, pause and delete. Overview, Models, Tools, Skills, Memory and Governance show read-only data from the cluster; with the bundled observability on, the Overview and Costs pages show spend and tokens per agent and the Traces page shows recent turns. Areas without a data source say "not available yet". It is a small Go API with a bearer token and a strict Content-Security-Policy, plus a Svelte app in one image. It needs the control plane and is off by default (`console.enabled`). It has no ingress. The installer creates the token Secret `console-token`; open the console with a port-forward:
 
 ```sh
 kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080    # then http://127.0.0.1:8080
@@ -587,7 +639,7 @@ These are the gaps found while building the components. Most are acceptable for 
 - **Gemini** has not produced a real completion in this project (the test key had no credits). The Gemini and failover model entries are examples only.
 - **A kagent-controller start-up race** (two restarts while Substrate's API came up) was seen once and not root-caused.
 - **AX is not part of the install.** `spikes/ax` added Substrate values for Google AX. `install.sh` skips prerequisites that already exist, but `FORCE_PREREQS=1` (or a first install followed by an AX install) re-applies `components/runtime/values/substrate.yaml` and drops those additions. AX also does not provide a way to message a running task, so it is not used here.
-- The cold install was run twice from a deleted kind cluster on one machine (Docker image cache warm). A machine with nothing cached has not been tried.
+- The full demo cold install was run twice from a deleted kind cluster on one machine (Docker image cache warm). A cold install with nothing cached is proven only for the quick start profile, in CI on a hosted runner (`.github/workflows/e2e.yml`).
 
 ## Repository layout
 
@@ -599,8 +651,14 @@ services/kb/                    Go knowledge base service (tests, Dockerfile, re
 services/notify/                Go notify service: agents deliver a result to a named chat (tests, Dockerfile, reference manifests in deploy/)
 services/control-plane/         Go controller for AgentDefinition (core, kagent, gateway and ToolHive adapters, admission guard tests)
 services/console/               Go API of the web console, with the built app embedded
+services/a2a-gate/              Go A2A gate: caller authentication, caller rules, audit lines
+services/stub-model/            Go scripted stub model for the keyless quick start
 console/                        SvelteKit single-page app of the console
 components/control-plane/       demo values and an example AgentDefinition
+components/quickstart/          the quick start profile (values.yaml), its AgentDefinition, model choice (model.sh) and offline tests
+components/governance/          demo values for the A2A gate, tool profiles and memory governance
+hack/ask.sh                     ask an agent one question through the A2A gate, no chat app
+hack/ci/                        CI scripts, the quick start smoke test (smoke.sh) and the admission guard tests
 components/console/             demo values for the console
 components/knowledge/sample/    sample corpus install.sh ingests
 hack/kb-ingest.sh               ingest a directory of markdown into a kb collection
@@ -636,4 +694,4 @@ OpenAgentix is Apache-2.0 and open to contributions. It is a young project with 
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE). This repository is the open core of OpenAgentix.
+Apache License 2.0. See [LICENSE](LICENSE).
