@@ -54,6 +54,9 @@ type Spec struct {
 	Skills       []Skill  `json:"skills,omitempty"`
 	Egress       *Egress  `json:"egress,omitempty"`
 	Suspend      bool     `json:"suspend,omitempty"`
+	// Runtime (ADR 0015) is carried through untouched, so that an update made in the console never drops a container agent's
+	// image. The console shows its type and does not edit it: container agents are created with kubectl (issue #107).
+	Runtime map[string]any `json:"runtime,omitempty"`
 }
 
 type Condition struct {
@@ -108,17 +111,20 @@ const (
 
 // Agent is one row of the registry and the head of the detail.
 type Agent struct {
-	Name        string   `json:"name"`
-	Namespace   string   `json:"namespace"`
-	Source      string   `json:"source"` // built | chart
-	Description string   `json:"description"`
-	Model       string   `json:"model"`
-	ToolProfile string   `json:"toolProfile"`
-	ToolsCount  int      `json:"toolsCount"`
-	Knowledge   bool     `json:"knowledge"`
-	Notify      bool     `json:"notify"`
-	Memory      *Memory  `json:"memory,omitempty"`
-	Suspended   bool     `json:"suspended"`
+	Name        string  `json:"name"`
+	Namespace   string  `json:"namespace"`
+	Source      string  `json:"source"` // built | chart
+	Description string  `json:"description"`
+	Model       string  `json:"model"`
+	ToolProfile string  `json:"toolProfile"`
+	ToolsCount  int     `json:"toolsCount"`
+	Knowledge   bool    `json:"knowledge"`
+	Notify      bool    `json:"notify"`
+	Memory      *Memory `json:"memory,omitempty"`
+	Suspended   bool    `json:"suspended"`
+	// RuntimeType is builtin or container; Isolation is status.capabilities.isolation (container, sandboxed-pod), empty when unknown.
+	RuntimeType string   `json:"runtimeType"`
+	Isolation   string   `json:"isolation,omitempty"`
 	Team        string   `json:"team,omitempty"`
 	Project     string   `json:"project,omitempty"`
 	Skills      []string `json:"skills"`
