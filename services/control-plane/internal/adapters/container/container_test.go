@@ -225,7 +225,7 @@ func TestNoKeyOutsideTheDocumentedSet(t *testing.T) {
 	}
 	deploySpec := []string{"replicas", "selector", "template"}
 	podSpec := []string{"serviceAccountName", "automountServiceAccountToken", "enableServiceLinks", "securityContext", "containers", "volumes", "runtimeClassName"}
-	container := []string{"name", "image", "ports", "env", "resources", "securityContext", "volumeMounts", "readinessProbe", "livenessProbe"}
+	container := []string{"name", "image", "imagePullPolicy", "ports", "env", "resources", "securityContext", "volumeMounts", "readinessProbe", "livenessProbe"}
 	in := func(k string, l []string) bool {
 		for _, x := range l {
 			if x == k {

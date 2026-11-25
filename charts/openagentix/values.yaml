@@ -528,6 +528,9 @@ controlPlane:
     runtimeClassName: ""                # optional RuntimeClass (for example gVisor's "gvisor"); isolation then reports "sandboxed-pod"
     publicUrl: ""                       # how clients reach the gate (used in rewritten agent cards); empty = the gate's in-cluster Service URL
     gatewayPodPort: 0                   # the model gateway pods' port for the NetworkPolicy; 0 = gateway.port
+    # When the node pulls the image: Always (the default) checks the registry on every start, so a digest that is only cached on a node
+    # is not enough to run an image there. IfNotPresent is for the quick start, whose image exists only on the node (components/quickstart/byo-values.yaml).
+    imagePullPolicy: Always
   # What kagent uses as the lifetime of a saved memory when a definition sets none (kagent default 15). The controller needs it to check
   # `ttlDays` against policy.memory.maxTtlDays.
   memoryDefaultTtlDays: 15

@@ -99,6 +99,12 @@ func (c *Catalog) validateRuntimes() []error {
 	if k.DNSNamespace == "" {
 		k.DNSNamespace = "kube-system"
 	}
+	if k.ImagePullPolicy == "" {
+		k.ImagePullPolicy = "Always"
+	}
+	if k.ImagePullPolicy != "Always" && k.ImagePullPolicy != "IfNotPresent" {
+		errs = append(errs, errors.New("runtime.container.imagePullPolicy must be Always or IfNotPresent"))
+	}
 	k.WorkloadPort = WorkloadServicePort
 	// foreign code never shares a namespace with a platform component
 	for _, n := range []struct{ what, name string }{{"agents", c.Namespaces.Agents}, {"gateway", c.Namespaces.Gateway}, {"tools", c.Namespaces.Tools}, {"gate", k.GateNamespace}, {"model gateway", k.GatewayNamespace}, {"DNS", k.DNSNamespace}} {

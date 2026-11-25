@@ -106,6 +106,10 @@ spec:
         request.operation == 'DELETE' || (
           variables.cur.spec.all(k, k in ['type', 'selector', 'ports', 'clusterIP', 'clusterIPs', 'ipFamilies', 'ipFamilyPolicy', 'internalTrafficPolicy', 'sessionAffinity']) &&
           variables.cur.spec.type == 'ClusterIP' &&
+          (!has(variables.cur.spec.clusterIP) || variables.cur.spec.clusterIP != 'None') &&
+          (!has(variables.cur.spec.clusterIPs) || !('None' in variables.cur.spec.clusterIPs)) &&
+          (!has(variables.cur.spec.sessionAffinity) || variables.cur.spec.sessionAffinity == 'None') &&
+          (!has(variables.cur.spec.internalTrafficPolicy) || variables.cur.spec.internalTrafficPolicy == 'Cluster') &&
           variables.cur.spec.selector == dyn({'openagentix.io/agent': variables.agent}) &&
           size(variables.cur.spec.ports) == 1 &&
           variables.cur.spec.ports.all(p, p.all(k, k in ['name', 'port', 'protocol', 'targetPort']) && p.port == 8080 && (!has(p.protocol) || p.protocol == 'TCP') &&
@@ -135,6 +139,8 @@ spec:
         request.operation == 'DELETE' || (
           variables.cur.spec.all(k, k in ['replicas', 'selector', 'template', 'strategy', 'revisionHistoryLimit', 'progressDeadlineSeconds', 'minReadySeconds']) &&
           variables.cur.spec.replicas in [0, 1] &&
+          (!has(variables.cur.spec.strategy) || (variables.cur.spec.strategy.all(k, k in ['type', 'rollingUpdate']) && variables.cur.spec.strategy.type == 'RollingUpdate' &&
+            (!has(variables.cur.spec.strategy.rollingUpdate) || variables.cur.spec.strategy.rollingUpdate == dyn({'maxSurge': '25%', 'maxUnavailable': '25%'})))) &&
           variables.cur.spec.selector == dyn({'matchLabels': {'openagentix.io/agent': variables.agent}}) &&
           variables.cur.spec.template.all(k, k in ['metadata', 'spec']) &&
           variables.cur.spec.template.metadata.all(k, k in ['labels', 'annotations', 'creationTimestamp']) &&
@@ -146,6 +152,8 @@ spec:
       expression: |-
         request.operation == 'DELETE' || (
           variables.cur.spec.template.spec.all(k, k in ['serviceAccountName', 'serviceAccount', 'automountServiceAccountToken', 'enableServiceLinks', 'securityContext', 'containers', 'volumes', 'runtimeClassName', 'restartPolicy', 'terminationGracePeriodSeconds', 'dnsPolicy', 'schedulerName']) &&
+          (!has(variables.cur.spec.template.spec.schedulerName) || variables.cur.spec.template.spec.schedulerName == 'default-scheduler') &&
+          (!has(variables.cur.spec.template.spec.terminationGracePeriodSeconds) || variables.cur.spec.template.spec.terminationGracePeriodSeconds == 30) &&
           variables.cur.spec.template.spec.serviceAccountName == variables.agent &&
           (!has(variables.cur.spec.template.spec.serviceAccount) || variables.cur.spec.template.spec.serviceAccount == variables.agent) &&
           has(variables.cur.spec.template.spec.automountServiceAccountToken) && variables.cur.spec.template.spec.automountServiceAccountToken == false &&
@@ -164,6 +172,9 @@ spec:
           variables.cur.spec.template.spec.containers.all(c,
             c.all(k, k in ['name', 'image', 'ports', 'env', 'resources', 'securityContext', 'volumeMounts', 'readinessProbe', 'livenessProbe', 'imagePullPolicy', 'terminationMessagePath', 'terminationMessagePolicy']) &&
             c.name == 'agent' &&
+            has(c.imagePullPolicy) && c.imagePullPolicy == {{ $ck.imagePullPolicy | default "Always" | toJson }} &&
+            (!has(c.terminationMessagePath) || c.terminationMessagePath == '/dev/termination-log') &&
+            (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy == 'File') &&
             c.image.matches('^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$') &&
             {{ toJson $prefixes }}.exists(p, c.image.startsWith(p)) &&
             c.securityContext.all(k, k in ['allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities']) &&
@@ -198,7 +209,8 @@ spec:
           variables.cur.spec.template.spec.volumes[0].emptyDir.all(k, k == 'sizeLimit') && variables.cur.spec.template.spec.volumes[0].emptyDir.sizeLimit == '256Mi' &&
           variables.cur.spec.template.spec.containers.all(c, c.volumeMounts == dyn([{'name': 'tmp', 'mountPath': '/tmp'}]) &&
             ['readinessProbe', 'livenessProbe'].all(pn, !(pn in c) || (c[pn].all(k, k in ['httpGet', 'periodSeconds', 'failureThreshold', 'timeoutSeconds', 'successThreshold', 'initialDelaySeconds']) &&
-              has(c[pn].httpGet) && c[pn].httpGet.all(k, k in ['path', 'port', 'scheme']) && c[pn].httpGet.path == '/.well-known/agent-card.json' && type(c[pn].httpGet.port) == int))))
+              has(c[pn].httpGet) && c[pn].httpGet.all(k, k in ['path', 'port', 'scheme']) && c[pn].httpGet.path == '/.well-known/agent-card.json' && type(c[pn].httpGet.port) == int &&
+              (!has(c[pn].httpGet.scheme) || c[pn].httpGet.scheme == 'HTTP') && (!has(c[pn].timeoutSeconds) || c[pn].timeoutSeconds == 1)))))
 {{- end }}
 ---
 apiVersion: admissionregistration.k8s.io/v1

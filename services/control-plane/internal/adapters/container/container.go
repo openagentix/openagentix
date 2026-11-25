@@ -138,13 +138,17 @@ func (a *Adapter) Desired(p plan.Plan) ([]kube.Manifest, error) {
 	if p.Suspended {
 		replicas = 0
 	}
+	pull := k.ImagePullPolicy
+	if pull == "" {
+		pull = "Always"
+	}
 	tmpl := m{
 		"metadata": m{"labels": sel(map[string]string{AgentLabel: p.Name})},
 		"spec": m{
 			"serviceAccountName": p.Name, "automountServiceAccountToken": false, "enableServiceLinks": false,
 			"securityContext": m{"runAsNonRoot": true, "runAsUser": runAsID, "runAsGroup": runAsID, "seccompProfile": m{"type": "RuntimeDefault"}},
 			"containers": []any{m{
-				"name": "agent", "image": c.Image,
+				"name": "agent", "image": c.Image, "imagePullPolicy": pull,
 				"ports":           []any{m{"name": "a2a", "containerPort": c.Port, "protocol": "TCP"}},
 				"env":             env,
 				"resources":       m{"requests": quantities(c.Resources.Requests), "limits": quantities(c.Resources.Limits)},
