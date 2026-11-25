@@ -256,7 +256,8 @@ Tools (ADR 0019): a container agent may name a `toolProfile` that the catalog op
 from the chart value `controlPlane.containerAgents.toolProfiles`). The pod then gets `OPENAGENTIX_MCP_URL` (the profile's workload tool
 server), `OPENAGENTIX_MCP_TOKEN_FILE=/var/run/secrets/openagentix/mcp/token` (a projected ServiceAccount token with the profile's
 audience, one hour, written and refreshed by the kubelet; no Secret, and `automountServiceAccountToken` stays false), the pod label
-`openagentix.io/tool-profile: <profile>`, and a third egress rule to that server's pods and port. `requireToolProfile` does not apply
+`openagentix.io/tool-profile: <profile>`, and a third egress rule to that server's pods and port. The workload tool server admits only pod-bound tokens of the workload namespace, and the chart's
+admission policies `openagentix-workload-tool-identity` and `-token-request` keep such tokens there to the controller's pods. `requireToolProfile` does not apply
 to container agents: without a profile there are no tools. The agent gets every tool of the profile; `tools` stays refused.
 
 What the controller writes, in the workload namespace: ServiceAccount, Deployment, Service, NetworkPolicy (same name as the agent; the pod,

@@ -132,6 +132,8 @@ func (w *WorkloadAccess) validate(prefix, toolsNS string) []error {
 	var errs []error
 	if u, err := url.Parse(w.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		errs = append(errs, fmt.Errorf("%s.url must be an http or https URL with a host and no user", prefix))
+	} else if h := u.Hostname(); toolsNS == "" || !(strings.HasSuffix(h, "."+toolsNS+".svc.cluster.local") || strings.HasSuffix(h, "."+toolsNS+".svc")) {
+		errs = append(errs, fmt.Errorf("%s.url must name a Service of the tools namespace (<name>.%s.svc[.cluster.local])", prefix, toolsNS))
 	}
 	if !audienceRE.MatchString(w.Audience) {
 		errs = append(errs, fmt.Errorf("%s.audience must be lower case letters, digits, dots and dashes", prefix))

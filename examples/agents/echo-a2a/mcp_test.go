@@ -113,10 +113,21 @@ func TestToolsRefusedByTheServerSaysSoWithoutTheToken(t *testing.T) {
 	mcp := newFakeMCP(t)
 	mcp.status = 403
 	env := map[string]string{"OPENAGENTIX_MCP_URL": mcp.srv.URL + "/mcp", "OPENAGENTIX_MCP_TOKEN_FILE": tokenFile(t, "secret-token")}
-	_, m, raw := rpc(t, newServer(envOf(env), nil, io.Discard).Handler(), sendBody("/tools"))
-	if errCode(m) != -32000 || !strings.Contains(raw, "tool server returned status 403") || strings.Contains(raw, "secret-token") {
+	var logs strings.Builder
+	_, m, raw := rpc(t, newServer(envOf(env), nil, &logs).Handler(), sendBody("/tools"))
+	// the caller gets a fixed sentence; the detail goes to the agent's own log only
+	if errCode(m) != -32000 || errMsg(m) != "tool list failed" || strings.Contains(raw, "403") || strings.Contains(raw, "secret-token") {
 		t.Fatalf("%s", raw)
 	}
+	if !strings.Contains(logs.String(), "tool server returned status 403") || strings.Contains(logs.String(), "secret-token") {
+		t.Fatalf("log: %q", logs.String())
+	}
+}
+
+func errMsg(m map[string]any) string {
+	e, _ := m["error"].(map[string]any)
+	s, _ := e["message"].(string)
+	return s
 }
 
 func replyText(m map[string]any) string {

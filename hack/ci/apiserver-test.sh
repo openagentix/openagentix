@@ -364,7 +364,7 @@ refused "the route list may not hold a URL" "namespace/name entries" asctl -n "$
 # ---- tools for container agents (ADR 0019): the profile lookup opened; the guard then admits the token, the label, the env and the third rule ----
 echo "# tools for container agents: the workload guard with an opened profile (server-side dry run as the controller)"
 helm "${CARGS[@]}" --set 'controlPlane.containerAgents.toolProfiles={lookup}' | yq -c 'select(.!=null)' > "$TMP/render-tp.jsonl"
-jq -c 'select((.kind=="ValidatingAdmissionPolicy" or .kind=="ValidatingAdmissionPolicyBinding") and (.metadata.name|startswith("openagentix-control-plane-guard-workload")))' "$TMP/render-tp.jsonl" > "$TMP/policies-tp.jsonl"
+jq -c 'select((.kind=="ValidatingAdmissionPolicy" or .kind=="ValidatingAdmissionPolicyBinding") and ((.metadata.name|startswith("openagentix-control-plane-guard-workload")) or .metadata.name=="openagentix-workload-tool-identity" or .metadata.name=="openagentix-workload-token-request"))' "$TMP/render-tp.jsonl" > "$TMP/policies-tp.jsonl"
 allowed "the workload policies with an opened profile are accepted with server-side validation" bash -c "kubectl apply --server-side --force-conflicts --validate=strict -f - < '$TMP/policies-tp.jsonl'"
 for p in openagentix-control-plane-guard-workload-deployments openagentix-control-plane-guard-workload-networkpolicies; do
   j=""
@@ -400,6 +400,28 @@ tp_refused "a profile label that is not opened is refused" "selects only this ag
 tp_refused "another tool URL is refused" "the tool URL and token file of the labelled profile" '(.spec.template.spec.containers[0].env[]|select(.name=="OPENAGENTIX_MCP_URL")|.value)="http://vmcp-tools.mcp-tools.svc.cluster.local:4483/mcp"'
 jq -c '.spec.egress[2].to[0].podSelector.matchLabels["toolhive-name"]="tools-lookup"' "$TMP/tp-NetworkPolicy.json" > "$TMP/tp-np-bad.json"
 refused "egress to the profile's server for Substrate agents is refused" "the workload tool server of one opened profile" asctl create --dry-run=server -f "$TMP/tp-np-bad.json"
+# every other user, the cluster admin running this test included: no tool label, no projected token, no token request in the workload namespace
+echo "# tools for container agents: the tool identity stays with the controller's pods (as the cluster admin)"
+for p in openagentix-workload-tool-identity openagentix-workload-token-request; do
+  j=$(kubectl get validatingadmissionpolicy "$p" -o json 2>/dev/null)
+  w=$(jq -c '[.status.typeChecking.expressionWarnings[]?|{fieldRef,warning}]' <<<"${j:-{\}}")
+  [ "$w" = "[]" ] && ok "$p: no type-checking warning" || bad "$p: type-checking warnings" "$w"
+done
+jq -c '{apiVersion:"v1",kind:"Pod",metadata:(.spec.template.metadata+{name:"probe",namespace:"'$WNS'"}),spec:(.spec.template.spec|.serviceAccountName="default")}' "$TMP/ca-Deployment.json" > "$TMP/pod-plain.json"
+jq -c '{apiVersion:"v1",kind:"Pod",metadata:(.spec.template.metadata+{name:"probe",namespace:"'$WNS'"}),spec:(.spec.template.spec|.serviceAccountName="default")}' "$TMP/tp-Deployment.json" > "$TMP/pod-tool.json"
+probe=""
+for _ in $(seq 1 60); do
+  probe=$(kubectl create --dry-run=server -f "$TMP/pod-tool.json" 2>&1) || { grep -qF "only the control plane may" <<<"$probe" && { probe=""; break; }; }
+  sleep 1
+done
+[ -z "$probe" ] && ok "the admin may not create a pod with the controller's tool pod spec (label and token)" || bad "the admin may not create a pod with the controller's tool pod spec" "$(printf '%s' "$probe" | head -3 | cut -c1-300)"
+allowed "the admin may still create a plain pod there" kubectl create --dry-run=server -f "$TMP/pod-plain.json"
+jq -c 'del(.metadata.labels["openagentix.io/tool-profile"])' "$TMP/pod-tool.json" > "$TMP/pod-token.json"
+refused "the admin may not create a pod with only a projected token" "only the control plane may give a pod a projected ServiceAccount token" kubectl create --dry-run=server -f "$TMP/pod-token.json"
+jq -c '{apiVersion:"batch/v1",kind:"Job",metadata:{name:"probe",namespace:"'$WNS'"},spec:{template:(.spec.template|.spec.restartPolicy="Never"|.spec.serviceAccountName="default"|del(.metadata.labels["openagentix.io/tool-profile"]))}}' "$TMP/tp-Deployment.json" > "$TMP/job-token.json"
+refused "the admin may not create a Job with a projected token" "only the control plane may give a pod a projected ServiceAccount token" kubectl create --dry-run=server -f "$TMP/job-token.json"
+kubectl create serviceaccount probe -n "$WNS" >/dev/null
+refused "the admin may not request a token in the workload namespace" "only the kubelet may request a ServiceAccount token" kubectl create token probe -n "$WNS" --audience openagentix-vmcp-lookup-workload
 
 echo
 echo "apiserver-test: passed=$PASS failed=$FAIL"

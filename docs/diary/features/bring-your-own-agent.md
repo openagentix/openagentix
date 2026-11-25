@@ -53,7 +53,7 @@ Not shown: the image build and a run on a cluster (see the README of the sample)
 
 ## Tools through a tool profile (slice 3)
 
-ADR 0019. The operator opens a profile to container agents by name: `controlPlane.containerAgents.toolProfiles: [lookup]`. The chart then renders a second tool server for that profile, `tools-lookup-workload`, with the same tools. It accepts only a Kubernetes ServiceAccount token with the audience `openagentix-vmcp-lookup-workload`, and its policy admits only subjects of the workload namespace.
+ADR 0019. The operator opens a profile to container agents by name: `controlPlane.containerAgents.toolProfiles: [lookup]`. The chart then renders a second tool server for that profile, `tools-lookup-workload`, with the same tools. It accepts only a Kubernetes ServiceAccount token with the audience `openagentix-vmcp-lookup-workload`, and its policy admits only tokens that the kubelet made for a pod of the workload namespace.
 
 ```mermaid
 flowchart LR
@@ -64,9 +64,11 @@ flowchart LR
 
 A definition with `toolProfile: lookup` gets, in its pod: `OPENAGENTIX_MCP_URL`, `OPENAGENTIX_MCP_TOKEN_FILE` (the kubelet writes and replaces the token; there is no Secret and the controller reads nothing), the label `openagentix.io/tool-profile: lookup`, and one more egress rule to that server. The agent gets every tool of the profile. `tools` stays refused, so make a narrower profile if you need fewer tools. The admission guard pins the label, the token (audience, path, at most one hour, read-only), the two variables and the egress rule to an opened profile.
 
-Limits, plainly: any pod in the cluster can ask for a token with this audience for its own ServiceAccount, so the namespace rule in the server's policy is what keeps other namespaces out, and only the controller can create pods in the workload namespace. The network rule is a second layer only where the cluster enforces NetworkPolicy. One more pod per opened profile.
+Two admission policies cover the workload namespace for every user except the controller and the cluster's own controllers, a cluster admin included: no pod or pod template there may carry the tool-profile label or a projected ServiceAccount token, and only the kubelet may request a token there.
 
-Try it in the quick start (`QUICKSTART_BYO=1`): the profile `lookup` is open and the sample has `toolProfile: lookup`. `hack/ask.sh echo-go /tools` answers `tools: osv_query_vulnerability`.
+Limits, plainly: any pod in the cluster can ask for a token with this audience for its own ServiceAccount, so the namespace rule in the server's policy is what keeps other namespaces out. A token is not revoked when the agent is removed; it stays valid until it expires (at most one hour). Where NetworkPolicy is not enforced, a token that leaves the pod can be used from elsewhere until then; the network rule is a second layer only where the cluster enforces NetworkPolicy. All agents on one profile look the same to the server. One more pod per opened profile.
+
+Try it in the quick start (`QUICKSTART_BYO=1`): the profile `lookup` is open and the sample has `toolProfile: lookup`. `hack/ask.sh echo-go /tools` is expected to answer `tools: osv_query_vulnerability`; what the end-to-end job showed is in [What works](../what-works.md).
 
 What was run: see the row in [What works](../what-works.md).
 

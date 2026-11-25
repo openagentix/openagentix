@@ -157,3 +157,70 @@ func TestContainerGuardWithoutOpenProfilesRefusesToolPieces(t *testing.T) {
 	}
 	runCases(t, e, cases)
 }
+
+// The two policies that keep a tool identity in the workload namespace to the controller's pods: every other user (a cluster admin
+// included) is refused a pod or pod template with the tool-profile label or a projected ServiceAccount token, and a token request.
+func TestWorkloadToolIdentityIsTheControllersOnly(t *testing.T) {
+	r := render(t, toolSets...)
+	e, err := newEngine(r.Policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs := containerObjectsFrom(t, r, objsTool)
+	tmpl := deepCopy(objs["Deployment"]["spec"].(m)["template"].(m))
+	plainTmpl := deepCopy(containerObjects(t, r)["Deployment"]["spec"].(m)["template"].(m))
+	const admin = "kubernetes-admin"
+	pod := func(t m) m {
+		p := deepCopy(t)
+		p["apiVersion"], p["kind"] = "v1", "Pod"
+		p["metadata"].(m)["name"] = "x"
+		return p
+	}
+	withLabelOnly := func() m {
+		t := deepCopy(plainTmpl)
+		t["metadata"].(m)["labels"].(m)["openagentix.io/tool-profile"] = "lookup"
+		return t
+	}
+	withTokenOnly := func() m {
+		t := deepCopy(plainTmpl)
+		sp := t["spec"].(m)
+		sp["volumes"] = append(sp["volumes"].([]any), deepCopy(tmpl["spec"].(m)["volumes"].([]any)[1].(m)))
+		return t
+	}
+	owner := func(kind string, t m) m {
+		return m{"apiVersion": "apps/v1", "kind": kind, "metadata": m{"name": "x", "namespace": wns}, "spec": m{"selector": m{"matchLabels": m{"a": "b"}}, "template": t}}
+	}
+	req := func(name, user, group, res, op, ns string, obj, old m, ok bool) expectation {
+		return expectation{allow: ok, req: request{Name: name, User: user, Op: op, Group: group, Resource: res, Namespace: ns, ObjName: "x", Object: obj, Old: old}}
+	}
+	cron := m{"apiVersion": "batch/v1", "kind": "CronJob", "metadata": m{"name": "x"}, "spec": m{"schedule": "* * * * *", "jobTemplate": m{"spec": m{"template": withTokenOnly()}}}}
+	tokenReq := m{"apiVersion": "authentication.k8s.io/v1", "kind": "TokenRequest", "spec": m{"audiences": []any{toolAud}}}
+	cases := []expectation{
+		req("allow an admin's plain pod in the workload namespace", admin, "", "pods", "CREATE", wns, pod(plainTmpl), nil, allow),
+		req("deny an admin's pod with the tool-profile label", admin, "", "pods", "CREATE", wns, pod(withLabelOnly()), nil, deny),
+		req("deny an admin's pod with a projected token", admin, "", "pods", "CREATE", wns, pod(withTokenOnly()), nil, deny),
+		req("deny an admin adding the label to a running pod", admin, "", "pods", "UPDATE", wns, pod(withLabelOnly()), pod(plainTmpl), deny),
+		req("deny an admin's Deployment with the controller's tool pod template", admin, "apps", "deployments", "CREATE", wns, owner("Deployment", deepCopy(tmpl)), nil, deny),
+		req("deny an admin's ReplicaSet with a projected token", admin, "apps", "replicasets", "CREATE", wns, owner("ReplicaSet", withTokenOnly()), nil, deny),
+		req("deny an admin's StatefulSet with the label", admin, "apps", "statefulsets", "CREATE", wns, owner("StatefulSet", withLabelOnly()), nil, deny),
+		req("deny an admin's DaemonSet with a projected token", admin, "apps", "daemonsets", "CREATE", wns, owner("DaemonSet", withTokenOnly()), nil, deny),
+		req("deny an admin's Job with a projected token", admin, "batch", "jobs", "CREATE", wns, owner("Job", withTokenOnly()), nil, deny),
+		req("deny an admin's CronJob with a projected token", admin, "batch", "cronjobs", "CREATE", wns, cron, nil, deny),
+		req("deny a token request in the workload namespace by an admin", admin, "", "serviceaccounts", "CREATE", wns, tokenReq, nil, deny),
+		req("deny a token request in the workload namespace by the control plane", wlControl, "", "serviceaccounts", "CREATE", wns, tokenReq, nil, deny),
+		// what stays allowed
+		req("allow the ReplicaSet controller to make the controller's pod", "system:serviceaccount:kube-system:replicaset-controller", "", "pods", "CREATE", wns, pod(deepCopy(tmpl)), nil, allow),
+		req("allow the kubelet to request the pod's token", "system:node:kind-control-plane", "", "serviceaccounts", "CREATE", wns, tokenReq, nil, allow),
+		req("allow a pod with a projected token in another namespace", admin, "", "pods", "CREATE", "default", pod(withTokenOnly()), nil, allow),
+		req("allow a token request in another namespace", admin, "", "serviceaccounts", "CREATE", "default", tokenReq, nil, allow),
+	}
+	for i := range cases {
+		if cases[i].req.Resource == "serviceaccounts" {
+			cases[i].req.Sub = "token"
+		}
+	}
+	// the controller's own Deployment with a profile is judged by the workload guard only, and allowed
+	cases = append(cases, wl("allow the controller's Deployment with a tool profile", "Deployment", "CREATE", deepCopy(objs["Deployment"]), nil, allow))
+	allowedN, deniedN := runCases(t, e, cases)
+	t.Logf("tool identity: %d cases (%d allowed, %d refused)", len(cases), allowedN, deniedN)
+}

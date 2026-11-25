@@ -151,34 +151,40 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
          $K logs -n "$WNS" -l openagentix.io/agent=echo-go --tail=10 2>&1 | cut -c1-300 | sed 's/^/      echo-go log: /'; }
   # The identity, from outside: the port-forward goes around network policy on purpose, so only the token decides here.
   VPF=$((20000 + RANDOM % 20000)); $K port-forward -n mcp-tools svc/vmcp-tools-lookup-workload "$VPF:4483" >/dev/null 2>&1 & VPID=$!; sleep 3
-  mcp_init() { # mcp_init <token>: the HTTP status of an MCP initialize
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-      -X POST -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null
-  }
-  TK=$($K create token echo-go -n "$WNS" --audience openagentix-vmcp-lookup-workload --duration 10m 2>/dev/null)
-  check "a token of the agent's ServiceAccount with the profile's audience is accepted" "$(mcp_init "$TK")" 200
-  TK=$($K create token echo-go -n "$WNS" --audience openagentix-vmcp-lookup --duration 10m 2>/dev/null)
-  R=$(mcp_init "$TK")
-  case "$R" in 401|403) ok "the same ServiceAccount with another audience is refused (HTTP $R)";; *) bad "the same ServiceAccount with another audience is not refused" "HTTP $R";; esac
-  TK=$($K create token quickstart-ask -n openagentix-system --audience openagentix-vmcp-lookup-workload --duration 10m 2>/dev/null)
-  R=$(mcp_init "$TK"); echo "      a ServiceAccount of another namespace, right audience: HTTP $R"
-  # initialize may pass (Cedar judges list and call); what it may not do is list or call a tool
-  if [ "$R" = 200 ] || [ "$R" = 202 ]; then
-    SID=$(curl -sS -D - -o /dev/null --max-time 10 -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
-      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
-    curl -sS -o /dev/null --max-time 10 -H "Authorization: Bearer $TK" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
-      -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null
-    OUT=$(curl -sS --max-time 10 -H "Authorization: Bearer $TK" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
-      -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"osv_query_vulnerability","arguments":{"package_name":"lodash","ecosystem":"npm","version":"4.17.15"}}}' "http://127.0.0.1:$VPF/mcp" 2>&1 | cut -c1-300)
-    echo "      its tools/call: $OUT"
-    if grep -q '"result"' <<<"$OUT" && ! grep -qi 'unauthori\|forbidden\|denied\|"isError":true' <<<"$OUT"; then
-      bad "a ServiceAccount of another namespace could call a tool" "$OUT"
-    else
-      ok "a ServiceAccount of another namespace cannot call a tool"
+  # The positive control of this flow is the /tools answer above: the agent ran the same initialize, initialized and tools/list with its
+  # own pod-bound token. A token for a ServiceAccount of the workload namespace cannot be made from outside (admission refuses it).
+  OUT=$($K create token echo-go -n "$WNS" --audience openagentix-vmcp-lookup-workload --duration 10m 2>&1 >/dev/null); RC=$?
+  if [ "$RC" != 0 ] && grep -q 'only the kubelet may request a ServiceAccount token' <<<"$OUT"; then ok "a token for the agent's ServiceAccount cannot be requested from outside, not even by the cluster admin"
+  else bad "a token for the agent's ServiceAccount could be requested from outside" "exit $RC: $(printf '%s' "$OUT" | cut -c1-200)"; fi
+  mcp_list() { # mcp_list <token>: "<initialize status>|<session id>|<tools/list status>|<tools/list body>"
+    local h st sid ls body
+    h=$(mktemp)
+    st=$(curl -sS -D "$h" -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null)
+    sid=$(tr -d '\r' < "$h" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}'); rm -f "$h"
+    if [ -n "$sid" ]; then
+      curl -sS -o /dev/null --max-time 10 -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+        -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null
+      body=$(curl -sS -w '\n%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null)
+      ls=$(tail -n1 <<<"$body"); body=$(sed '$d' <<<"$body" | tr '\n' ' ' | cut -c1-400)
     fi
-  else
-    ok "a ServiceAccount of another namespace is refused (HTTP $R)"
-  fi
+    printf '%s|%s|%s|%s' "$st" "$sid" "${ls:-}" "${body:-}"
+  }
+  denied() { # denied <desc> <mcp_list output>: an explicit refusal, or a list without the profile's tool
+    local st sid ls body; IFS='|' read -r st sid ls body <<<"$2"
+    echo "      $1: initialize HTTP $st, session ${sid:+set}${sid:-EMPTY}, tools/list HTTP ${ls:--}: $(printf '%s' "$body" | cut -c1-200)"
+    case "$st" in 401|403) ok "$1: refused at initialize (HTTP $st)"; return;; esac
+    if [ -z "$sid" ]; then bad "$1: no session id, so the check cannot judge" "initialize HTTP $st"; return; fi
+    case "$ls" in 401|403) ok "$1: tools/list refused (HTTP $ls)"; return;; esac
+    if grep -q 'osv_query_vulnerability' <<<"$body"; then bad "$1: the profile's tool was listed" "$body"
+    elif grep -q '"error"' <<<"$body" || grep -Eq '"tools": ?\[\]' <<<"$body"; then ok "$1: tools/list gave an authorization error or an empty list"
+    else bad "$1: no explicit refusal" "$body"; fi
+  }
+  TK=$($K create token quickstart-ask -n openagentix-system --audience openagentix-vmcp-lookup-workload --duration 10m 2>/dev/null)
+  denied "a ServiceAccount of another namespace with the profile's audience" "$(mcp_list "$TK")"
+  TK=$($K create token quickstart-ask -n openagentix-system --audience openagentix-vmcp-lookup --duration 10m 2>/dev/null)
+  denied "a token with another audience" "$(mcp_list "$TK")"
   kill $VPID 2>/dev/null; unset TK
   echo "# 6b. a container agent that policy must refuse"
   GOODREF=$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.spec.runtime.container.image}')

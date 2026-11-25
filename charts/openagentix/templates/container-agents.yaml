@@ -117,4 +117,84 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}-routes}
 subjects:
   - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $cpns }}}
+{{- if include "oa.caToolProfiles" . | fromJsonArray }}
+{{- /* Tools for container agents (ADR 0019): the workload tool servers admit pod-bound ServiceAccount tokens of the workload namespace. These two
+policies limit who can make such a token there, for EVERY user (cluster admins included) except the controller, whose own writes the workload guard
+judges, and the cluster's controllers in kube-system, which only copy templates that were judged here. */}}
+{{- $ctrl := printf "system:serviceaccount:%s:%s" $cpns $sa }}
+---
+# No pod and no pod template in the workload namespace may carry a projected ServiceAccount token or the tool-profile label, unless the
+# controller wrote it. Covers every kind that makes pods (a Job, a StatefulSet or a bare Pod would otherwise go around the Deployment guard).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openagentix-workload-tool-identity
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [""], apiVersions: ["*"], operations: [CREATE, UPDATE], resources: [pods, replicationcontrollers]}
+      - {apiGroups: [apps], apiVersions: ["*"], operations: [CREATE, UPDATE], resources: [deployments, replicasets, statefulsets, daemonsets]}
+      - {apiGroups: [batch], apiVersions: ["*"], operations: [CREATE, UPDATE], resources: [jobs, cronjobs]}
+  matchConditions:
+    - name: the-workload-namespace
+      expression: {{ printf "request.namespace == %s" ($wns | toJson) | toJson }}
+    - name: not-the-controller-nor-the-cluster-controllers
+      expression: {{ printf "!(request.userInfo.username == %s || request.userInfo.username == 'system:kube-controller-manager' || request.userInfo.username.startsWith('system:serviceaccount:kube-system:'))" ($ctrl | toJson) | toJson }}
+  variables:
+    - name: t
+      expression: "request.resource.resource == 'pods' ? dyn(object) : (request.resource.resource == 'cronjobs' ? dyn(object).spec.jobTemplate.spec.template : dyn(object).spec.template)"
+  validations:
+    - message: "in the workload namespace only the control plane may label a pod with openagentix.io/tool-profile"
+      expression: "!has(variables.t.metadata) || !has(variables.t.metadata.labels) || !('openagentix.io/tool-profile' in variables.t.metadata.labels)"
+    - message: "in the workload namespace only the control plane may give a pod a projected ServiceAccount token"
+      expression: "!has(variables.t.spec) || !has(variables.t.spec.volumes) || variables.t.spec.volumes.all(v, !has(v.projected) || !has(v.projected.sources) || v.projected.sources.all(s, !has(s.serviceAccountToken)))"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openagentix-workload-tool-identity
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  policyName: openagentix-workload-tool-identity
+  validationActions: [Deny]
+---
+# In the workload namespace only the kubelet may ask for a ServiceAccount token (for a pod it runs). `kubectl create token` there is refused.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openagentix-workload-token-request
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - {apiGroups: [""], apiVersions: ["*"], operations: [CREATE], resources: [serviceaccounts/token]}
+  matchConditions:
+    - name: the-workload-namespace
+      expression: {{ printf "request.namespace == %s" ($wns | toJson) | toJson }}
+    - name: not-a-node
+      expression: "!request.userInfo.username.startsWith('system:node:')"
+  validations:
+    - message: "in the workload namespace only the kubelet may request a ServiceAccount token"
+      expression: "false"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openagentix-workload-token-request
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  policyName: openagentix-workload-token-request
+  validationActions: [Deny]
+{{- end }}
 {{- end }}

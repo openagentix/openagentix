@@ -187,7 +187,7 @@ func (s *server) tools(w http.ResponseWriter, ctx context.Context, req rpcReques
 	names, err := s.listTools(ctx)
 	if err != nil {
 		s.log.Printf("tool list failed: %v", err)
-		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "tool list failed: " + err.Error()})
+		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "tool list failed"}) // the detail stays in the agent's log
 		return
 	}
 	reply("tools: " + strings.Join(names, ", "))

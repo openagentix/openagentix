@@ -214,16 +214,19 @@ func TestWorkloadToolAccessInTheCatalog(t *testing.T) {
 		t.Fatal("no workload entry, no workload access")
 	}
 	for name, c := range map[string]struct{ from, to, want string }{
-		"no url":                {`"url": "http://vmcp`, `"url": "", "x": "http://vmcp`, "unknown field"},
-		"empty url":             {`"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"`, `"url": ""`, "workload.url"},
-		"ftp url":               {`"url": "http://`, `"url": "ftp://`, "workload.url"},
-		"url with user":         {`"url": "http://`, `"url": "http://u:p@`, "workload.url"},
-		"no audience":           {`"audience": "openagentix-vmcp-lookup-workload"`, `"audience": ""`, "workload.audience"},
-		"audience with a space": {`"audience": "openagentix-vmcp-lookup-workload"`, `"audience": "a b"`, "workload.audience"},
-		"other namespace":       {`"namespace": "mcp-tools", "podSelector"`, `"namespace": "kube-system", "podSelector"`, "workload.namespace"},
-		"empty selector":        {`"podSelector": {"app": "virtualmcpserver", "toolhive-name": "tools-lookup-workload"}`, `"podSelector": {}`, "workload.podSelector"},
-		"empty label value":     {`"toolhive-name": "tools-lookup-workload"`, `"toolhive-name": ""`, "workload.podSelector"},
-		"bad port":              {`"port": 4483`, `"port": 0`, "workload.port"},
+		"no url":                          {`"url": "http://vmcp`, `"url": "", "x": "http://vmcp`, "unknown field"},
+		"empty url":                       {`"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"`, `"url": ""`, "workload.url"},
+		"ftp url":                         {`"url": "http://`, `"url": "ftp://`, "workload.url"},
+		"url with user":                   {`"url": "http://`, `"url": "http://u:p@`, "workload.url"},
+		"url outside the tools namespace": {`"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"`, `"url": "http://kagent-controller.kagent.svc.cluster.local:8083/mcp"`, "workload.url"},
+		"url on another host":             {`"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"`, `"url": "http://example.org/mcp"`, "workload.url"},
+		"url that only contains the name": {`"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"`, `"url": "http://x.mcp-tools.svc.cluster.local.evil.example/mcp"`, "workload.url"},
+		"no audience":                     {`"audience": "openagentix-vmcp-lookup-workload"`, `"audience": ""`, "workload.audience"},
+		"audience with a space":           {`"audience": "openagentix-vmcp-lookup-workload"`, `"audience": "a b"`, "workload.audience"},
+		"other namespace":                 {`"namespace": "mcp-tools", "podSelector"`, `"namespace": "kube-system", "podSelector"`, "workload.namespace"},
+		"empty selector":                  {`"podSelector": {"app": "virtualmcpserver", "toolhive-name": "tools-lookup-workload"}`, `"podSelector": {}`, "workload.podSelector"},
+		"empty label value":               {`"toolhive-name": "tools-lookup-workload"`, `"toolhive-name": ""`, "workload.podSelector"},
+		"bad port":                        {`"port": 4483`, `"port": 0`, "workload.port"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := withWorkload(t, func(s string) string {

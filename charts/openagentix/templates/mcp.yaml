@@ -117,7 +117,8 @@ spec:
   kubernetesServiceAccount:
     issuer: {{ .Values.controlPlane.containerAgents.serviceAccountTokens.issuer | quote }}
     jwksUrl: {{ .Values.controlPlane.containerAgents.serviceAccountTokens.jwksUrl | quote }}
-    useClusterAuth: true
+    {{- /* the vMCP's own token and the cluster CA go only to the in-cluster API server, never to another host */}}
+    useClusterAuth: {{ regexMatch "^https://kubernetes[.]default[.]svc([.]cluster[.]local)?(:[0-9]+)?(/|$)" .Values.controlPlane.containerAgents.serviceAccountTokens.jwksUrl }}
 {{- end }}
 {{- range $p := $m.profiles }}
 {{- $variants := list "" }}{{ if has $p.name $wlNames }}{{ $variants = append $variants "workload" }}{{ end }}
@@ -125,8 +126,9 @@ spec:
 ---
 {{- if $v }}
 # Tool profile {{ $p.name }} for container agents (ADR 0019): the same tools as {{ $m.virtual.name }}-{{ $p.name }}, but it accepts a Kubernetes
-# ServiceAccount token with its own audience, and the policy admits only subjects of the workload namespace. Any pod can get a token with
-# this audience for its own ServiceAccount, so the namespace rule is what keeps other namespaces out.
+# ServiceAccount token with its own audience, and the policy admits only pod-bound tokens of subjects of the workload namespace. Any pod can
+# get a token with this audience for its own ServiceAccount, so the namespace rule keeps other namespaces out; the admission policies
+# openagentix-workload-tool-identity and -token-request keep such tokens in the workload namespace to the controller's pods.
 {{- else }}
 # Tool profile {{ $p.name }} (ADR 0006, round 2): a second vMCP on the same MCPGroup that advertises only the tools listed in the profile.
 # defaultToolVisibility deny: a backend without an entry below contributes nothing. A hidden tool is also not callable through
@@ -177,7 +179,7 @@ spec:
     authzConfig:
       type: inline
       inline:
-        policies: [{{ printf "permit(principal, action, resource) when { context.claim_sub like \"system:serviceaccount:%s:*\" };" $.Values.controlPlane.containerAgents.namespace | quote }}]
+        policies: [{{ printf "permit(principal, action, resource) when { context.claim_sub like \"system:serviceaccount:%s:*\" && context has \"claim_kubernetes.io\" && context[\"claim_kubernetes.io\"] has pod };" $.Values.controlPlane.containerAgents.namespace | quote }}]
     {{- else }}
     oidcConfigRef: {name: {{ $ia.oidc.name }}, audience: {{ printf "%s-%s" $ia.oidc.audience $p.name | quote }}}
     authzConfig:
