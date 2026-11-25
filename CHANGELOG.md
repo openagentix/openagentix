@@ -6,6 +6,13 @@ All notable changes to OpenAgentix are documented here. The format follows [Keep
 
 No default changed for users who leave the new `controlPlane` and `console` blocks off. The default chart render is the same as in 0.2.0.
 
+### Changed
+- Container agents: the gate waits at most 60 s for a container agent to start its answer (streaming calls are exempt), allows each container agent 32 requests at once so one slow agent cannot use up the shared slots, passes only `Content-Type`, `Accept`, `A2A-Version`, `A2A-Extensions` and `Traceparent` from the caller (plus its own `X-User-Id`) to a container agent, and drops `Set-Cookie` and `Access-Control-*` from its answers and adds `X-Content-Type-Options: nosniff`.
+- Container agents: the image is pulled again on every start (`imagePullPolicy: Always`). The chart value `controlPlane.containerAgents.imagePullPolicy` sets it; the quick start uses `IfNotPresent` because its image exists only on the node.
+- Admission guard for container agents: more fields are pinned to what the adapter writes (pull policy, scheduler, termination settings, rollout strategy, probe scheme and timeout, Service cluster IP, session affinity and traffic policy).
+- `hack/kind-image-digest.sh` takes the tag that was just loaded as a third argument and uses its digest; on a reused cluster it no longer picks an older image of the same repository.
+- Docs: ADR 0015, the README and `what-works.md` now say that DNS lookups can leave the cluster by default, that NetworkPolicy isolation needs a cluster that enforces it, and that the model in a container agent's definition is a hint.
+
 ### Fixed
 - Installer, quick start: `hack/kind-image-digest.sh` adds a `name@sha256` name on the kind node for an image loaded with `kind load` (kind keeps only the tag with the containerd image store); the wait for the AgentDefinition quota status is now up to about two minutes and nudges the quota controller; `hack/ask.sh` reads a direct `{message}` result as well as `{task}`. The sample `echo-a2a` now answers with `{message: ...}` as A2A 1.0 requires.
 - Console traces: the recent-turns list used Jaeger's v1 search (`/api/traces`), which Jaeger v2 does not serve, so `GET /api/v1/traces` always answered "not available" against the bundled Jaeger. It now searches with `/api/v3/traces` (OTLP JSON) and treats Jaeger's 404 "No traces found" as an empty list.
