@@ -175,7 +175,8 @@ $K config use-context "$CTX" >/dev/null
 # --- 3. what will the chart render? (agents, namespaces, images) -------------------------------------------
 # --api-versions: the Agent Kourier CRDs are installed later in this run, but the objects they define must be planned now.
 AGENT_KEYS=$(jq -r 'select(.kind=="ModelConfig")|[.metadata.annotations["openagentix.io/agent"],.spec.apiKeySecret,.metadata.namespace]|@tsv' <<<"$RENDERED")
-NAMESPACES=$(jq -r 'select(.metadata.namespace!=null)|.metadata.namespace' <<<"$RENDERED" | sort -u)
+# (not the namespaces the chart renders itself as a Namespace object, such as the container agents' workload namespace: Helm must create those, or it cannot adopt them)
+NAMESPACES=$(jq -rs '[.[]|select(.kind=="Namespace")|.metadata.name] as $own | [.[]|select(.metadata.namespace!=null)|.metadata.namespace]|unique|.[]|select(. as $n|($own|index($n))|not)' <<<"$RENDERED")
 BRIDGE_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].image' <<<"$RENDERED")
 KB_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="kb")' <<<"$RENDERED")   # empty when knowledge.enabled=false
 # Consumers other than agents that need their own gateway virtual key (the kb, for embeddings): "user<TAB>secret<TAB>ns"
