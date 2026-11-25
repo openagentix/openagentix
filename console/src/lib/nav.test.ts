@@ -10,7 +10,7 @@ describe('sidebar markers', () => {
     });
     it('marks the pages without a data source differently', () => {
         const m = marks();
-        for (const id of ['knowledge', 'channels', 'schedules', 'traces', 'costs']) expect(m[id], id).toBe('nodata');
+        for (const id of ['knowledge', 'channels', 'schedules', 'traces']) expect(m[id], id).toBe('nodata');
     });
     it('marks nothing on Overview and Agents, which are live', () => {
         const m = marks();

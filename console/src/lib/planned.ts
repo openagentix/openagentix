@@ -132,17 +132,4 @@ export const PLANNED: Record<string, PlannedContent> = {
         why: 'It needs the observability adapter of ADR 0009. No route of the console API reads Jaeger yet, so the page would have nothing true to show.',
         today: 'The bundled Jaeger, when `observability.enabled` is true in chart values.',
     },
-    costs: {
-        title: 'Costs',
-        strip: 'gateway metrics · agentgateway_gen_ai_client_cost_usd_total · VictoriaMetrics',
-        noticeTitle: 'No data source in this release',
-        notice: 'The console API does not read the gateway metrics in this release. USD budgets come with the `Budget` kind.',
-        willShow: [
-            'Spend for a window, tokens in and out, cache read share, the most expensive agent',
-            'Daily spend by gateway user',
-            "Token budgets against today's use",
-        ],
-        why: 'It needs the gateway metrics (ADR 0009) and, for budgets, the `Budget` kind. Neither is behind a console route yet, and a cost page with sample numbers would break the rule that nothing is invented.',
-        today: 'VictoriaMetrics, when `observability.enabled` is true in chart values; the gateway price catalog in `gateway.models`.',
-    },
 };

@@ -5,6 +5,7 @@
     import { formatTime } from '$lib/status';
     import { inUse, posture, recent } from '$lib/posture';
     import { useAgents } from '$lib/useagents.svelte';
+    import { useMetrics } from '$lib/usemetrics.svelte';
     import { attention, countStates, ttlLine } from '$lib/views';
     import Icon from './Icon.svelte';
     import MetricsRow from './MetricsRow.svelte';
@@ -22,6 +23,10 @@
     });
 
     const platform = $derived(ctx.platform);
+    const metrics = useMetrics();
+    $effect(() => {
+        if (platform?.metrics?.available) void metrics.load('24h');
+    });
     const counts = $derived(countStates(src.items));
     const needs = $derived(attention(src.items));
     const used = $derived(src.list?.used ?? 0);
@@ -188,7 +193,10 @@
             {/if}
         </div>
 
-        <MetricsRow summary={null} />
+        {#if metrics.error}
+            <p class="sm t3">{metrics.error}</p>
+        {/if}
+        <MetricsRow summary={metrics.summary} />
 
         <div class="grid g2 ov-main">
             {#if platform}
@@ -339,8 +347,9 @@
         </div>
 
         <p class="sm t3">
-            Costs and traces come with the observability adapter (ADR 0009). This page shows none of them until the
-            console can read them.
+            {#if platform?.metrics?.available}Traces come with the observability adapter (ADR 0009).{:else}Costs and
+                traces come with the observability adapter (ADR 0009). This page shows none of them until the console
+                can read them.{/if}
         </p>
     {/if}
 </section>
