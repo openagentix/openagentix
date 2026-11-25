@@ -19,7 +19,7 @@ import (
 
 func TestRouteTableIsExactlyTheDocumentedList(t *testing.T) {
 	want := []string{
-		"GET /healthz", "GET /api/v1/session", "GET /api/v1/platform", "GET /api/v1/agents", "GET /api/v1/metrics/summary", "POST /api/v1/agents", "POST /api/v1/agents/validate",
+		"GET /healthz", "GET /api/v1/session", "GET /api/v1/platform", "GET /api/v1/agents", "GET /api/v1/metrics/summary", "GET /api/v1/traces", "GET /api/v1/traces/{traceId}", "POST /api/v1/agents", "POST /api/v1/agents/validate",
 		"GET /api/v1/agents/{name}", "PUT /api/v1/agents/{name}", "DELETE /api/v1/agents/{name}", "/",
 	}
 	if !slices.Equal(server.Routes, want) {

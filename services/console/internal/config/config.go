@@ -42,6 +42,7 @@ type Config struct {
 	ValidatePerMinute   int    // POST /agents/validate per identity per minute (default 60)
 	HSTS                bool   // send Strict-Transport-Security
 	MetricsURL          string // CONSOLE_METRICS_URL: base URL of a Prometheus-compatible query API; empty: no metrics
+	TracesURL           string // CONSOLE_TRACES_URL: base URL of the Jaeger query API; empty: no traces
 	ListMax             int    // most objects of one kind a list reads (default 500)
 	AllowInsecureKube   bool   // dev only: accept an http:// Kubernetes API address
 }
@@ -99,6 +100,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return c, err
 	}
 	if c.MetricsURL, err = urlEnv(getenv, "CONSOLE_METRICS_URL"); err != nil {
+		return Config{}, err
+	}
+	if c.TracesURL, err = urlEnv(getenv, "CONSOLE_TRACES_URL"); err != nil {
 		return Config{}, err
 	}
 	if c.ListMax, err = intEnv(getenv, "CONSOLE_LIST_MAX", 500, 1, 5000); err != nil {

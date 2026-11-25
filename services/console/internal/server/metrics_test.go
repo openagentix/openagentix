@@ -18,6 +18,24 @@ func withObs(o observe.Observability) func(*rigOpt) {
 type fakeObs struct {
 	err  error
 	last observe.Window
+	noTr bool
+}
+
+func (f *fakeObs) Has() observe.Caps { return observe.Caps{Metrics: true, Traces: !f.noTr} }
+func (f *fakeObs) Turns(context.Context) ([]observe.Turn, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return []observe.Turn{{TraceID: strings.Repeat("a", 32), Agent: "assistant", Outcome: "completed"}}, nil
+}
+func (f *fakeObs) Trace(_ context.Context, id string) (observe.TraceDetail, error) {
+	if f.err != nil {
+		return observe.TraceDetail{}, f.err
+	}
+	if len(id) != 32 {
+		return observe.TraceDetail{}, observe.ErrBadTraceID
+	}
+	return observe.TraceDetail{TraceID: id, Spans: []observe.Span{{ID: "a", Name: "a2a.request"}}}, nil
 }
 
 func (f *fakeObs) Metrics(_ context.Context, w observe.Window) (observe.MetricsSummary, error) {
@@ -82,5 +100,40 @@ func TestMetricsNotConfiguredAndPlatformSaysSo(t *testing.T) {
 	}
 	if resp, _ = r.do(t, "GET", "/api/v1/metrics/summary", nil, "Authorization", ""); resp.StatusCode != 401 {
 		t.Errorf("no token: %d", resp.StatusCode)
+	}
+}
+
+func TestTracesRoutes(t *testing.T) {
+	r := newRig(t, withObs(&fakeObs{}))
+	resp, b := r.do(t, "GET", "/api/v1/traces", nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(b), `"agent":"assistant"`) {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	resp, b = r.do(t, "GET", "/api/v1/traces/"+strings.Repeat("b", 32), nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "a2a.request") {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	if resp, _ = r.do(t, "GET", "/api/v1/traces/not-hex", nil); resp.StatusCode != 400 {
+		t.Errorf("bad id: %d", resp.StatusCode)
+	}
+	_, b = r.do(t, "GET", "/api/v1/platform", nil)
+	if !strings.Contains(string(b), `"traces":{"available":true}`) {
+		t.Fatalf("platform: %s", b)
+	}
+}
+
+func TestTracesUnavailableAndNotConfigured(t *testing.T) {
+	r := newRig(t, withObs(&fakeObs{err: errors.New("dial tcp 10.0.0.9: SECRET")}))
+	resp, b := r.do(t, "GET", "/api/v1/traces", nil)
+	if resp.StatusCode != 503 || strings.Contains(string(b), "SECRET") || !strings.Contains(string(b), "traces_unavailable") {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	r = newRig(t)
+	if resp, _ = r.do(t, "GET", "/api/v1/traces", nil); resp.StatusCode != 503 {
+		t.Fatalf("not configured: %d", resp.StatusCode)
+	}
+	r = newRig(t, withObs(&fakeObs{noTr: true}))
+	if resp, _ = r.do(t, "GET", "/api/v1/traces/"+strings.Repeat("b", 32), nil); resp.StatusCode != 503 {
+		t.Fatalf("metrics only: %d", resp.StatusCode)
 	}
 }

@@ -107,8 +107,15 @@ func run(ctx context.Context, getenv func(string) string, d deps) error {
 	switch {
 	case cfg.DevFake:
 		obs = fake.Observe{}
-	case cfg.MetricsURL != "":
-		obs = observe.NewProm(cfg.MetricsURL, &http.Client{Timeout: 8 * time.Second})
+	case cfg.MetricsURL != "" || cfg.TracesURL != "":
+		comp := observe.Composite{}
+		if cfg.MetricsURL != "" {
+			comp.M = observe.NewProm(cfg.MetricsURL, &http.Client{Timeout: 8 * time.Second})
+		}
+		if cfg.TracesURL != "" {
+			comp.T = observe.NewJaeger(cfg.TracesURL, &http.Client{Timeout: 8 * time.Second})
+		}
+		obs = comp
 	}
 	h := server.New(server.Options{
 		Observe: obs,

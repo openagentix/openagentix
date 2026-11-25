@@ -58,7 +58,43 @@ type MetricsSummary struct {
 	GeneratedAt string    `json:"generatedAt"`
 }
 
-// Observability is what the console needs from a metrics backend.
+// Caps says what a backend can answer, so the console can tell the browser (GET /api/v1/platform) without asking the store.
+type Caps struct{ Metrics, Traces bool }
+
+// Observability is what the console needs from an observability backend (ADR 0009): metrics and traces. Another backend
+// implements it and is wired in cmd/console; nothing else in the console knows which store answers.
 type Observability interface {
+	Has() Caps
 	Metrics(ctx context.Context, w Window) (MetricsSummary, error)
+	Turns(ctx context.Context) ([]Turn, error)
+	Trace(ctx context.Context, id string) (TraceDetail, error)
+}
+
+// Composite is the first implementation: a Prometheus-compatible store for metrics and Jaeger for traces. Either may be nil.
+type Composite struct {
+	M *Prom
+	T *Jaeger
+}
+
+func (c Composite) Has() Caps { return Caps{Metrics: c.M != nil, Traces: c.T != nil} }
+
+func (c Composite) Metrics(ctx context.Context, w Window) (MetricsSummary, error) {
+	if c.M == nil {
+		return MetricsSummary{}, ErrUnavailable
+	}
+	return c.M.Metrics(ctx, w)
+}
+
+func (c Composite) Turns(ctx context.Context) ([]Turn, error) {
+	if c.T == nil {
+		return nil, ErrUnavailable
+	}
+	return c.T.Turns(ctx)
+}
+
+func (c Composite) Trace(ctx context.Context, id string) (TraceDetail, error) {
+	if c.T == nil {
+		return TraceDetail{}, ErrUnavailable
+	}
+	return c.T.Trace(ctx, id)
 }

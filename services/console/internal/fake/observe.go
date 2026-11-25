@@ -32,3 +32,27 @@ func (Observe) Metrics(_ context.Context, w observe.Window) (observe.MetricsSumm
 		Series: series, GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
+
+func (Observe) Has() observe.Caps { return observe.Caps{Metrics: true, Traces: true} }
+
+const demoTrace = "0af7651916cd43dd8448eb211c80319c"
+
+func (Observe) Turns(context.Context) ([]observe.Turn, error) {
+	now := time.Now().UTC()
+	return []observe.Turn{
+		{TraceID: demoTrace, ConversationID: "demo-ctx-1", Start: now.Add(-12 * time.Minute).Format(time.RFC3339), Agent: "researcher", Outcome: "completed", ModelCalls: 2, DurationMs: 3200, TokensIn: 30782, TokensOut: 263},
+		{TraceID: "1bf7651916cd43dd8448eb211c80319d", Start: now.Add(-3 * time.Hour).Format(time.RFC3339), Agent: "assistant", Outcome: "failed", ModelCalls: 1, DurationMs: 900, TokensIn: 4100, TokensOut: 0},
+	}, nil
+}
+
+func (Observe) Trace(_ context.Context, id string) (observe.TraceDetail, error) {
+	if id != demoTrace && id != "1bf7651916cd43dd8448eb211c80319d" {
+		return observe.TraceDetail{}, observe.ErrUnavailable
+	}
+	return observe.TraceDetail{TraceID: id, DurationMs: 3200, Spans: []observe.Span{
+		{ID: "s1", Service: "researcher", Name: "a2a.request", OffsetMs: 0, DurationMs: 3200, Attrs: map[string]string{"gen_ai.agent.name": "researcher", "a2a.task.state": "completed"}},
+		{ID: "s2", ParentID: "s1", Service: "model-gateway", Name: "POST /v1/chat/completions", OffsetMs: 100, DurationMs: 1600, Attrs: map[string]string{"gen_ai.request.model": "claude-haiku-5-5", "gen_ai.usage.input_tokens": "15391", "gen_ai.usage.output_tokens": "120"}},
+		{ID: "s3", ParentID: "s1", Service: "researcher", Name: "execute_tool osv_query_vulnerability", OffsetMs: 1750, DurationMs: 900, Attrs: map[string]string{"gen_ai.tool.name": "osv_query_vulnerability"}},
+		{ID: "s4", ParentID: "s1", Service: "model-gateway", Name: "POST /v1/chat/completions", OffsetMs: 2700, DurationMs: 480, Attrs: map[string]string{"gen_ai.request.model": "claude-haiku-5-5", "gen_ai.usage.input_tokens": "15391", "gen_ai.usage.output_tokens": "143"}},
+	}}, nil
+}
