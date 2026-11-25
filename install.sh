@@ -107,19 +107,20 @@ CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
 secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K get secret -n "$1" "$2" >/dev/null 2>&1; }
 
 # The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
-for arg in "$@"; do case "$arg" in --quickstart) PROFILE=quickstart;; *) die "unknown argument: $arg (use --quickstart, or the environment variables in the README)";; esac; done
+for arg in "$@"; do case "$arg" in --quickstart) PROFILE=quickstart;; --minimal) PROFILE=minimal;; *) die "unknown argument: $arg (use --quickstart, --minimal, or the environment variables in the README)";; esac; done
 PROFILE=${PROFILE:-}
-QS=0; QS_MODEL=""; QS_TMP=$(mktemp -d); trap 'rm -rf "$QS_TMP"' EXIT
+QS=0; QS_MODEL=""; QS_TMP=$(mktemp -d); BUILD_PID=""; trap '[ -z "$BUILD_PID" ] || kill "$BUILD_PID" 2>/dev/null; rm -rf "$QS_TMP"' EXIT
 VALS=()
 case "$PROFILE" in
   "") ;;
   quickstart) QS=1; VALS+=(-f components/quickstart/values.yaml) ;;
-  *) die "unknown PROFILE '$PROFILE' (known: quickstart)" ;;
+  minimal) QS=1; VALS+=(-f components/quickstart/values.yaml -f components/quickstart/minimal-values.yaml) ;;   # issue #29: no console, no observability
+  *) die "unknown PROFILE '$PROFILE' (known: quickstart, minimal)" ;;
 esac
 # QUICKSTART_BYO=1 adds the sample container agent (examples/agents/echo-a2a, ADR 0015): the runtime is switched on, one registry prefix is allowed.
 QS_BYO=0
 if [ "${QUICKSTART_BYO:-0}" = 1 ]; then
-  [ "$QS" = 1 ] || die "QUICKSTART_BYO=1 needs PROFILE=quickstart"
+  [ "$QS" = 1 ] || die "QUICKSTART_BYO=1 needs PROFILE=quickstart or PROFILE=minimal"
   QS_BYO=1; VALS+=(-f components/quickstart/byo-values.yaml)
 fi
 for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
@@ -149,6 +150,116 @@ if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
 fi
 
+# --- 0b. images: the builds start now and run while the cluster and the prerequisites are installed (finish_builds, below, waits) ---
+# (the Deployments that decide which images are needed, from what the chart renders)
+BRIDGE_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].image' <<<"$RENDERED")
+KB_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="kb")' <<<"$RENDERED")   # empty when knowledge.enabled=false
+NOTIFY_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="notify")' <<<"$RENDERED")   # empty when notify.enabled=false
+A2A_GATE_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="a2a-gate")' <<<"$RENDERED")   # empty when governance.a2a.enabled=false
+CP_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")' <<<"$RENDERED")   # empty when controlPlane.enabled=false
+CN_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="openagentix-console")' <<<"$RENDERED")   # empty when console.enabled=false
+
+# --- 5. images ----------------------------------------------------------------------------------------------
+SET=()
+# Images are queued here and built in parallel by run_builds (BUILD_JOBS at a time, default 3; 1 = one after the other).
+BUILD_Q=()
+queue_build(){ BUILD_Q+=("$1|$2|${3:-}"); }   # image | context | optional Dockerfile
+# tag_image <image var> <chart value path> <source dir>...: retag the image with dev-<hash of its source> and hand the tag to the chart.
+# kind load and k3d image import keep an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
+# shellcheck source=hack/image-tag.sh
+. hack/image-tag.sh
+tag_image(){ local v=$1 path=$2 t; shift 2; t=$(src_tag "$@"); printf -v "$v" '%s:%s' "${!v%:*}" "$t"; SET+=(--set-string "$path.image.tag=$t"); }
+# The builds do not need the cluster, so start_builds runs them in the background right away (BUILD_JOBS at a time) while the cluster and the
+# prerequisites are installed (issue #29: the builds were about 100 s of a serial install). finish_builds waits for them and loads the images.
+BUILD_PID=""; BUILD_STATUS="$QS_TMP/build.status"
+start_builds(){
+  [ ${#BUILD_Q[@]} -gt 0 ] || return 0
+  local jobs=${BUILD_JOBS:-3}
+  log "building ${#BUILD_Q[@]} image(s), $jobs at a time, in the background"
+  (
+    local spec img ctx df running=0 pids=() p fail=0   # no `wait -n`: macOS ships bash 3.2
+    for spec in "${BUILD_Q[@]}"; do
+      IFS='|' read -r img ctx df <<<"$spec"
+      ( docker build -q -t "$img" ${df:+-f "$df"} "$ctx" >/dev/null ) &
+      pids+=($!); running=$((running+1))
+      if [ "$running" -ge "$jobs" ]; then for p in "${pids[@]}"; do wait "$p" || fail=1; done; pids=(); running=0; fi
+    done
+    for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || fail=1; done
+    echo "$fail" > "$BUILD_STATUS"
+  ) &
+  BUILD_PID=$!
+}
+finish_builds(){
+  [ ${#BUILD_Q[@]} -gt 0 ] || return 0
+  local spec img imgs=() fail=0
+  log "images: waiting for the background builds"
+  wait "$BUILD_PID" || fail=1
+  BUILD_PID=""
+  [ "$(cat "$BUILD_STATUS" 2>/dev/null || echo 1)" = 0 ] || fail=1
+  for spec in "${BUILD_Q[@]}"; do imgs+=("${spec%%|*}"); done
+  for img in "${imgs[@]}"; do docker image inspect "$img" >/dev/null 2>&1 || fail=1; done
+  [ "$fail" = 0 ] || die "an image build failed: re-run with BUILD_JOBS=1 to see which one"
+  cluster_load_images "${imgs[@]}"
+}
+if [ "${SKIP_BRIDGE_IMAGE:-0}" != 1 ] && [[ "$BRIDGE_IMAGE" == openagentix/telegram-bridge:* ]]; then
+  tag_image BRIDGE_IMAGE bridge bridges/telegram
+  log "bridge image $BRIDGE_IMAGE"
+  queue_build "$BRIDGE_IMAGE" bridges/telegram
+fi
+# Schedules: the CronJobs run tools/a2a-call. The image is built only when the chart renders a CronJob for it (empty `schedules` = no
+# build, no namespace, no pods), then keyed on the source hash like the bridge and the kb.
+A2A_CALL_IMAGE=$(jq -r 'select(.kind=="CronJob")|.spec.jobTemplate.spec.template.spec.containers[0].image' <<<"$RENDERED" | sort -u | head -1)
+if [ "${SKIP_A2A_CALL_IMAGE:-0}" != 1 ] && [[ "$A2A_CALL_IMAGE" == openagentix/a2a-call:* ]]; then
+  tag_image A2A_CALL_IMAGE scheduling tools/a2a-call
+  log "a2a-call image $A2A_CALL_IMAGE (schedules)"
+  queue_build "$A2A_CALL_IMAGE" tools/a2a-call
+fi
+KB_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${KB_DEP:-null}" 2>/dev/null || true)
+if [ "${SKIP_KB_IMAGE:-0}" != 1 ] && [[ "$KB_IMAGE" == openagentix/kb:* ]]; then
+  tag_image KB_IMAGE knowledge.kb services/kb
+  log "kb image $KB_IMAGE"
+  queue_build "$KB_IMAGE" services/kb
+fi
+NOTIFY_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${NOTIFY_DEP:-null}" 2>/dev/null || true)
+if [ "${SKIP_NOTIFY_IMAGE:-0}" != 1 ] && [[ "$NOTIFY_IMAGE" == openagentix/notify:* ]]; then
+  tag_image NOTIFY_IMAGE notify services/notify
+  log "notify image $NOTIFY_IMAGE"
+  queue_build "$NOTIFY_IMAGE" services/notify
+fi
+A2A_GATE_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${A2A_GATE_DEP:-null}" 2>/dev/null || true)
+if [ "${SKIP_A2A_GATE_IMAGE:-0}" != 1 ] && [[ "$A2A_GATE_IMAGE" == openagentix/a2a-gate:* ]]; then
+  tag_image A2A_GATE_IMAGE governance.a2a services/a2a-gate
+  log "a2a-gate image $A2A_GATE_IMAGE"
+  queue_build "$A2A_GATE_IMAGE" services/a2a-gate
+fi
+STUB_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image' <<<"$RENDERED")   # empty when gateway.stubModel.enabled=false
+if [ "${SKIP_STUB_MODEL_IMAGE:-0}" != 1 ] && [[ "$STUB_IMAGE" == openagentix/stub-model:* ]]; then
+  tag_image STUB_IMAGE gateway.stubModel services/stub-model
+  log "stub-model image $STUB_IMAGE"
+  queue_build "$STUB_IMAGE" services/stub-model
+fi
+CP_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CP_DEP:-null}" 2>/dev/null || true)
+if [ "${SKIP_CONTROL_PLANE_IMAGE:-0}" != 1 ] && [[ "$CP_IMAGE" == openagentix/control-plane:* ]]; then
+  tag_image CP_IMAGE controlPlane services/control-plane
+  log "control-plane image $CP_IMAGE"
+  queue_build "$CP_IMAGE" services/control-plane
+fi
+CN_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CN_DEP:-null}" 2>/dev/null || true)
+if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:* ]]; then
+  tag_image CN_IMAGE console services/console console
+  log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
+  queue_build "$CN_IMAGE" . services/console/Dockerfile
+fi
+if [ "$QS_BYO" = 1 ]; then
+  BYO_REPO=registry.local/oa/echo-a2a
+  BYO_IMAGE="$BYO_REPO:$(src_tag examples/agents/echo-a2a)"
+  queue_build "$BYO_IMAGE" examples/agents/echo-a2a
+  log "sample container agent image $BYO_IMAGE"
+fi
+# Fail before the builds start, not after: no cluster and no permission to make one.
+[ "$CLUSTER_UP" = 1 ] || [ "${CREATE_CLUSTER:-1}" = 1 ] || die "$CLUSTER_TYPE cluster '$CLUSTER' does not exist and CREATE_CLUSTER=0"
+start_builds
+
 # --- 1. cluster (kind, or k3s through k3d) ------------------------------------------------------------------------------------
 log "cluster $CLUSTER"
 if [ "$CLUSTER_UP" = 0 ]; then
@@ -163,18 +274,58 @@ docker exec "$NODE" sysctl -e -w net.ipv6.conf.all.proxy_ndp=1 >/dev/null
 helm_has(){ helm status "$1" -n "$2" >/dev/null 2>&1; }
 want(){ [ "${SKIP_PREREQS:-0}" != 1 ] && { [ "${FORCE_PREREQS:-0}" = 1 ] || ! "$@"; }; }
 log "prerequisites"
+# kagent + Substrate, agentgateway and ToolHive do not depend on each other, so by default (PREREQS_PARALLEL=1; 0 = one after the other) the
+# last two are installed in the background while kagent + Substrate (the longest) is installed in the foreground. Each background job has its
+# own copy of the kubeconfig (two kubectl calls that switch the context at the same time can fail on the kubeconfig lock file) and its own
+# log, which is printed when the job ends. A failed job stops the install.
+PQ_PIDS=(); PQ_NAMES=()
+prereq_bg(){   # name, then the command: run it in the background with a private kubeconfig and log
+  local name=$1; shift; local kc="$QS_TMP/kubeconfig-$name"
+  $K config view --raw --minify --flatten > "$kc"
+  ( KUBECONFIG="$kc" "$@" ) > "$QS_TMP/prereq-$name.log" 2>&1 &
+  PQ_PIDS+=($!); PQ_NAMES+=("$name")
+}
+prereq_wait(){
+  local n=0 name fail=0
+  for pid in ${PQ_PIDS[@]+"${PQ_PIDS[@]}"}; do
+    name=${PQ_NAMES[$n]}; n=$((n+1))
+    if wait "$pid"; then echo "-> $name finished"; else echo "ERROR: $name failed" >&2; fail=1; fi
+    cat "$QS_TMP/prereq-$name.log"
+  done
+  PQ_PIDS=(); PQ_NAMES=()
+  [ "$fail" = 0 ] || die "a prerequisite failed (see its log above); re-run with PREREQS_PARALLEL=0 to run them one after the other"
+}
+PARALLEL=0; [ "${PREREQS_PARALLEL:-1}" = 1 ] && PARALLEL=1
+if want bash -c "$(declare -f helm_has); helm_has agentgateway $GW_NS"; then
+  if [ "$PARALLEL" = 1 ]; then
+    echo "-> Gateway API CRDs + agentgateway v1.7.0 (components/model-gateway/install.sh), in the background"
+    prereq_bg agentgateway env PREREQS_ONLY=1 bash components/model-gateway/install.sh
+  fi
+  RUN_GW=1
+else echo "agentgateway: present or skipped"; RUN_GW=0; fi
+if want bash -c "$(declare -f helm_has); helm_has toolhive-operator toolhive-system"; then
+  if [ "$PARALLEL" = 1 ]; then
+    echo "-> ToolHive 0.67.1 (components/tools/install.sh), in the background"
+    prereq_bg toolhive env PREREQS_ONLY=1 bash components/tools/install.sh
+  fi
+  RUN_TH=1
+else echo "ToolHive: present or skipped"; RUN_TH=0; fi
 if want bash -c "$(declare -f helm_has); helm_has kagent $KAGENT_NS && helm_has substrate ate-system"; then
   echo "-> kagent 1.0.1 + Agent Substrate 1.0.1 (components/runtime/up.sh)"
   SKIP_FIRST_AGENT=1 bash components/runtime/up.sh
 else echo "kagent + Substrate: present or skipped"; fi
-if want bash -c "$(declare -f helm_has); helm_has agentgateway $GW_NS"; then
-  echo "-> Gateway API CRDs + agentgateway v1.7.0 (components/model-gateway/install.sh)"
-  PREREQS_ONLY=1 bash components/model-gateway/install.sh
-else echo "agentgateway: present or skipped"; fi
-if want bash -c "$(declare -f helm_has); helm_has toolhive-operator toolhive-system"; then
-  echo "-> ToolHive 0.67.1 (components/tools/install.sh)"
-  PREREQS_ONLY=1 bash components/tools/install.sh
-else echo "ToolHive: present or skipped"; fi
+if [ "$PARALLEL" = 1 ]; then
+  prereq_wait
+else
+  if [ "$RUN_GW" = 1 ]; then
+    echo "-> Gateway API CRDs + agentgateway v1.7.0 (components/model-gateway/install.sh)"
+    PREREQS_ONLY=1 bash components/model-gateway/install.sh
+  fi
+  if [ "$RUN_TH" = 1 ]; then
+    echo "-> ToolHive 0.67.1 (components/tools/install.sh)"
+    PREREQS_ONLY=1 bash components/tools/install.sh
+  fi
+fi
 $K config use-context "$CTX" >/dev/null
 
 # --- 3. what will the chart render? (agents, namespaces, images) -------------------------------------------
@@ -182,13 +333,7 @@ $K config use-context "$CTX" >/dev/null
 AGENT_KEYS=$(jq -r 'select(.kind=="ModelConfig")|[.metadata.annotations["openagentix.io/agent"],.spec.apiKeySecret,.metadata.namespace]|@tsv' <<<"$RENDERED")
 # (not the namespaces the chart renders itself as a Namespace object, such as the container agents' workload namespace: Helm must create those, or it cannot adopt them)
 NAMESPACES=$(jq -rs '[.[]|select(.kind=="Namespace")|.metadata.name] as $own | [.[]|select(.metadata.namespace!=null)|.metadata.namespace]|unique|.[]|select(. as $n|($own|index($n))|not)' <<<"$RENDERED")
-BRIDGE_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].image' <<<"$RENDERED")
-KB_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="kb")' <<<"$RENDERED")   # empty when knowledge.enabled=false
 # Consumers other than agents that need their own gateway virtual key (the kb, for embeddings): "user<TAB>secret<TAB>ns"
-NOTIFY_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="notify")' <<<"$RENDERED")   # empty when notify.enabled=false
-A2A_GATE_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="a2a-gate")' <<<"$RENDERED")   # empty when governance.a2a.enabled=false
-CP_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")' <<<"$RENDERED")   # empty when controlPlane.enabled=false
-CN_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="openagentix-console")' <<<"$RENDERED")   # empty when console.enabled=false
 # A Deployment asks for one key per annotation SET: openagentix.io/gateway-user<sfx> (the user id), gateway-key-secret<sfx> (the Secret) and,
 # optionally, gateway-key-name<sfx> (the Secret key, default OPENAI_API_KEY); <sfx> is empty for the first set, "-extract" for the kb's
 # extraction key. Annotation names are unique per object, so a second key on one Deployment needs a second suffix: the earlier one-pair lookup
@@ -437,87 +582,7 @@ if [ -n "$CN_DEP" ]; then
   mk_random_secret "$CN_NS" "$CN_TOKEN_S" "$CN_TOKEN_K" 24
 fi
 
-# --- 5. images ----------------------------------------------------------------------------------------------
-SET=()
-# Images are queued here and built in parallel by run_builds (BUILD_JOBS at a time, default 3; 1 = one after the other).
-BUILD_Q=()
-queue_build(){ BUILD_Q+=("$1|$2|${3:-}"); }   # image | context | optional Dockerfile
-# tag_image <image var> <chart value path> <source dir>...: retag the image with dev-<hash of its source> and hand the tag to the chart.
-# kind load and k3d image import keep an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
-# shellcheck source=hack/image-tag.sh
-. hack/image-tag.sh
-tag_image(){ local v=$1 path=$2 t; shift 2; t=$(src_tag "$@"); printf -v "$v" '%s:%s' "${!v%:*}" "$t"; SET+=(--set-string "$path.image.tag=$t"); }
-run_builds(){
-  [ ${#BUILD_Q[@]} -gt 0 ] || return 0
-  local jobs=${BUILD_JOBS:-3} spec img ctx df running=0 pids=() imgs=() p fail=0   # no `wait -n`: macOS ships bash 3.2
-  log "building ${#BUILD_Q[@]} image(s), $jobs at a time"
-  for spec in "${BUILD_Q[@]}"; do
-    IFS='|' read -r img ctx df <<<"$spec"
-    ( docker build -q -t "$img" ${df:+-f "$df"} "$ctx" >/dev/null ) &
-    pids+=($!); imgs+=("$img"); running=$((running+1))
-    if [ "$running" -ge "$jobs" ]; then for p in "${pids[@]}"; do wait "$p" || fail=1; done; pids=(); running=0; fi
-  done
-  for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || fail=1; done
-  for img in "${imgs[@]}"; do docker image inspect "$img" >/dev/null 2>&1 || fail=1; done
-  [ "$fail" = 0 ] || die "an image build failed: re-run with BUILD_JOBS=1 to see which one"
-  cluster_load_images "${imgs[@]}"
-}
-if [ "${SKIP_BRIDGE_IMAGE:-0}" != 1 ] && [[ "$BRIDGE_IMAGE" == openagentix/telegram-bridge:* ]]; then
-  tag_image BRIDGE_IMAGE bridge bridges/telegram
-  log "bridge image $BRIDGE_IMAGE"
-  queue_build "$BRIDGE_IMAGE" bridges/telegram
-fi
-# Schedules: the CronJobs run tools/a2a-call. The image is built only when the chart renders a CronJob for it (empty `schedules` = no
-# build, no namespace, no pods), then keyed on the source hash like the bridge and the kb.
-A2A_CALL_IMAGE=$(jq -r 'select(.kind=="CronJob")|.spec.jobTemplate.spec.template.spec.containers[0].image' <<<"$RENDERED" | sort -u | head -1)
-if [ "${SKIP_A2A_CALL_IMAGE:-0}" != 1 ] && [[ "$A2A_CALL_IMAGE" == openagentix/a2a-call:* ]]; then
-  tag_image A2A_CALL_IMAGE scheduling tools/a2a-call
-  log "a2a-call image $A2A_CALL_IMAGE (schedules)"
-  queue_build "$A2A_CALL_IMAGE" tools/a2a-call
-fi
-KB_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${KB_DEP:-null}" 2>/dev/null || true)
-if [ "${SKIP_KB_IMAGE:-0}" != 1 ] && [[ "$KB_IMAGE" == openagentix/kb:* ]]; then
-  tag_image KB_IMAGE knowledge.kb services/kb
-  log "kb image $KB_IMAGE"
-  queue_build "$KB_IMAGE" services/kb
-fi
-NOTIFY_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${NOTIFY_DEP:-null}" 2>/dev/null || true)
-if [ "${SKIP_NOTIFY_IMAGE:-0}" != 1 ] && [[ "$NOTIFY_IMAGE" == openagentix/notify:* ]]; then
-  tag_image NOTIFY_IMAGE notify services/notify
-  log "notify image $NOTIFY_IMAGE"
-  queue_build "$NOTIFY_IMAGE" services/notify
-fi
-A2A_GATE_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${A2A_GATE_DEP:-null}" 2>/dev/null || true)
-if [ "${SKIP_A2A_GATE_IMAGE:-0}" != 1 ] && [[ "$A2A_GATE_IMAGE" == openagentix/a2a-gate:* ]]; then
-  tag_image A2A_GATE_IMAGE governance.a2a services/a2a-gate
-  log "a2a-gate image $A2A_GATE_IMAGE"
-  queue_build "$A2A_GATE_IMAGE" services/a2a-gate
-fi
-STUB_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image' <<<"$RENDERED")   # empty when gateway.stubModel.enabled=false
-if [ "${SKIP_STUB_MODEL_IMAGE:-0}" != 1 ] && [[ "$STUB_IMAGE" == openagentix/stub-model:* ]]; then
-  tag_image STUB_IMAGE gateway.stubModel services/stub-model
-  log "stub-model image $STUB_IMAGE"
-  queue_build "$STUB_IMAGE" services/stub-model
-fi
-CP_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CP_DEP:-null}" 2>/dev/null || true)
-if [ "${SKIP_CONTROL_PLANE_IMAGE:-0}" != 1 ] && [[ "$CP_IMAGE" == openagentix/control-plane:* ]]; then
-  tag_image CP_IMAGE controlPlane services/control-plane
-  log "control-plane image $CP_IMAGE"
-  queue_build "$CP_IMAGE" services/control-plane
-fi
-CN_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CN_DEP:-null}" 2>/dev/null || true)
-if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:* ]]; then
-  tag_image CN_IMAGE console services/console console
-  log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
-  queue_build "$CN_IMAGE" . services/console/Dockerfile
-fi
-if [ "$QS_BYO" = 1 ]; then
-  BYO_REPO=registry.local/oa/echo-a2a
-  BYO_IMAGE="$BYO_REPO:$(src_tag examples/agents/echo-a2a)"
-  queue_build "$BYO_IMAGE" examples/agents/echo-a2a
-  log "sample container agent image $BYO_IMAGE"
-fi
-run_builds   # the queued images are built BUILD_JOBS at a time, then loaded into the cluster in one call
+finish_builds   # wait for the background builds, then load the images into the cluster in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
   SET+=(--set-string "gateway.stubModel.sourceHash=$STUB_HASH")
@@ -701,7 +766,11 @@ log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"
 for a in $(jq -r 'select(.kind=="Agent")|.metadata.name' <<<"$RENDERED"); do
   $K wait "agent/$a" -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" || echo "WARN: agent $a not Ready yet: $K get agent $a -n $KAGENT_NS -o yaml"
 done
-$K wait remotemcpserver --all -n $KAGENT_NS --for=condition=Accepted --timeout=120s >/dev/null 2>&1 || echo "WARN: a RemoteMCPServer is not Accepted yet (vMCP may still be starting): $K get remotemcpserver -n $KAGENT_NS"
+# Only the RemoteMCPServers this chart renders (the vMCPs): kagent's own built-in ones (kagent-api, kagent-tool-server) are not ours to wait for,
+# and when one of them cannot connect, `wait --all` used to hold the install for the whole 120 s (seen in CI, issue #29).
+for rm in $(jq -r 'select(.kind=="RemoteMCPServer")|.metadata.name' <<<"$RENDERED"); do
+  $K wait "remotemcpserver/$rm" -n $KAGENT_NS --for=condition=Accepted --timeout=120s >/dev/null 2>&1 || echo "WARN: RemoteMCPServer $rm is not Accepted yet (vMCP may still be starting): $K get remotemcpserver $rm -n $KAGENT_NS"
+done
 
 if [ -n "$CH_CM" ]; then
   log "waiting for the Kourier bindings"
@@ -767,10 +836,15 @@ EOT
 
   Ask the agent (no chat app needed):
     hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
+EOT
+  if [ -n "$CN_DEP" ]; then cat <<EOT
   Open the console:
     $K port-forward -n $CN_NS svc/openagentix-console 8080:8080       then open http://127.0.0.1:8080
     sign-in token (read it yourself; this script does not print it):
     $K get secret -n $CN_NS $CN_TOKEN_S -o jsonpath='{.data.$CN_TOKEN_K}' | base64 -d; echo
+EOT
+  fi
+  cat <<EOT
   Remove everything:
     $(cluster_delete_hint)
 ============================================================================

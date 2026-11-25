@@ -1983,6 +1983,19 @@ eq "profile: the model alias goes through the gateway" "$(q "$D" '.[]|select(.ki
 eq "profile: the gate has the ask rule"                "$(q "$D" '.[]|select(.kind=="ConfigMap" and (.data["rules.json"]//"")!="")|.data["rules.json"]|fromjson|.callers[]|select(.name=="quickstart-ask")|.agents[0]')" kagent/quickstart
 eq "profile: the policy admits the alias and profile"  "$(q "$D" '[.[]|select(.kind=="ConfigMap")|.data["policy.json"]//empty|fromjson|(.allowedModels[0],.allowedProfiles[0])]|join(",")')" quickstart-model,lookup
 
+echo "# minimal profile (components/quickstart/minimal-values.yaml, on top of the quick start profile; issue #29)"
+MIN="$CHART/../../components/quickstart/minimal-values.yaml"
+D=$(docs -f "$QS" -f "$MIN")
+eq "minimal renders"                                   "$(q "$D" 'length>0')" true
+eq "minimal: no console"                               "$(count "$D" '.metadata.name|test("^openagentix-console")')" 0
+eq "minimal: no bundled observability"                 "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("jaeger","victoria-metrics"))')/$(count "$D" '.metadata.name=="openagentix-observability"')" 0/0
+eq "minimal: the governed path stays (gate, control plane, stub)" "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("openagentix-control-plane","a2a-gate","stub-model"))')" 3
+eq "minimal: one tool server and one profile vMCP"     "$(count "$D" '.kind=="MCPServer"')/$(count "$D" '.kind=="VirtualMCPServer" and (.metadata.annotations["openagentix.io/tool-profile"]//"")!=""')" 1/1
+eq "minimal: the model alias and the policy are the same" "$(q "$D" '[.[]|select(.kind=="AgentgatewayModel")|.metadata.name]|join(",")')/$(q "$D" '[.[]|select(.kind=="ConfigMap")|.data["policy.json"]//empty|fromjson|(.allowedModels[0],.allowedProfiles[0])]|join(",")')" quickstart-model/quickstart-model,lookup
+eq "minimal: the gate keeps the ask rule"              "$(q "$D" '.[]|select(.kind=="ConfigMap" and (.data["rules.json"]//"")!="")|.data["rules.json"]|fromjson|.callers[]|select(.name=="quickstart-ask")|.agents[0]')" kagent/quickstart
+eq "minimal: no Telegram bridge, no knowledge, no notify" "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("telegram-bridge","kb","notify"))')" 0
+eq "the quick start profile alone still has the console and the observability" "$(count "$(docs -f "$QS")" '.kind=="Deployment" and (.metadata.name|IN("openagentix-console","jaeger","victoria-metrics"))')" 3
+
 echo "# secrets hygiene"
 D=$(docs --set bridge.token=SENTINEL-TOKEN-123 --set gateway.apiKey=SENTINEL-TOKEN-123)
 eq "chart renders no Secret objects"                   "$(count "$D" '.kind=="Secret"')" 0

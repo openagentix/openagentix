@@ -5,6 +5,7 @@
 #   3. a tool that the profile does not offer gets no data (the tool profile refuses it)
 #   4. a definition that the policy forbids is refused (Accepted=False) and no agent is built for it
 #   5. the console API answers 401 without the token and lists the agent with it
+# SMOKE_CONSOLE=0 skips check 5 (PROFILE=minimal has no console).
 # SMOKE_STUB=1 (default) expects the stub model's scripted answers; SMOKE_STUB=0 (a real model) only checks that an answer arrives.
 # Prints one line per check; exit 1 on the first failure. Never prints the console token.
 set -uo pipefail
@@ -61,15 +62,19 @@ echo "      reason: $($K get agentdefinition smoke-refused -n "$NS" -o jsonpath=
 check "no agent was built for it" "$($K get agent smoke-refused -n "$NS" --ignore-not-found -o name | wc -l | tr -d ' ')" 0
 $K delete agentdefinition smoke-refused -n "$NS" --wait=false >/dev/null 2>&1
 
-echo "# 5. console API"
-PORT=$(python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
-$K port-forward -n "${SMOKE_CONSOLE_NS:-openagentix-system}" svc/openagentix-console "$PORT:8080" >/dev/null 2>&1 & PF=$!
-trap 'kill $PF 2>/dev/null' EXIT
-for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/healthz" 2>/dev/null && break; sleep 0.2; done
-check "GET /api/v1/agents without a token is 401" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/v1/agents")" 401
-TOKEN=$($K get secret -n "${SMOKE_CONSOLE_NS:-openagentix-system}" console-token -o jsonpath='{.data.token}' | base64 -d)
-LIST=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/agents"); unset TOKEN
-grep -q '"quickstart"' <<<"$LIST" && ok "GET /api/v1/agents with the token lists quickstart" || bad "the console does not list quickstart" "$(printf '%s' "$LIST" | cut -c1-200)"
+if [ "${SMOKE_CONSOLE:-1}" = 1 ]; then
+  echo "# 5. console API"
+  PORT=$(python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+  $K port-forward -n "${SMOKE_CONSOLE_NS:-openagentix-system}" svc/openagentix-console "$PORT:8080" >/dev/null 2>&1 & PF=$!
+  trap 'kill $PF 2>/dev/null' EXIT
+  for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/healthz" 2>/dev/null && break; sleep 0.2; done
+  check "GET /api/v1/agents without a token is 401" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/v1/agents")" 401
+  TOKEN=$($K get secret -n "${SMOKE_CONSOLE_NS:-openagentix-system}" console-token -o jsonpath='{.data.token}' | base64 -d)
+  LIST=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/agents"); unset TOKEN
+  grep -q '"quickstart"' <<<"$LIST" && ok "GET /api/v1/agents with the token lists quickstart" || bad "the console does not list quickstart" "$(printf '%s' "$LIST" | cut -c1-200)"
+else
+  echo "# 5. console API (skipped: SMOKE_CONSOLE=0, the profile has no console)"
+fi
 
 # 6. bring your own agent (ADR 0015), only when the quick start was installed with QUICKSTART_BYO=1 (SMOKE_BYO=1)
 if [ "${SMOKE_BYO:-0}" = 1 ]; then

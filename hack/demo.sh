@@ -9,6 +9,7 @@
 #   5. make a call that must be denied (ask demo-lookup, which the quick start caller may not ask) and see the audit line with its reason
 #   6. check the console API (401 without the token, the agent list with it) and print the port-forward command to open the console
 # It is safe to run again: the definition is applied, not created, and removed at the end.
+# DEMO_CONSOLE=0 skips step 6 (PROFILE=minimal has no console).
 # Needs: kubectl, jq, curl, python3 (hack/ask.sh needs the same). Env: KUBECTL, DEMO_NAMESPACE (default kagent), DEMO_WAIT (seconds to wait for Ready,
 # default 300), DEMO_AUDIT_WAIT (seconds to wait for an audit line, default 30), DEMO_KEEP=1 (keep demo-lookup), DEMO_ASK (path of the ask script).
 # Exit 0 when every step showed what it should, 1 otherwise, 2 for a bad argument.
@@ -94,6 +95,9 @@ if grep -q 'stub model' <<<"$ANS"; then
 fi
 
 step 6 "the console"
+if [ "${DEMO_CONSOLE:-1}" = 0 ]; then
+  echo "   skipped: DEMO_CONSOLE=0 (PROFILE=minimal has no console)"
+else
 look "401 without the token, the agent list with it, and the command that opens the console in your browser"
 PORT=$(python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
 $K port-forward -n "$CN_NS" svc/openagentix-console "$PORT:8080" >/dev/null 2>&1 & PF=$!
@@ -105,6 +109,7 @@ LIST=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl -s -K - "h
 if grep -q "\"$AGENT\"" <<<"$LIST"; then ok "with the token the console lists $AGENT"; else bad "the console does not list $AGENT" "$(printf '%s' "$LIST" | cut -c1-200)"; fi
 echo "        to open it: $K port-forward -n $CN_NS svc/openagentix-console 8080:8080   then open http://127.0.0.1:8080"
 echo "        sign-in token (read it yourself; this script does not print it): $K get secret -n $CN_NS console-token -o jsonpath='{.data.token}' | base64 -d; echo"
+fi
 
 if [ "${DEMO_KEEP:-0}" = 1 ]; then echo; echo "kept the AgentDefinition $AGENT (DEMO_KEEP=1). Remove it with: $K delete agentdefinition $AGENT -n $NS"
 else $K delete agentdefinition "$AGENT" -n "$NS" --wait=false >/dev/null 2>&1 || true; fi

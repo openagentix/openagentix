@@ -31,8 +31,19 @@ concurrency:
 
 jobs:
   e2e:
+    name: e2e (${{ matrix.profile }})
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: quickstart    # the quick start, with the sample container agent: the same set as the runs before issue #29
+            byo: "1"
+            console: "1"
+          - profile: minimal       # issue #29: no console, no observability, no sample container agent
+            byo: "0"
+            console: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,11 +57,11 @@ jobs:
           nproc; free -m | head -2; df -h / | tail -1
           ls -l /dev/kvm 2>&1 || true
           uname -r
-      - name: install (PROFILE=quickstart, no key, no token)
+      - name: install (PROFILE=${{ matrix.profile }}, no key, no token)
         id: install
         env:
-          PROFILE: quickstart
-          QUICKSTART_BYO: "1"   # also the sample container agent (bring your own agent, ADR 0015)
+          PROFILE: ${{ matrix.profile }}
+          QUICKSTART_BYO: ${{ matrix.byo }}   # 1: also the sample container agent (bring your own agent, ADR 0015)
           AGENT_WAIT: 300s
         run: |
           set -o pipefail
@@ -61,7 +72,8 @@ jobs:
       - name: smoke test
         id: smoke
         env:
-          SMOKE_BYO: "1"
+          SMOKE_BYO: ${{ matrix.byo }}
+          SMOKE_CONSOLE: ${{ matrix.console }}   # 0: the profile has no console, so the console check is skipped
         run: |
           set -o pipefail
           start=$(date +%s)
@@ -69,6 +81,8 @@ jobs:
           echo "smoke_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: demo walkthrough (hack/demo.sh)
         id: demo
+        env:
+          DEMO_CONSOLE: ${{ matrix.console }}   # 0: the profile has no console, so the console step is skipped
         run: |
           set -o pipefail
           hack/demo.sh 2>&1 | tee demo.log
@@ -84,7 +98,7 @@ jobs:
           INSTALL_START: ${{ steps.install.outputs.install_start }}
         run: |
           if [ -n "${INSTALL_START:-}" ] && [ -f install.log ]; then
-            hack/ci/phases.sh --install-log install.log --smoke-log smoke.log --install-start "$INSTALL_START" --json phases.json --title "Time to first working agent (phases)" > phases.md || true
+            hack/ci/phases.sh --install-log install.log --smoke-log smoke.log --install-start "$INSTALL_START" --json phases.json --title "Time to first working agent (phases), PROFILE=${{ matrix.profile }}" > phases.md || true
             cat phases.md phases.json 2>/dev/null || true
           fi
       - name: job summary (time to first working agent)
@@ -96,7 +110,7 @@ jobs:
         run: |
           {
             if [ -f phases.md ]; then cat phases.md; echo '```json'; cat phases.json; echo '```'; echo; fi
-            echo "## Quick start, keyless (stub model)"
+            echo "## PROFILE=${{ matrix.profile }}, keyless (stub model)"
             echo
             echo "- time from \`./install.sh\` start to the agent Ready and the summary: **${INSTALL_S:-n/a} s** (cold runner: nothing cached)"
             echo "- smoke test (question through the gate, refused tool, refused definition, console API): ${SMOKE_S:-n/a} s"
@@ -121,6 +135,7 @@ jobs:
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
           kubectl get agent,agentdefinition -A -o yaml | head -150 || true
+          kubectl get remotemcpserver -A || true
           kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
           kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
           kubectl get resourcequota -A -o yaml | head -60 || true
