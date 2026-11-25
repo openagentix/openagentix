@@ -712,7 +712,17 @@ if [ "$QS" = 1 ]; then
   # the ResourceQuota on definitions has no status for a moment after the chart is installed ("status unknown for quota"): retry
   for qs_try in $(seq 1 40); do
     $K apply -f "$QS_TMP/agent.json" >/dev/null 2>"$QS_TMP/apply.err" && break
-    [ "$qs_try" -lt 40 ] && /usr/bin/grep -q "status unknown for quota" "$QS_TMP/apply.err" || { cat "$QS_TMP/apply.err" >&2; die "could not create the quickstart AgentDefinition"; }
+    [ "$qs_try" -lt 40 ] && /usr/bin/grep -q "status unknown for quota" "$QS_TMP/apply.err" || { cat "$QS_TMP/apply.err" >&2; $K get resourcequota -n $KAGENT_NS -o yaml >&2 2>&1 || true; die "could not create the quickstart AgentDefinition"; }
+    # The quota controller learns the new CRD only at its next discovery pass (30 s) and backs off after the failed first sync, so the
+    # status can stay unknown for minutes. A change of the quota's spec makes it sync again at once: set the limit up by one and back.
+    if [ $((qs_try % 10)) = 0 ]; then
+      qs_hard=$($K get resourcequota openagentix-agentdefinitions -n $KAGENT_NS -o json 2>/dev/null | jq -r '.spec.hard["count/agentdefinitions.openagentix.io"] // empty')
+      if [[ "$qs_hard" =~ ^[0-9]+$ ]]; then
+        for qs_v in $((qs_hard + 1)) "$qs_hard"; do
+          $K patch resourcequota openagentix-agentdefinitions -n $KAGENT_NS --type merge -p "{\"spec\":{\"hard\":{\"count/agentdefinitions.openagentix.io\":\"$qs_v\"}}}" >/dev/null 2>&1 || true
+        done
+      fi
+    fi
     sleep 3
   done
   $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
