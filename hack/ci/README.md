@@ -26,7 +26,7 @@ Make **`ci-ok`** the only required status check in the branch protection rule. D
 
 ## e2e (keyless quick start)
 
-`.github/workflows/e2e.yml` installs the quick start on a hosted `ubuntu-24.04` runner with no key and no token (`PROFILE=quickstart ./install.sh`, the stub model), then runs `hack/ci/smoke.sh`: the agent is Ready, a question is answered through the A2A gate with a tool call, a tool outside the profile returns nothing, a forbidden definition is refused, the console API answers 401 without the token and lists the agent with it. It runs on pull requests that touch install-relevant paths, nightly, and by hand (input `observability` also installs the bundled observability to measure its cost). The job summary has the time to the first working agent and the install steps with their times. Local equivalent: `PROFILE=quickstart ./install.sh && hack/ci/smoke.sh`. The record of the runs, including gVisor on the runner, is below.
+`.github/workflows/e2e.yml` installs the quick start on a hosted `ubuntu-24.04` runner with no key and no token (`PROFILE=quickstart ./install.sh`, the stub model), then runs `hack/ci/smoke.sh`: the agent is Ready, a question is answered through the A2A gate with a tool call, a tool outside the profile returns nothing, a forbidden definition is refused, the console API answers 401 without the token and lists the agent with it. It runs on pull requests that touch install-relevant paths, nightly, and by hand. The job summary has the time to the first working agent and the install steps with their times. Local equivalent: `PROFILE=quickstart ./install.sh && hack/ci/smoke.sh`. The record of the runs, including gVisor on the runner, is below.
 
 ## Tools and pins
 

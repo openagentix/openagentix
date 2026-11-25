@@ -1978,6 +1978,7 @@ eq "profile: no notify, no memory embeddings"          "$(count "$D" '.metadata.
 eq "profile: no schedules, no Kourier objects"         "$(count "$D" '.kind=="CronJob" or (.apiVersion|startswith("agentkourier"))')" 0
 eq "profile: control plane, console and gate on"       "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("openagentix-control-plane","openagentix-console","a2a-gate"))')" 3
 eq "profile: one tool server and one profile vMCP"     "$(count "$D" '.kind=="MCPServer"')/$(count "$D" '.kind=="VirtualMCPServer" and (.metadata.annotations["openagentix.io/tool-profile"]//"")!=""')" 1/1
+eq "profile: bundled observability on, content capture off"  "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("jaeger","victoria-metrics"))')/$(q "$D" '[.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-observability")|.data.captureContent]|first')" 2/false
 eq "profile: the model alias goes through the gateway" "$(q "$D" '.[]|select(.kind=="AgentgatewayModel")|.metadata.name')" quickstart-model
 eq "profile: the gate has the ask rule"                "$(q "$D" '.[]|select(.kind=="ConfigMap" and (.data["rules.json"]//"")!="")|.data["rules.json"]|fromjson|.callers[]|select(.name=="quickstart-ask")|.agents[0]')" kagent/quickstart
 eq "profile: the policy admits the alias and profile"  "$(q "$D" '[.[]|select(.kind=="ConfigMap")|.data["policy.json"]//empty|fromjson|(.allowedModels[0],.allowedProfiles[0])]|join(",")')" quickstart-model,lookup

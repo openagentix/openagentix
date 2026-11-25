@@ -28,7 +28,7 @@ flowchart LR
   C["console"] --> CP["control plane"] --> A
 ```
 
-The profile is `components/quickstart/values.yaml`. It turns on the runtime, the model gateway, the tool gateway with one server and one profile, the control plane, the console and the A2A gate, and turns off the Telegram bridge, channels, schedules, notify, observability, the knowledge base and memory. The agent is not a chart agent: the installer applies `components/quickstart/agent.yaml`, an `AgentDefinition`, and the control plane builds the agent from it after checking it against the policy (one model alias, one profile, no egress).
+The profile is `components/quickstart/values.yaml`. It turns on the runtime, the model gateway, the tool gateway with one server and one profile, the control plane, the console, the A2A gate and the bundled observability (VictoriaMetrics and Jaeger, content capture off), and turns off the Telegram bridge, channels, schedules, notify, the knowledge base and memory. The agent is not a chart agent: the installer applies `components/quickstart/agent.yaml`, an `AgentDefinition`, and the control plane builds the agent from it after checking it against the policy (one model alias, one profile, no egress).
 
 **Which model.** The gateway alias is always `quickstart-model`. The installer picks, in order: a key in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) or an OpenAI-compatible endpoint (`MODEL_BASE_URL`, `MODEL_NAME`, optional `MODEL_API_KEY`); a local Ollama when you ask (`MODEL_PROVIDER=ollama`); the stub. `MODEL_PROVIDER` forces one. The last lines of the install say which is active; the stub case says so loudly and prints the one-line command for a real model. The agent's description carries the model line too, so the console shows it.
 
@@ -49,7 +49,6 @@ MODEL_PROVIDER=ollama MODEL_NAME=llama3.2 PROFILE=quickstart ./install.sh   # no
 
 `BUILD_JOBS` (default 3) sets how many images build at once. A second cluster beside an existing one: `CLUSTER=<name> KUBECONFIG=<file> ./install.sh`.
 
-To add the bundled observability (VictoriaMetrics and Jaeger) to the quick start: `VALUES_FILE=components/observability/demo-values.yaml PROFILE=quickstart ./install.sh`.
 
 ## How it was checked
 
@@ -60,7 +59,16 @@ To add the bundled observability (VictoriaMetrics and Jaeger) to the quick start
 
 ## What was measured
 
-See the table at the end of this page, filled from the e2e job summary. Only numbers that were measured are listed.
+All numbers are from the e2e job on a GitHub-hosted `ubuntu-24.04` runner (4 vCPU, about 16 GB), cold: nothing cached, every image pulled or built. A laptop and a warm re-run were not timed; the local proof was not run because the only machine available was in use for another demo.
+
+| What | Measured |
+|---|---|
+| `./install.sh` start to the agent Ready (stub, no key) | 366 s (6 min 6 s) |
+| the same with observability off | 366 s; with it on, 390 s in a single run (+24 s), so the profile keeps it on |
+| node memory after the install and the smoke test | 2.326 GiB without observability, 2.366 GiB with it |
+| the smoke test (10 checks) | passed, 5 s |
+
+Where the 366 s go (cumulative from the start): kind, Substrate and kagent with their PostgreSQL 128 s; agentgateway 183 s; the four image builds (3 at a time) 289 s; `helm upgrade` 296 s; the tool profile vMCP 355 s; the agent Ready 366 s. Before this work the same install with every feature took about 23 minutes (README, 2026-11-25). The Substrate gVisor sandbox works on the hosted runner without any special setting.
 
 ## What is not covered
 

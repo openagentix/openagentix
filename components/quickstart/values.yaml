@@ -3,14 +3,19 @@
 # ON:  runtime (kagent + Agent Substrate, installed by install.sh), model gateway with a virtual key and a token budget, tool gateway with ONE
 #      small tool server (osv) and ONE tool profile (lookup), the control plane, the console and the A2A gate. One AgentDefinition (agent.yaml) is
 #      applied by install.sh at the end, so the visitor sees the builder path.
-# OFF: Telegram bridge, Kourier channels, schedules, notify, observability bundle, knowledge base and graph (and their embedding servers), memory.
+#      The bundled observability (VictoriaMetrics + Jaeger, content capture OFF): measured in CI at +24 s install time and +0.04 GiB node memory (ADR 0014).
+# OFF: Telegram bridge, Kourier channels, schedules, notify, knowledge base and graph (and their embedding servers), memory.
 # The model behind `quickstart-model` is chosen by install.sh (components/quickstart/model.sh): your provider key when one is in the
 # environment, a local Ollama when you ask for it, else the built-in stub. This file lists the stub; install.sh replaces `gateway.models` for the other paths.
 bridge:
   enabled: false
 
 knowledge: {enabled: false}
-memory: {}
+
+observability:
+  enabled: true
+  bundled:
+    enabled: true
 
 agents: []                           # no chart agent: the agent is an AgentDefinition made by the control plane
 

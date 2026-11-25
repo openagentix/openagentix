@@ -48,7 +48,7 @@ Pinned upstream versions: kagent and Agent Substrate 1.0.1, Gateway API CRDs 1.6
 
 Bring any model key, or a local model, and get a governed agent on a laptop-size kind cluster. No chat app is needed, and no account other than your model provider's. (Slack is the first channel for organisations, planned for release 0.4; the Telegram bridge is an optional demo.)
 
-You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 6 CPU and 8 GB.
+You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 4 CPU and 8 GB or more (measured: 6 min 6 s on a hosted 4 vCPU / 16 GB runner, the node used 2.3 GiB; a laptop was not timed).
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh      # or ./install.sh --quickstart
@@ -58,7 +58,7 @@ Model, chosen for you in this order: a key in the environment (`ANTHROPIC_API_KE
 
 No key yet? You can still try the platform's controls in 10 minutes: run `PROFILE=quickstart ./install.sh` with nothing set. A built-in **stub model** answers. It is a scripted stand-in, not a language model: it calls a tool for a vulnerability question and reports what the tool returned, and every answer says it is the stub. Use it to see the tool profile, the gate, the budget, the console and the refusals, not for answers. To switch later, run the same command with a key or endpoint above.
 
-What you get: kagent and Agent Substrate (sandboxed agents), the model gateway (a virtual key and a token budget per agent), the tool gateway with one tool server (OSV) and one tool profile that offers one tool, the control plane and the console, the A2A gate, and one agent, `quickstart`, created from an `AgentDefinition` (`components/quickstart/agent.yaml`). Off: the Telegram bridge, channels, schedules, notify, observability, the knowledge base and memory.
+What you get: kagent and Agent Substrate (sandboxed agents), the model gateway (a virtual key and a token budget per agent), the tool gateway with one tool server (OSV) and one tool profile that offers one tool, the control plane and the console, the A2A gate, the bundled metrics store and Jaeger (content capture off), and one agent, `quickstart`, created from an `AgentDefinition` (`components/quickstart/agent.yaml`). Off: the Telegram bridge, channels, schedules, notify, the knowledge base and memory.
 
 Ask the agent, with no chat app (the answer comes back through the A2A gate):
 
