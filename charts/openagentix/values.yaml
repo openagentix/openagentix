@@ -543,6 +543,16 @@ controlPlane:
     # caller. All container agents together also share half of governance.a2a.maxInFlight.
     responseTimeoutSeconds: 300
     maxInFlightPerAgent: 32
+    # Tools (ADR 0019). Names of mcp.profiles that container agents may use (spec.toolProfile). Empty: none, and nothing below renders.
+    # Each listed profile P gets a second vMCP, <mcp.virtual.name>-P-workload, with the same tools as P. It accepts only a Kubernetes
+    # ServiceAccount token of the workload namespace with the audience <mcp.virtual.incomingAuth.oidc.audience>-P-workload; the agent's pod
+    # gets that token from the kubelet (no Secret). One more pod per listed profile.
+    toolProfiles: []
+    # How that vMCP checks the token: the cluster's ServiceAccount issuer (kubectl get --raw /.well-known/openid-configuration shows it;
+    # kind and k3s use the value below) and where the keys are. The vMCP fetches them with its own token and the cluster CA.
+    serviceAccountTokens:
+      issuer: https://kubernetes.default.svc.cluster.local
+      jwksUrl: https://kubernetes.default.svc/openid/v1/jwks
   # What kagent uses as the lifetime of a saved memory when a definition sets none (kagent default 15). The controller needs it to check
   # `ttlDays` against policy.memory.maxTtlDays.
   memoryDefaultTtlDays: 15

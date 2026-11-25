@@ -98,17 +98,46 @@ spec:
       inline:
         policies: {{ toJson $policies }}
   outgoingAuth: {source: discovered}
-{{- range $p := $m.profiles }}
+{{- /* Tools for container agents (ADR 0019): profiles listed in controlPlane.containerAgents.toolProfiles get a second object below (variant
+"workload") with the same filter and code mode, and an incomingAuth of its own. Empty list (the default): nothing changes. */}}
+{{- $wl := include "oa.caToolProfiles" . | fromJsonArray }}
+{{- $wlNames := list }}{{ range $w := $wl }}{{ $wlNames = append $wlNames $w.name }}{{ end }}
+{{- if $wl }}
 ---
+# Validates the Kubernetes ServiceAccount tokens of container agents (ADR 0019). The keys are fetched from the API server with the vMCP's
+# own token and the cluster CA (useClusterAuth). The audience is set per server, so one config serves every opened profile.
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPOIDCConfig
+metadata:
+  name: openagentix-workload-sa
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  type: kubernetesServiceAccount
+  kubernetesServiceAccount:
+    issuer: {{ .Values.controlPlane.containerAgents.serviceAccountTokens.issuer | quote }}
+    jwksUrl: {{ .Values.controlPlane.containerAgents.serviceAccountTokens.jwksUrl | quote }}
+    useClusterAuth: true
+{{- end }}
+{{- range $p := $m.profiles }}
+{{- $variants := list "" }}{{ if has $p.name $wlNames }}{{ $variants = append $variants "workload" }}{{ end }}
+{{- range $v := $variants }}
+---
+{{- if $v }}
+# Tool profile {{ $p.name }} for container agents (ADR 0019): the same tools as {{ $m.virtual.name }}-{{ $p.name }}, but it accepts a Kubernetes
+# ServiceAccount token with its own audience, and the policy admits only subjects of the workload namespace. Any pod can get a token with
+# this audience for its own ServiceAccount, so the namespace rule is what keeps other namespaces out.
+{{- else }}
 # Tool profile {{ $p.name }} (ADR 0006, round 2): a second vMCP on the same MCPGroup that advertises only the tools listed in the profile.
 # defaultToolVisibility deny: a backend without an entry below contributes nothing. A hidden tool is also not callable through
 # this server (not found, code mode included); the filter is the limit, so the policy allows every authenticated call. The
 # audience is its own: the actor token of an agent on this profile is useless at the shared vMCP, and the agent's sandbox
 # gets no JWT for the shared vMCP at all (its egress allowlist names only the origins of the agent's own tool servers).
+{{- end }}
 apiVersion: toolhive.stacklok.dev/v1beta1
 kind: VirtualMCPServer
 metadata:
-  name: {{ $m.virtual.name }}-{{ $p.name }}
+  name: {{ $m.virtual.name }}-{{ $p.name }}{{ if $v }}-workload{{ end }}
   namespace: {{ $m.namespace }}
   labels: {{- include "oa.labels" $ | nindent 4 }}
   annotations:
@@ -143,11 +172,20 @@ spec:
   {{- end }}
   incomingAuth:
     type: oidc
+    {{- if $v }}
+    oidcConfigRef: {name: openagentix-workload-sa, audience: {{ printf "%s-%s-workload" $ia.oidc.audience $p.name | quote }}}
+    authzConfig:
+      type: inline
+      inline:
+        policies: [{{ printf "permit(principal, action, resource) when { context.claim_sub like \"system:serviceaccount:%s:*\" };" $.Values.controlPlane.containerAgents.namespace | quote }}]
+    {{- else }}
     oidcConfigRef: {name: {{ $ia.oidc.name }}, audience: {{ printf "%s-%s" $ia.oidc.audience $p.name | quote }}}
     authzConfig:
       type: inline
       inline:
         policies: ["permit(principal, action, resource);"]
+    {{- end }}
   outgoingAuth: {source: discovered}
+{{- end }}
 {{- end }}
 {{- end }}

@@ -33,9 +33,6 @@ func containerRefusals(s api.Spec, add func(string, ...any)) {
 	if len(s.Tools) > 0 {
 		add("tools cannot be listed for a container agent: a container agent gets every tool of its profile; make a narrower profile")
 	}
-	if s.ToolProfile != "" {
-		add("toolProfile is not available yet for container agents")
-	}
 	if len(s.Egress.Allow) > 0 {
 		add("egress.allow is not available yet for container agents")
 	}
@@ -50,6 +47,25 @@ func containerRefusals(s api.Spec, add func(string, ...any)) {
 	}
 	if len(s.Skills) > 0 {
 		add("skills are not available for container agents")
+	}
+}
+
+// containerToolProfile checks spec.toolProfile of a container agent (ADR 0019). No profile: no tools, which is allowed whatever
+// requireToolProfile says. A named profile must exist, be allowed by the policy, and be one the operator opened to container agents
+// (the tools adapter then reports how a container reaches it).
+func containerToolProfile(in Input, add func(string, ...any)) {
+	s := in.Def.Spec
+	if s.ToolProfile == "" {
+		return
+	}
+	prof, ok := in.Tools.Profile(s.ToolProfile)
+	switch {
+	case !ok:
+		add("toolProfile %q is not defined (defined: %s)", s.ToolProfile, strings.Join(in.Tools.Profiles(), ", "))
+	case !in.Policy.ProfileAllowed(s.ToolProfile):
+		add("toolProfile %q is not allowed by the platform policy", s.ToolProfile)
+	case prof.Workload == nil:
+		add("toolProfile %q is not open to container agents (the operator lists such profiles in controlPlane.containerAgents.toolProfiles)", s.ToolProfile)
 	}
 }
 

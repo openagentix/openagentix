@@ -21,6 +21,11 @@ Kubernetes API token.
 | `OPENAI_API_KEY` | bearer key sent to the model (never logged or returned) |
 | `OPENAGENTIX_MODEL` | model name to request |
 | `LISTEN_ADDR` | optional, default `:8080` |
+| `OPENAGENTIX_MCP_URL`, `OPENAGENTIX_MCP_TOKEN_FILE` | set by the platform only when the definition names a `toolProfile` the operator opened to container agents (ADR 0019) |
+
+The message `/tools` lists the tools of the agent's tool profile: the agent calls `initialize` and `tools/list` at
+`OPENAGENTIX_MCP_URL` with the token read again from `OPENAGENTIX_MCP_TOKEN_FILE` (the kubelet replaces it), and answers
+`tools: <names>`. Without a profile it answers `no tool profile: OPENAGENTIX_MCP_URL is not set`. The sample does not call tools.
 
 With any of the three missing the agent still starts and serves its card; `SendMessage` returns error -32000 naming the
 missing variable.

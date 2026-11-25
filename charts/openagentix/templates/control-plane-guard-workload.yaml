@@ -23,6 +23,14 @@ The image is pinned to a digest and to the operator's registry prefixes here; th
 {{- $prefixes := $pc.images | default list }}
 {{- $maxCPU := ($pc.maxResources | default dict).cpu | default "1" }}
 {{- $maxMem := ($pc.maxResources | default dict).memory | default "1Gi" }}
+{{- /* Tools (ADR 0019): the profiles opened to container agents. With none listed, every policy below renders exactly as without this. */}}
+{{- $wl := include "oa.caToolProfiles" . | fromJsonArray }}
+{{- $wlMap := dict }}{{ range $w := $wl }}{{ $_ := set $wlMap $w.name (dict "url" $w.url "audience" $w.audience) }}{{ end }}
+{{- $wlRules := list }}
+{{- range $w := $wl }}
+{{- $wlRules = append $wlRules (printf "dyn({'to': dyn([{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': %s}}, 'podSelector': {'matchLabels': %s}}]), 'ports': dyn([{'protocol': dyn('TCP'), 'port': dyn(%d)}])})" ($.Values.mcp.namespace | toJson) (include "oa.celMap" (dict "app" "virtualmcpserver" "toolhive-name" $w.server)) (int $w.port)) }}
+{{- end }}
+{{- $tokDir := "/var/run/secrets/openagentix/mcp" }}
 {{- $metaKeys := "['name', 'namespace', 'labels', 'annotations', 'ownerReferences', 'uid', 'resourceVersion', 'generation', 'creationTimestamp', 'deletionTimestamp', 'deletionGracePeriodSeconds', 'finalizers', 'managedFields']" }}
 {{- $labelKeys := "['app.kubernetes.io/managed-by', 'app.kubernetes.io/name', 'openagentix.io/agent', 'openagentix.io/agent-definition', 'openagentix.io/definition-namespace', 'openagentix.io/team', 'openagentix.io/project']" }}
 {{- $kinds := list
@@ -58,6 +66,13 @@ spec:
       expression: "variables.del ? variables.prev : variables.cur"
     - name: agent
       expression: "has(variables.subject.metadata.name) ? variables.subject.metadata.name : ''"
+    {{- if and $wl (eq $k.kind "Deployment") }}
+    # the opened profiles (name -> url, audience), and the profile the pod is labelled with ('' when none, or when it is not one of them)
+    - name: wl
+      expression: {{ toJson $wlMap | toJson }}
+    - name: tp
+      expression: "!variables.del && has(variables.cur.spec.template.metadata.labels) && 'openagentix.io/tool-profile' in variables.cur.spec.template.metadata.labels && variables.cur.spec.template.metadata.labels['openagentix.io/tool-profile'] in variables.wl ? variables.cur.spec.template.metadata.labels['openagentix.io/tool-profile'] : ''"
+    {{- end }}
   validations:
     - message: {{ printf "the control plane may only write %s in the namespace %s" $k.id $wns | quote }}
       expression: {{ printf "request.namespace == %s" ($wns | toJson) | toJson }}
@@ -116,13 +131,18 @@ spec:
             type(p.targetPort) == int && p.targetPort >= 1024 && p.targetPort <= 65535))
 {{- end }}
 {{- if eq $k.kind "NetworkPolicy" }}
-    - message: "a NetworkPolicy admits only the A2A gate to the agent's port and lets the agent reach only DNS and the model gateway"
+    - message: "a NetworkPolicy admits only the A2A gate to the agent's port and lets the agent reach only DNS and the model gateway{{ if $wl }} (and, as a third rule, the workload tool server of one opened profile){{ end }}"
       expression: |-
         request.operation == 'DELETE' || (
           variables.cur.spec.all(k, k in ['podSelector', 'policyTypes', 'ingress', 'egress']) &&
           variables.cur.spec.podSelector == dyn({'matchLabels': {'openagentix.io/agent': variables.agent}}) &&
           variables.cur.spec.policyTypes == dyn(['Ingress', 'Egress']) &&
+          {{- if $wl }}
+          size(variables.cur.spec.ingress) == 1 &&
+          (size(variables.cur.spec.egress) == 2 || (size(variables.cur.spec.egress) == 3 && [{{ join ", " $wlRules }}].exists(r, variables.cur.spec.egress[2] == r))) &&
+          {{- else }}
           size(variables.cur.spec.ingress) == 1 && size(variables.cur.spec.egress) == 2 &&
+          {{- end }}
           'from' in variables.cur.spec.ingress[0] && 'ports' in variables.cur.spec.ingress[0] && variables.cur.spec.ingress[0].all(k, k in ['from', 'ports']) &&
           variables.cur.spec.ingress[0].from == dyn([{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': {{ $ck.gateNamespace | toJson }}}}, 'podSelector': {'matchLabels': {{ include "oa.celMap" $ck.gatePodSelector }}}}]) &&
           size(variables.cur.spec.ingress[0].ports) == 1 && variables.cur.spec.ingress[0].ports[0].all(k, k in ['protocol', 'port']) &&
@@ -144,7 +164,12 @@ spec:
           variables.cur.spec.selector == dyn({'matchLabels': {'openagentix.io/agent': variables.agent}}) &&
           variables.cur.spec.template.all(k, k in ['metadata', 'spec']) &&
           variables.cur.spec.template.metadata.all(k, k in ['labels', 'annotations', 'creationTimestamp']) &&
+          {{- if $wl }}
+          (variables.cur.spec.template.metadata.labels == dyn({'openagentix.io/agent': variables.agent}) ||
+            (variables.tp != '' && variables.cur.spec.template.metadata.labels == dyn({'openagentix.io/agent': variables.agent, 'openagentix.io/tool-profile': variables.tp}))) &&
+          {{- else }}
           variables.cur.spec.template.metadata.labels == dyn({'openagentix.io/agent': variables.agent}) &&
+          {{- end }}
           (!has(variables.cur.spec.template.metadata.annotations) ||
             variables.cur.spec.template.metadata.annotations.all(k, k == 'openagentix.io/key-fingerprint' && type(variables.cur.spec.template.metadata.annotations[k]) == string && variables.cur.spec.template.metadata.annotations[k].matches('^[0-9a-f]{1,16}$'))))
     # the pod: its own ServiceAccount without a token, non-root 65532, seccomp RuntimeDefault; no host namespaces, node placement, init or ephemeral containers
@@ -181,7 +206,7 @@ spec:
             c.securityContext.allowPrivilegeEscalation == false && c.securityContext.readOnlyRootFilesystem == true &&
             c.securityContext.capabilities == dyn({'drop': ['ALL']}) &&
             size(c.ports) == 1 && c.ports.all(p, p.all(k, k in ['name', 'containerPort', 'protocol']) && type(p.containerPort) == int && p.containerPort >= 1024 && p.containerPort <= 65535 && (!has(p.protocol) || p.protocol == 'TCP'))))
-    - message: "the container's environment is the key from its own Secret, the gateway URL, the model and the user's plain variables, none of them with a reserved prefix"
+    - message: "the container's environment is the key from its own Secret, the gateway URL, the model{{ if $wl }}, the tool URL and token file of the labelled profile{{ end }} and the user's plain variables, none of them with a reserved prefix"
       expression: |-
         request.operation == 'DELETE' || variables.cur.spec.template.spec.containers.all(c, has(c.env) && c.env.all(e,
           e.all(k, k in ['name', 'value', 'valueFrom']) && type(e.name) == string &&
@@ -190,6 +215,10 @@ spec:
              e.valueFrom.secretKeyRef.name.matches('^' + variables.agent + '-virtual-key-[0-9a-f]{8}$')) :
           e.name == 'OPENAI_BASE_URL' ? (!has(e.valueFrom) && e.value == {{ $cat.gatewayBaseUrl | toJson }}) :
           e.name == 'OPENAGENTIX_MODEL' ? (!has(e.valueFrom) && e.value in {{ toJson $cat.models }}) :
+          {{- if $wl }}
+          e.name == 'OPENAGENTIX_MCP_URL' ? (!has(e.valueFrom) && variables.tp != '' && e.value == variables.wl[variables.tp].url) :
+          e.name == 'OPENAGENTIX_MCP_TOKEN_FILE' ? (!has(e.valueFrom) && variables.tp != '' && e.value == {{ printf "%s/token" $tokDir | toJson }}) :
+          {{- end }}
           (!has(e.valueFrom) && has(e.value) && e.name.matches('^[A-Z_][A-Z0-9_]*$') && size(e.value) <= 4096 &&
            !e.name.startsWith('OPENAGENTIX_') && !e.name.startsWith('OPENAI_') && !e.name.startsWith('OTEL_') && !e.name.startsWith('KUBERNETES_')))))
     - message: {{ printf "resources must set CPU and memory limits at or under the platform maximum (cpu %s, memory %s), requests no higher than the limits" $maxCPU $maxMem | quote }}
@@ -202,12 +231,36 @@ spec:
           (!has(c.resources.requests) || (c.resources.requests.all(k, k in ['cpu', 'memory']) &&
             (!has(c.resources.requests.cpu) || quantity(c.resources.requests.cpu).compareTo(quantity(c.resources.limits.cpu)) <= 0) &&
             (!has(c.resources.requests.memory) || quantity(c.resources.requests.memory).compareTo(quantity(c.resources.limits.memory)) <= 0))))
-    - message: "the only volume is an emptyDir of 256Mi mounted at /tmp, and the probes are HTTP GETs of the agent card"
+    - message: "the only volume is an emptyDir of 256Mi mounted at /tmp{{ if $wl }} (and, for a pod labelled with an opened profile, one projected token of that profile mounted read-only){{ end }}, and the probes are HTTP GETs of the agent card"
       expression: |-
         request.operation == 'DELETE' || (
+          {{- if $wl }}
+          (size(variables.cur.spec.template.spec.volumes) == 1 || (variables.tp != '' && size(variables.cur.spec.template.spec.volumes) == 2 &&
+            variables.cur.spec.template.spec.volumes[1].all(k, k in ['name', 'projected']) && variables.cur.spec.template.spec.volumes[1].name == 'mcp-token' &&
+            variables.cur.spec.template.spec.volumes[1].projected.all(k, k in ['sources', 'defaultMode']) &&
+            (!has(variables.cur.spec.template.spec.volumes[1].projected.defaultMode) || variables.cur.spec.template.spec.volumes[1].projected.defaultMode == 420) &&
+            size(variables.cur.spec.template.spec.volumes[1].projected.sources) == 1 &&
+            variables.cur.spec.template.spec.volumes[1].projected.sources[0].all(k, k == 'serviceAccountToken') &&
+            variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.all(k, k in ['audience', 'expirationSeconds', 'path']) &&
+            has(variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.audience) &&
+            variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.audience == variables.wl[variables.tp].audience &&
+            has(variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.path) &&
+            variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.path == 'token' &&
+            has(variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.expirationSeconds) &&
+            type(variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.expirationSeconds) == int &&
+            variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.expirationSeconds >= 600 &&
+            variables.cur.spec.template.spec.volumes[1].projected.sources[0].serviceAccountToken.expirationSeconds <= 3600)) &&
+          variables.cur.spec.template.spec.volumes[0].all(k, k in ['name', 'emptyDir']) && variables.cur.spec.template.spec.volumes[0].name == 'tmp' &&
+          {{- else }}
           size(variables.cur.spec.template.spec.volumes) == 1 && variables.cur.spec.template.spec.volumes[0].all(k, k in ['name', 'emptyDir']) && variables.cur.spec.template.spec.volumes[0].name == 'tmp' &&
+          {{- end }}
           variables.cur.spec.template.spec.volumes[0].emptyDir.all(k, k == 'sizeLimit') && variables.cur.spec.template.spec.volumes[0].emptyDir.sizeLimit == '256Mi' &&
+          {{- if $wl }}
+          variables.cur.spec.template.spec.containers.all(c, (c.volumeMounts == dyn([{'name': 'tmp', 'mountPath': '/tmp'}]) ||
+            (size(variables.cur.spec.template.spec.volumes) == 2 && c.volumeMounts == dyn([dyn({'name': 'tmp', 'mountPath': '/tmp'}), dyn({'name': dyn('mcp-token'), 'mountPath': dyn({{ $tokDir | toJson }}), 'readOnly': dyn(true)})]))) &&
+          {{- else }}
           variables.cur.spec.template.spec.containers.all(c, c.volumeMounts == dyn([{'name': 'tmp', 'mountPath': '/tmp'}]) &&
+          {{- end }}
             ['readinessProbe', 'livenessProbe'].all(pn, !(pn in c) || (c[pn].all(k, k in ['httpGet', 'periodSeconds', 'failureThreshold', 'timeoutSeconds', 'successThreshold', 'initialDelaySeconds']) &&
               has(c[pn].httpGet) && c[pn].httpGet.all(k, k in ['path', 'port', 'scheme']) && c[pn].httpGet.path == '/.well-known/agent-card.json' && type(c[pn].httpGet.port) == int &&
               (!has(c[pn].httpGet.scheme) || c[pn].httpGet.scheme == 'HTTP') && (!has(c[pn].timeoutSeconds) || c[pn].timeoutSeconds == 1)))))

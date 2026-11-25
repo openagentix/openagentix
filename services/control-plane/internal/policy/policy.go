@@ -161,6 +161,7 @@ func Validate(in Input) []string {
 
 	if container {
 		containerRefusals(s, add)
+		containerToolProfile(in, add)
 		if s.Runtime.Container != nil || rt == api.RuntimeContainer {
 			containerRules(d, p, in.EarlierContainers, add)
 		}

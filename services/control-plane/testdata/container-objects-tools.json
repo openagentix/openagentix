@@ -1,0 +1,349 @@
+{
+  "apiVersion": "v1",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "automountServiceAccountToken": false,
+      "kind": "ServiceAccount",
+      "metadata": {
+        "annotations": {
+          "openagentix.io/definition-uid": "0a1b2c3d-1111-4222-8333-444444444444"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "openagentix-control-plane",
+          "app.kubernetes.io/name": "echo-go",
+          "openagentix.io/agent": "echo-go",
+          "openagentix.io/agent-definition": "echo-go",
+          "openagentix.io/definition-namespace": "kagent"
+        },
+        "name": "echo-go",
+        "namespace": "openagentix-agents"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "annotations": {
+          "openagentix.io/definition-uid": "0a1b2c3d-1111-4222-8333-444444444444"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "openagentix-control-plane",
+          "app.kubernetes.io/name": "echo-go",
+          "openagentix.io/agent": "echo-go",
+          "openagentix.io/agent-definition": "echo-go",
+          "openagentix.io/definition-namespace": "kagent"
+        },
+        "name": "echo-go",
+        "namespace": "openagentix-agents"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "openagentix.io/agent": "echo-go"
+          }
+        },
+        "template": {
+          "metadata": {
+            "annotations": {
+              "openagentix.io/key-fingerprint": "abcdef012345"
+            },
+            "labels": {
+              "openagentix.io/agent": "echo-go",
+              "openagentix.io/tool-profile": "lookup"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "OPENAI_API_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "OPENAI_API_KEY",
+                        "name": "echo-go-virtual-key-0a1b2c3d"
+                      }
+                    }
+                  },
+                  {
+                    "name": "OPENAI_BASE_URL",
+                    "value": "http://model-gateway.agentgateway-system.svc.cluster.local/v1"
+                  },
+                  {
+                    "name": "OPENAGENTIX_MODEL",
+                    "value": "claude-haiku"
+                  },
+                  {
+                    "name": "OPENAGENTIX_MCP_URL",
+                    "value": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"
+                  },
+                  {
+                    "name": "OPENAGENTIX_MCP_TOKEN_FILE",
+                    "value": "/var/run/secrets/openagentix/mcp/token"
+                  },
+                  {
+                    "name": "A_FLAG",
+                    "value": "1"
+                  },
+                  {
+                    "name": "LOG_LEVEL",
+                    "value": "info"
+                  }
+                ],
+                "image": "ghcr.io/acme/agents/echo-go@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "imagePullPolicy": "Always",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/.well-known/agent-card.json",
+                    "port": 9000
+                  },
+                  "periodSeconds": 30
+                },
+                "name": "agent",
+                "ports": [
+                  {
+                    "containerPort": 9000,
+                    "name": "a2a",
+                    "protocol": "TCP"
+                  }
+                ],
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/.well-known/agent-card.json",
+                    "port": 9000
+                  },
+                  "periodSeconds": 5
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "500m",
+                    "memory": "512Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "256Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/tmp",
+                    "name": "tmp"
+                  },
+                  {
+                    "mountPath": "/var/run/secrets/openagentix/mcp",
+                    "name": "mcp-token",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "enableServiceLinks": false,
+            "securityContext": {
+              "runAsGroup": 65532,
+              "runAsNonRoot": true,
+              "runAsUser": 65532,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "serviceAccountName": "echo-go",
+            "volumes": [
+              {
+                "emptyDir": {
+                  "sizeLimit": "256Mi"
+                },
+                "name": "tmp"
+              },
+              {
+                "name": "mcp-token",
+                "projected": {
+                  "sources": [
+                    {
+                      "serviceAccountToken": {
+                        "audience": "openagentix-vmcp-lookup-workload",
+                        "expirationSeconds": 3600,
+                        "path": "token"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "annotations": {
+          "openagentix.io/definition-uid": "0a1b2c3d-1111-4222-8333-444444444444"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "openagentix-control-plane",
+          "app.kubernetes.io/name": "echo-go",
+          "openagentix.io/agent": "echo-go",
+          "openagentix.io/agent-definition": "echo-go",
+          "openagentix.io/definition-namespace": "kagent"
+        },
+        "name": "echo-go",
+        "namespace": "openagentix-agents"
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "a2a",
+            "port": 8080,
+            "protocol": "TCP",
+            "targetPort": 9000
+          }
+        ],
+        "selector": {
+          "openagentix.io/agent": "echo-go"
+        },
+        "type": "ClusterIP"
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "annotations": {
+          "openagentix.io/definition-uid": "0a1b2c3d-1111-4222-8333-444444444444"
+        },
+        "labels": {
+          "app.kubernetes.io/managed-by": "openagentix-control-plane",
+          "app.kubernetes.io/name": "echo-go",
+          "openagentix.io/agent": "echo-go",
+          "openagentix.io/agent-definition": "echo-go",
+          "openagentix.io/definition-namespace": "kagent"
+        },
+        "name": "echo-go",
+        "namespace": "openagentix-agents"
+      },
+      "spec": {
+        "egress": [
+          {
+            "ports": [
+              {
+                "port": 53,
+                "protocol": "UDP"
+              },
+              {
+                "port": 53,
+                "protocol": "TCP"
+              }
+            ],
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "kube-system"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "k8s-app": "kube-dns"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "ports": [
+              {
+                "port": 8080,
+                "protocol": "TCP"
+              }
+            ],
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "agentgateway-system"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "model-gateway"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "ports": [
+              {
+                "port": 4483,
+                "protocol": "TCP"
+              }
+            ],
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "mcp-tools"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "virtualmcpserver",
+                    "toolhive-name": "tools-lookup-workload"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "ingress": [
+          {
+            "from": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "openagentix-gateway"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "a2a-gate"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "port": 9000,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        ],
+        "podSelector": {
+          "matchLabels": {
+            "openagentix.io/agent": "echo-go"
+          }
+        },
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ]
+      }
+    }
+  ],
+  "kind": "List"
+}

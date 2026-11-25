@@ -175,6 +175,71 @@ func TestContainerRuntimeCatalogRefusals(t *testing.T) {
 	}
 }
 
+// workloadProfile adds a workload entry (ADR 0019) to the profile of testdata/catalog.json.
+const workloadEntry = `"toolServer": "toolhive-vmcp-lookup", "workload": {"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp", "audience": "openagentix-vmcp-lookup-workload", "namespace": "mcp-tools", "podSelector": {"app": "virtualmcpserver", "toolhive-name": "tools-lookup-workload"}, "port": 4483}`
+
+func withWorkload(t *testing.T, edit func(string) string) (*Catalog, error) {
+	t.Helper()
+	base, err := os.ReadFile("../../testdata/catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.Replace(string(base), `"toolServer": "toolhive-vmcp-lookup"`, workloadEntry, 1)
+	if s == string(base) {
+		t.Fatal("test input not changed")
+	}
+	if edit != nil {
+		s = edit(s)
+	}
+	return LoadCatalog(write(t, s))
+}
+
+func TestWorkloadToolAccessInTheCatalog(t *testing.T) {
+	c, err := withWorkload(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := c.Tools.Toolhive.Profile("lookup")
+	w := p.Workload
+	if w == nil || w.URL != "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp" || w.Audience != "openagentix-vmcp-lookup-workload" ||
+		w.Namespace != "mcp-tools" || w.Port != 4483 || w.PodSelector["toolhive-name"] != "tools-lookup-workload" {
+		t.Fatalf("%+v", w)
+	}
+	// without the entry a profile is not open to container agents
+	old, err := LoadCatalog("../../testdata/catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := old.Tools.Toolhive.Profile("lookup"); p.Workload != nil {
+		t.Fatal("no workload entry, no workload access")
+	}
+	for name, c := range map[string]struct{ from, to, want string }{
+		"no url":                {`"url": "http://vmcp`, `"url": "", "x": "http://vmcp`, "unknown field"},
+		"empty url":             {`"url": "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"`, `"url": ""`, "workload.url"},
+		"ftp url":               {`"url": "http://`, `"url": "ftp://`, "workload.url"},
+		"url with user":         {`"url": "http://`, `"url": "http://u:p@`, "workload.url"},
+		"no audience":           {`"audience": "openagentix-vmcp-lookup-workload"`, `"audience": ""`, "workload.audience"},
+		"audience with a space": {`"audience": "openagentix-vmcp-lookup-workload"`, `"audience": "a b"`, "workload.audience"},
+		"other namespace":       {`"namespace": "mcp-tools", "podSelector"`, `"namespace": "kube-system", "podSelector"`, "workload.namespace"},
+		"empty selector":        {`"podSelector": {"app": "virtualmcpserver", "toolhive-name": "tools-lookup-workload"}`, `"podSelector": {}`, "workload.podSelector"},
+		"empty label value":     {`"toolhive-name": "tools-lookup-workload"`, `"toolhive-name": ""`, "workload.podSelector"},
+		"bad port":              {`"port": 4483`, `"port": 0`, "workload.port"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := withWorkload(t, func(s string) string {
+				n := strings.Replace(s, c.from, c.to, 1)
+				if n == s {
+					t.Fatal("test input not changed")
+				}
+				return n
+			})
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("want %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
 func TestImageRE(t *testing.T) {
 	d := "@sha256:" + strings.Repeat("a", 64)
 	for in, ok := range map[string]bool{

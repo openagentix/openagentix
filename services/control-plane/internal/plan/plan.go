@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -65,6 +66,19 @@ type Plan struct {
 	RuntimeType string
 	// Container is set for a container agent only. The workload namespace is not here: the runtime adapter owns it.
 	Container *ContainerSpec
+	// ToolAccess is set for a container agent that names a tool profile (ADR 0019), nil otherwise.
+	ToolAccess *ToolAccess
+}
+
+// ToolAccess is how a container agent reaches the tools of its profile: the URL it calls, the audience of the token the kubelet
+// projects into its pod, and the server's pods and port (for its network policy). It comes from the tools adapter; the plan copies it.
+type ToolAccess struct {
+	Profile     string
+	URL         string
+	Audience    string
+	Namespace   string
+	PodSelector map[string]string
+	Port        int
 }
 
 // ContainerSpec is the user's image as the plan carries it: copied from the spec, with the resources resolved against the
@@ -99,7 +113,7 @@ func Build(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolResolver, 
 		return Plan{}, err
 	}
 	if s.RuntimeType() == api.RuntimeContainer {
-		return buildContainer(d, c, pol, secret)
+		return buildContainer(d, c, tr, pol, secret)
 	}
 	p := Plan{
 		RuntimeType: api.RuntimeBuiltin,
@@ -157,8 +171,9 @@ func Build(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolResolver, 
 	return p, nil
 }
 
-// buildContainer is Build for a container agent: no prompt, no tools, no skills (the policy refused them), so nothing is resolved.
-func buildContainer(d *api.AgentDefinition, c *catalog.Catalog, pol *catalog.Policy, secret string) (Plan, error) {
+// buildContainer is Build for a container agent: no prompt, no tool list, no skills (the policy refused them). A tool profile, when
+// named, resolves to how a container reaches it; a profile that is unknown or not open to container agents fails the build.
+func buildContainer(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolResolver, pol *catalog.Policy, secret string) (Plan, error) {
 	s := d.Spec
 	cr := s.Runtime.Container
 	if cr == nil {
@@ -177,6 +192,17 @@ func buildContainer(d *api.AgentDefinition, c *catalog.Catalog, pol *catalog.Pol
 		Container: &ContainerSpec{Image: cr.Image, Port: cr.Port, Env: slices.Clone(cr.Env), Resources: pol.ResolveContainerResources(cr.Resources)},
 	}
 	slices.SortFunc(p.Container.Env, func(a, b api.EnvVar) int { return strings.Compare(a.Name, b.Name) })
+	if s.ToolProfile != "" {
+		prof, ok := tr.Profile(s.ToolProfile)
+		switch {
+		case !ok:
+			return Plan{}, fmt.Errorf("definition %s names toolProfile %q, which the tools adapter does not know", d.Metadata.Name, s.ToolProfile)
+		case prof.Workload == nil:
+			return Plan{}, fmt.Errorf("definition %s names toolProfile %q, which is not open to container agents", d.Metadata.Name, s.ToolProfile)
+		}
+		w := prof.Workload
+		p.ToolAccess = &ToolAccess{Profile: s.ToolProfile, URL: w.URL, Audience: w.Audience, Namespace: w.Namespace, PodSelector: maps.Clone(w.PodSelector), Port: w.Port}
+	}
 	for _, k := range []string{api.LabelTeam, api.LabelProject} {
 		if v, ok := d.Metadata.Labels[k]; ok && v != "" {
 			if p.Labels == nil {

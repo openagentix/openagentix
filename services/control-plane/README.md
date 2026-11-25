@@ -248,8 +248,16 @@ Policy (`allowedRuntimes` absent or empty means only `builtin`):
 A container agent is refused (one sentence each, in `status.violations`) when: the runtime is not allowed or not offered; the image is not
 `registry/path@sha256:<64 hex>` or not under a policy prefix; the port is outside 1024..65535; an env name is malformed, platform owned
 (`OPENAGENTIX_`, `OPENAI_`, `OTEL_`, `KUBERNETES_`), too many (32), too big (4 KiB a value, 16 KiB in all) or a value looks like a secret;
-resources are above `maxResources` or requests above limits; it sets `instructions`, `instructionsFrom`, `tools`, `toolProfile`,
-`egress.allow`, `memory`, `knowledge`, `notify` or `skills`.
+resources are above `maxResources` or requests above limits; it sets `instructions`, `instructionsFrom`, `tools`,
+`egress.allow`, `memory`, `knowledge`, `notify` or `skills`; or it names a `toolProfile` that is not defined, not allowed by
+`allowedProfiles`, or not open to container agents.
+
+Tools (ADR 0019): a container agent may name a `toolProfile` that the catalog opens to container agents (`tools.toolhive.profiles[].workload`,
+from the chart value `controlPlane.containerAgents.toolProfiles`). The pod then gets `OPENAGENTIX_MCP_URL` (the profile's workload tool
+server), `OPENAGENTIX_MCP_TOKEN_FILE=/var/run/secrets/openagentix/mcp/token` (a projected ServiceAccount token with the profile's
+audience, one hour, written and refreshed by the kubelet; no Secret, and `automountServiceAccountToken` stays false), the pod label
+`openagentix.io/tool-profile: <profile>`, and a third egress rule to that server's pods and port. `requireToolProfile` does not apply
+to container agents: without a profile there are no tools. The agent gets every tool of the profile; `tools` stays refused.
 
 What the controller writes, in the workload namespace: ServiceAccount, Deployment, Service, NetworkPolicy (same name as the agent; the pod,
 selectors and policy use the label `openagentix.io/agent: <name>`), and the key Secret (created and deleted only, never read). Owner
@@ -269,7 +277,7 @@ RBAC (exactly): in the workload namespace `deployments`, `services`, `serviceacc
 `status.capabilities.isolation`: `sandbox-per-session` (builtin on Agent Substrate), `container` (container agent), `sandboxed-pod` (a container
 agent when the catalog names a RuntimeClass); absent means unknown. Honest notes: a container agent shares the node kernel unless a
 RuntimeClass is set; one long-lived process serves every conversation and has one identity; `/tmp` is an emptyDir; outbound traffic is
-limited by NetworkPolicy only (DNS and the model gateway), which kindnet does not enforce toward the internet; capabilities `approvals`,
+limited by NetworkPolicy only (DNS, the model gateway and, with a profile, its tool server), which kindnet does not enforce toward the internet; capabilities `approvals`,
 `durableWaits` and `cancelStopsLoop` are `unknown`. Readiness comes from the Deployment status only (no Pod is read).
 
 ## Reserved labels
@@ -387,7 +395,7 @@ adapter needs is in that adapter's own section, `runtime.<adapter>` and `tools.<
 | `runtime.kagent.harnessEnv[]` | list of `{name, value}` | environment of the harness: `OTEL_PROPAGATORS` when observability and baggage are on, else `[]` |
 | `runtime.kagent.memoryModelConfig` | string | name of the shared embedding model config (`memory.modelConfig.name`) |
 | `tools.toolhive.codeModeTool` | string | the name of the code-mode tool (`execute_tool_script`) |
-| `tools.toolhive.profiles[]` | list | tool profiles (`mcp.profiles`): `name`, `toolServer` (name of the profile's server object, `<remoteMCPServer.name>-<profile>`), `codeMode`, `tools` (agent-side names, as the chart's `oa.profileToolNames`; the code-mode tool last when `codeMode`) |
+| `tools.toolhive.profiles[]` | list | tool profiles (`mcp.profiles`): `name`, `toolServer` (name of the profile's server object, `<remoteMCPServer.name>-<profile>`), `codeMode`, `tools` (agent-side names, as the chart's `oa.profileToolNames`; the code-mode tool last when `codeMode`), and `workload` only for a profile open to container agents (ADR 0019): `url`, `audience`, `namespace` (must be `namespaces.tools`), `podSelector`, `port` |
 
 Derived names (not in the file; the kagent adapter's): ModelConfig `gateway-<name>`, Harness `<name>-harness`, AgentTemplate `<name>-template`,
 EgressPolicy `<name>-egress`, Agent `<name>`, all in the definition's namespace; Secret `<name>-virtual-key-<8 hex of the UID>` (at most 40 + 13

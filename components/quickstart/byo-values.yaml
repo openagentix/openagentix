@@ -7,6 +7,9 @@ controlPlane:
   containerAgents:
     enabled: true
     imagePullPolicy: IfNotPresent   # the sample image exists only on the kind node: there is no registry to pull from
+    # ADR 0019: container agents may use the quick start profile "lookup" (one tool, osv_query_vulnerability). This adds one vMCP pod
+    # (tools-lookup-workload). install.sh gives the sample agent toolProfile: lookup; ask it "/tools" to see the list.
+    toolProfiles: [lookup]
   policy:
     allowedRuntimes: [builtin, container]
     runtimes:

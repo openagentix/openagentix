@@ -21,7 +21,7 @@ func must(p Plan, err error) Plan {
 
 func (f tools) Profile(n string) (catalog.ToolProfile, bool) {
 	p, ok := f.c.Tools.Toolhive.Profile(n)
-	return catalog.ToolProfile{Name: p.Name, Backend: p.ToolServer, Tools: p.Tools}, ok
+	return catalog.ToolProfile{Name: p.Name, Backend: p.ToolServer, Tools: p.Tools, Workload: p.Workload}, ok
 }
 func (f tools) Profiles() []string {
 	var n []string
@@ -319,18 +319,55 @@ func TestContainerPlanCarriesTheSpecAndResolvedResources(t *testing.T) {
 	}
 }
 
-func TestContainerBuildSkipsToolResolution(t *testing.T) {
+func openLookup(c *catalog.Catalog) {
+	c.Tools.Toolhive.Profiles[0].Workload = &catalog.WorkloadAccess{URL: "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp",
+		Audience: "openagentix-vmcp-lookup-workload", Namespace: "mcp-tools", PodSelector: map[string]string{"toolhive-name": "tools-lookup-workload"}, Port: 4483}
+}
+
+// ADR 0019: a container plan with a profile carries how the agent reaches that profile, and nothing about single tools.
+func TestContainerPlanResolvesItsProfileToWorkloadAccess(t *testing.T) {
 	c := cat(t)
+	openLookup(c)
 	d := containerDef()
-	d.Spec.ToolProfile = "nope" // would fail resolution for a builtin agent; policy refuses it for a container agent anyway
-	d.Spec.Tools = []string{"x"}
-	if _, err := Build(d, c, tools{c}, pol()); err != nil {
-		t.Fatalf("a container plan must not resolve tools: %v", err)
+	d.Spec.ToolProfile = "lookup"
+	p, err := Build(d, c, tools{c}, pol())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ta := p.ToolAccess
+	if ta == nil || ta.Profile != "lookup" || ta.URL != "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp" || ta.Audience != "openagentix-vmcp-lookup-workload" ||
+		ta.Namespace != "mcp-tools" || ta.Port != 4483 || ta.PodSelector["toolhive-name"] != "tools-lookup-workload" {
+		t.Fatalf("%+v", ta)
+	}
+	if len(p.Tools) != 0 || p.ToolBackend != "" || p.Prompt != "" {
+		t.Fatalf("a container plan lists no tools and has no prompt: %+v", p)
+	}
+	// the plan does not alias the catalog
+	ta.PodSelector["toolhive-name"] = "changed"
+	if c.Tools.Toolhive.Profiles[0].Workload.PodSelector["toolhive-name"] != "tools-lookup-workload" {
+		t.Fatal("plan aliases the catalog")
+	}
+	// no profile: no tool access
+	if q := must(Build(containerDef(), c, tools{c}, pol())); q.ToolAccess != nil {
+		t.Fatal("no profile, no tools")
+	}
+}
+
+// Policy refuses these first; the build fails too instead of running an agent with less (or more) than it asked for.
+func TestContainerBuildFailsForAProfileItCannotReach(t *testing.T) {
+	c := cat(t)
+	for name, prof := range map[string]string{"unknown": "nope", "not open to container agents": "lookup"} {
+		d := containerDef()
+		d.Spec.ToolProfile = prof
+		if _, err := Build(d, c, tools{c}, pol()); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
 	}
 }
 
 func TestContainerRevisionIsSensitiveToImagePortEnvAndResources(t *testing.T) {
 	c := cat(t)
+	openLookup(c)
 	rev := func(edit func(*api.AgentDefinition)) string {
 		d := containerDef()
 		if edit != nil {
@@ -355,7 +392,8 @@ func TestContainerRevisionIsSensitiveToImagePortEnvAndResources(t *testing.T) {
 		"resources": func(d *api.AgentDefinition) {
 			d.Spec.Runtime.Container.Resources = &api.Resources{Limits: api.ResourceList{CPU: "700m"}}
 		},
-		"model": func(d *api.AgentDefinition) { d.Spec.Model = "other" },
+		"model":       func(d *api.AgentDefinition) { d.Spec.Model = "other" },
+		"toolProfile": func(d *api.AgentDefinition) { d.Spec.ToolProfile = "lookup" },
 	} {
 		r := rev(edit)
 		for k, v := range seen {

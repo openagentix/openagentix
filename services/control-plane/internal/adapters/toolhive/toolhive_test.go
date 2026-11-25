@@ -39,6 +39,27 @@ func TestProfileIsACopy(t *testing.T) {
 	}
 }
 
+// A profile the operator opened to container agents carries its workload access (ADR 0019), as a copy; others carry none.
+func TestWorkloadAccessIsPassedOnAsACopy(t *testing.T) {
+	w := &catalog.WorkloadAccess{URL: "http://vmcp-x.mcp-tools.svc.cluster.local:4483/mcp", Audience: "aud-x", Namespace: "mcp-tools", PodSelector: map[string]string{"a": "b"}, Port: 4483}
+	cat := &catalog.Catalog{Tools: catalog.ToolSections{Toolhive: &catalog.ToolhiveSettings{Profiles: []catalog.ToolhiveProfile{
+		{Name: "open", Tools: []string{"x"}, Workload: w}, {Name: "closed", Tools: []string{"x"}},
+	}}}}
+	r := New(cat)
+	p, _ := r.Profile("open")
+	if p.Workload == nil || p.Workload.URL != w.URL || p.Workload.Audience != "aud-x" || p.Workload.Port != 4483 {
+		t.Fatalf("%+v", p.Workload)
+	}
+	p.Workload.PodSelector["a"] = "changed"
+	p.Workload.URL = "changed"
+	if w.PodSelector["a"] != "b" || w.URL == "changed" {
+		t.Fatal("caller can change the catalog")
+	}
+	if q, _ := r.Profile("closed"); q.Workload != nil {
+		t.Fatal("a profile not opened to container agents has no workload access")
+	}
+}
+
 // The code-mode tool name and the wording about the aggregating server are this adapter's, not the policy's.
 func TestMissingExplainsWhyAToolIsNotOffered(t *testing.T) {
 	cat := load(t)

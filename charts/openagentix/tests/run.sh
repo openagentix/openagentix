@@ -2070,6 +2070,38 @@ eq "the workload namespace may not be a platform namespace" "$(render_err "${CP9
 eq "an image prefix without a trailing slash is refused" "$(render_err "${CP9[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.runtimes.container.images={registry.local/oa}' | /usr/bin/grep -c 'trailing slash')" 1
 eq "an unknown runtime type is refused" "$(render_err "${CP9[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.allowedRuntimes={vm}' | /usr/bin/grep -c 'not a runtime type')" 1
 
+echo "# tools for container agents (ADR 0019): a workload tool server per opened profile"
+HCA=$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" "${CA[@]}" 2>&1 | shasum -a 256)
+eq "toolProfiles empty (the default) renders byte-identical to before, token settings changed or not" "$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" "${CA[@]}" --set controlPlane.containerAgents.serviceAccountTokens.issuer=https://x.example 2>&1 | shasum -a 256)" "$HCA"
+eq "toolProfiles listed but containerAgents off renders byte-identical to the defaults" "$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" --set 'controlPlane.containerAgents.toolProfiles={lookup}' 2>&1 | shasum -a 256)" "$H0"
+D=$(docs "${CP9[@]}" "${CA[@]}")
+eq "off (empty list): no workload tool server, no Kubernetes token config, no workload entry in the catalog" "$(count "$D" '(.kind=="VirtualMCPServer" and (.metadata.name|endswith("-workload"))) or (.kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")') $(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|[.tools.toolhive.profiles[]|select(has("workload"))]|length')" "0 0"
+TP=(--set 'controlPlane.containerAgents.toolProfiles={lookup}')
+D=$(docs "${CP9[@]}" "${CA[@]}" "${TP[@]}")
+WV='.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools-lookup-workload")'
+PV='.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools-lookup")'
+eq "on: one workload tool server for the opened profile, in the tools namespace" "$(count "$D" '.kind=="VirtualMCPServer" and (.metadata.name|endswith("-workload"))') $(q "$D" "$WV|.metadata.namespace")" "1 mcp-tools"
+eq "on: it filters exactly like the profile's own server (tools, visibility, code mode)" "$(q "$D" "$WV|.spec.config|del(.audit)|tojson")" "$(q "$D" "$PV|.spec.config|del(.audit)|tojson")"
+eq "on: it takes Kubernetes ServiceAccount tokens with the profile's own workload audience" "$(q "$D" "$WV|.spec.incomingAuth|[.type,.oidcConfigRef.name,.oidcConfigRef.audience]|join(\" \")")" "oidc openagentix-workload-sa openagentix-vmcp-lookup-workload"
+eq "on: its policy admits only subjects of the workload namespace" "$(q "$D" "$WV|.spec.incomingAuth.authzConfig.inline.policies|tojson")" '["permit(principal, action, resource) when { context.claim_sub like \"system:serviceaccount:openagentix-workloads:*\" };"]'
+OC='.[]|select(.kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")'
+eq "on: the token config is type kubernetesServiceAccount with the issuer and key URL set explicitly" "$(q "$D" "$OC|[.metadata.namespace,.spec.type,.spec.kubernetesServiceAccount.issuer,.spec.kubernetesServiceAccount.jwksUrl,(.spec.kubernetesServiceAccount.useClusterAuth|tostring)]|join(\" \")")" "mcp-tools kubernetesServiceAccount https://kubernetes.default.svc.cluster.local https://kubernetes.default.svc/openid/v1/jwks true"
+eq "on: the issuer is a value" "$(q "$(docs "${CP9[@]}" "${CA[@]}" "${TP[@]}" --set controlPlane.containerAgents.serviceAccountTokens.issuer=https://oidc.example.org)" "$OC|.spec.kubernetesServiceAccount.issuer")" "https://oidc.example.org"
+eq "on: the profile's own server is unchanged by opening it" "$(q "$D" "$PV|tojson")" "$(q "$(docs "${CP9[@]}" "${CA[@]}")" "$PV|tojson")"
+WN='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-vmcp-ingress-lookup-workload")'
+eq "on: the workload server admits only pods of the workload namespace labelled for its profile, on its port" "$(q "$D" "$WN|[.metadata.namespace,(.spec.podSelector.matchLabels|tojson),(.spec.ingress|tojson)]|join(\" \")")" 'mcp-tools {"app":"virtualmcpserver","toolhive-name":"tools-lookup-workload"} [{"ports":[{"protocol":"TCP","port":4483}],"from":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"openagentix-workloads"}},"podSelector":{"matchLabels":{"openagentix.io/tool-profile":"lookup"}}}]}]'
+eq "networkPolicy off: no ingress policy for it" "$(count "$(docs "${CP9[@]}" "${CA[@]}" "${TP[@]}" --set networkPolicy.enabled=false)" '.kind=="NetworkPolicy" and .metadata.name=="openagentix-vmcp-ingress-lookup-workload"')" 0
+eq "on: the catalog opens the profile with its URL, audience and server pods" "$(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.tools.toolhive.profiles[]|select(.name=="lookup")|.workload|tojson')" '{"audience":"openagentix-vmcp-lookup-workload","namespace":"mcp-tools","podSelector":{"app":"virtualmcpserver","toolhive-name":"tools-lookup-workload"},"port":4483,"url":"http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"}'
+eq "on: the controller's Roles are unchanged (no Secret read, no new kind)" "$(q "$D" '[.[]|select(.kind=="Role" and (.metadata.name|startswith("openagentix-control-plane")))|.rules]|tojson' | shasum -a 256)" "$(q "$(docs "${CP9[@]}" "${CA[@]}")" '[.[]|select(.kind=="Role" and (.metadata.name|startswith("openagentix-control-plane")))|.rules]|tojson' | shasum -a 256)"
+eq "a toolProfiles entry that is not a profile fails the render" "$(render_err "${CP9[@]}" "${CA[@]}" --set 'controlPlane.containerAgents.toolProfiles={nope}' | /usr/bin/grep -c 'controlPlane.containerAgents.toolProfiles lists "nope", which is not in mcp.profiles')" 1
+eq "toolProfiles needs mcp" "$(render_err -f "$REPO/components/quickstart/values.yaml" -f "$REPO/components/quickstart/byo-values.yaml" "${TP[@]}" --set mcp.enabled=false | /usr/bin/grep -c 'controlPlane.containerAgents.toolProfiles needs mcp.enabled')" 1
+eq "a workload server name that would collide with a profile's server fails the render" "$(render_err "${CP9[@]}" "${CA[@]}" "${TP[@]}" --set 'mcp.profiles[1].name=lookup-workload' --set 'mcp.profiles[1].tools.osv={query_vulnerability}' | /usr/bin/grep -c 'collides')" 1
+eq "toolProfiles must be a list" "$(render_err "${CP9[@]}" "${CA[@]}" --set controlPlane.containerAgents.toolProfiles=lookup | /usr/bin/grep -c 'toolProfiles must be a list')" 1
+eq "the issuer must be an https URL" "$(render_err "${CP9[@]}" "${CA[@]}" "${TP[@]}" --set controlPlane.containerAgents.serviceAccountTokens.issuer=http://x | /usr/bin/grep -c 'serviceAccountTokens.issuer')" 1
+GW='.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name=="openagentix-control-plane-guard-workload-deployments")|[.spec.variables[].expression, .spec.validations[].expression]|join(" ")'
+eq "on: the Deployment guard knows the opened profile's URL and audience" "$(q "$D" "$GW" | /usr/bin/grep -c 'openagentix-vmcp-lookup-workload')" 1
+eq "off: the Deployment guard knows no tool profile" "$(q "$(docs "${CP9[@]}" "${CA[@]}")" "$GW" | /usr/bin/grep -c 'vmcp')" 0
+
 echo "# platform: openshift (issue #32): manifests only, not run on OpenShift"
 OSALL=("${CP9[@]}" -f "$REPO/components/console/demo-values.yaml")
 OS0=$(helm template openagentix "$CHART" -n openagentix-system "${OSALL[@]}" 2>&1 | shasum -a 256)

@@ -6,6 +6,7 @@ package toolhive
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -28,7 +29,11 @@ func (a *Adapter) Profile(name string) (catalog.ToolProfile, bool) {
 	if !ok {
 		return catalog.ToolProfile{}, false
 	}
-	return catalog.ToolProfile{Name: p.Name, Backend: p.ToolServer, Tools: slices.Clone(p.Tools)}, true
+	out := catalog.ToolProfile{Name: p.Name, Backend: p.ToolServer, Tools: slices.Clone(p.Tools)}
+	if w := p.Workload; w != nil {
+		out.Workload = &catalog.WorkloadAccess{URL: w.URL, Audience: w.Audience, Namespace: w.Namespace, PodSelector: maps.Clone(w.PodSelector), Port: w.Port}
+	}
+	return out, true
 }
 
 func (a *Adapter) Profiles() []string {

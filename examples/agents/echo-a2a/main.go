@@ -147,6 +147,10 @@ func (s *server) sendMessage(w http.ResponseWriter, ctx context.Context, req rpc
 		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32602, "message needs a text part"})
 		return
 	}
+	if strings.TrimSpace(strings.Join(texts, "\n")) == "/tools" {
+		s.tools(w, ctx, req)
+		return
+	}
 	for _, name := range []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAGENTIX_MODEL"} {
 		if s.env(name) == "" {
 			writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "missing environment variable " + name})
@@ -165,6 +169,28 @@ func (s *server) sendMessage(w http.ResponseWriter, ctx context.Context, req rpc
 		"role":      "ROLE_AGENT",
 		"parts":     []part{{Text: fmt.Sprintf("model %s answered: %s", model, answer)}},
 	}}, nil)
+}
+
+// tools answers "/tools" with the names of the tools of the agent's tool profile.
+func (s *server) tools(w http.ResponseWriter, ctx context.Context, req rpcRequest) {
+	reply := func(text string) {
+		writeRPC(w, http.StatusOK, req.ID, map[string]any{"message": map[string]any{
+			"messageId": newID(), "role": "ROLE_AGENT", "parts": []part{{Text: text}},
+		}}, nil)
+	}
+	if s.env("OPENAGENTIX_MCP_URL") == "" {
+		reply("no tool profile: OPENAGENTIX_MCP_URL is not set")
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, modelTimeout)
+	defer cancel()
+	names, err := s.listTools(ctx)
+	if err != nil {
+		s.log.Printf("tool list failed: %v", err)
+		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "tool list failed: " + err.Error()})
+		return
+	}
+	reply("tools: " + strings.Join(names, ", "))
 }
 
 // askModel returns the assistant content and the model name. Errors never carry the key or the upstream body.
