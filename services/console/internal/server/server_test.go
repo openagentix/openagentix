@@ -55,7 +55,7 @@ func TestSessionAndPlatform(t *testing.T) {
 		t.Fatal(resp.Status, string(b))
 	}
 	p := decodeInto[platform.Summary](t, b)
-	if !slices.Contains(p.Models, "claude-haiku") || p.Policy.MaxAgents != 5 || len(p.Profiles) != 1 || p.Skills[0].Name != "openagentix-canary" {
+	if !slices.Contains(p.Models, "claude-haiku") || p.Policy.MaxAgents != 5 || len(p.Profiles) != 2 || p.Skills[0].Name != "openagentix-canary" {
 		t.Fatalf("platform: %+v", p)
 	}
 	for _, leak := range []string{"harnessImage", "snapshotLocation", "workerPool", "harnessEnv", "ghcr.io"} {
