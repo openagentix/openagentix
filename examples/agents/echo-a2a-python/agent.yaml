@@ -1,0 +1,16 @@
+# A container agent written in Python: the platform runs this image under the agent's own gateway key (ADR 0015).
+# Replace the image with your build, pinned by digest, from a registry the operator allows
+# (controlPlane.policy.runtimes.container.images). The README has the exact steps for a local kind cluster.
+apiVersion: openagentix.io/v1alpha1
+kind: AgentDefinition
+metadata:
+  name: echo-py
+  namespace: kagent
+spec:
+  description: A sample agent built with the A2A Python SDK
+  model: quickstart-model
+  runtime:
+    type: container
+    container:
+      image: IMAGE_REGISTRY/echo-a2a-python@sha256:IMAGE_DIGEST
+      port: 8080

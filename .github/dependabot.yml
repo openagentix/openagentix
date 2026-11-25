@@ -25,6 +25,11 @@ updates:
       go-dependencies:
         patterns: ['*']
 
+  - package-ecosystem: pip
+    directory: /examples/agents/echo-a2a-python
+    schedule:
+      interval: weekly
+
   - package-ecosystem: npm
     directories:
       - /console

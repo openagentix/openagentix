@@ -7,6 +7,7 @@ All notable changes to OpenAgentix are documented here. The format follows [Keep
 No default changed for users who leave the new `controlPlane` and `console` blocks off. The default chart render is the same as in 0.2.0.
 
 ### Added
+- Bring your own agent, slice 4 (issue #104, ADR 0015): a Python sample, `examples/agents/echo-a2a-python`, built with the A2A Python SDK (`a2a-sdk` 1.3.1) and `uvicorn`. It takes the model from `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAGENTIX_MODEL`, the port from `PORT`, runs as user 65532 with no files written, and pins the base image by digest and every package by hash. Tests: 20 with a fake model plus a contract test against `services/stub-model` (`make test-python-samples`, a new `python-samples` CI job in `ci-ok`). `hack/ci/dockerfiles.sh` also builds a Dockerfile that has the comment line `# ci-build:`. Dependabot watches the pip pins.
 - Chart: `platform` (empty by default; `kubernetes` or `openshift`). With `openshift`, no pod pins `runAsUser`, `runAsGroup` or `fsGroup` (the restricted-v2 SCC assigns them), DNS egress goes to `openshift-dns` on port 5353, and `console.route` adds a Route with a NetworkPolicy rule for the router. Container agents are refused with `openshift`. The manifests render and are covered by render tests; nothing was run on OpenShift. The default render is byte-identical. See [OpenShift](docs/diary/guide/openshift.md) for what cannot work there.
 
 ### Changed

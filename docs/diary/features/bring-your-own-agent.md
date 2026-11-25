@@ -43,6 +43,14 @@ In the `e2e` job (GitHub-hosted runner, one kind node, stub model, no key): `QUI
 
 Not shown: whether kind's network plugin enforces the NetworkPolicy (so the egress port to the model gateway is not shown to be right), pulling from a registry, a real model.
 
+## A Python sample (slice 4)
+
+`examples/agents/echo-a2a-python` is the same sample in Python, built with the official A2A Python SDK (`a2a-sdk` 1.3.1). It reads the model from `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAGENTIX_MODEL`, takes its port from `PORT`, runs as user 65532 and writes no files. The base image is pinned by digest and every package by hash. Its README has the build, load and deploy steps and the `AgentDefinition`.
+
+What was run: 20 unit tests with a fake model, a contract test that sends a message through the agent to a built `services/stub-model`, and the agent started as a real server (`uvicorn`) with the card, `SendMessage`, an unknown method and a streaming call checked with `curl`. All on a laptop, with the `A2A-Version: 1.0` header. The SDK reads a request without that header as version 0.3, so a client must send it (the gate and `hack/ask.sh` do).
+
+Not shown: the image build and a run on a cluster (see the README of the sample), whether LangGraph, Google ADK or CrewAI serve A2A 1.0 themselves.
+
 ## Not done yet
 
-Tools through a tool profile (slice 3), the conformance checker (slice 2), a Python sample (slice 4), an egress allowlist (slice 5), enrolling a workload you run yourself, private registries.
+Tools through a tool profile (slice 3), the conformance checker (slice 2), an egress allowlist (slice 5), enrolling a workload you run yourself, private registries.

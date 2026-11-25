@@ -172,6 +172,22 @@ jobs:
         run: charts/openagentix/tests/memory-expiry-integration.sh
 
   # ---------------------------------------------------------------------------------------------------------------
+  python-samples:
+    # The Python sample agent (examples/agents/echo-a2a-python): its pinned requirements install with hash checking and its
+    # tests run. The contract test against services/stub-model builds the stub with the Go that the runner has. Local:
+    # `make test-python-samples`.
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10            # about 1 minute
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: tests (hash-checked install, stub model contract test)
+        run: make test-python-samples
+
+  # ---------------------------------------------------------------------------------------------------------------
   secrets:
     # Always runs, docs-only changes included. Scans the commits of the push or the pull request.
     runs-on: ubuntu-24.04
@@ -364,7 +380,7 @@ jobs:
   ci-ok:
     # The one required status check. Skipped jobs (docs-only change) count as passing; failed or cancelled ones do not.
     if: always()
-    needs: [changes, go, chart, shell, integration, secrets, images, guard, apiserver, console, console-audit, console-e2e]
+    needs: [changes, go, chart, shell, integration, python-samples, secrets, images, guard, apiserver, console, console-audit, console-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
