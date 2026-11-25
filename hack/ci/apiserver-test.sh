@@ -312,6 +312,30 @@ SUB='s#ghcr.io/acme/agents/echo-go@sha256:a*#'"$IMG"'#; s#openagentix-agents#'$W
 jq -c '.items[]' services/control-plane/testdata/container-objects.json | sed -E "$SUB" > "$TMP/ca-objects.jsonl"
 jq -c --argjson p "$(jq -r 'select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.runtime.container.gatewayPort' "$TMP/render-ca.jsonl")" 'if .kind=="NetworkPolicy" then .spec.egress[1].ports[0].port=$p else . end' "$TMP/ca-objects.jsonl" > "$TMP/ca-objects2.jsonl"
 for k in ServiceAccount Deployment Service NetworkPolicy; do jq -c "select(.kind==\"$k\")" "$TMP/ca-objects2.jsonl" > "$TMP/ca-$k.json"; done
+# The re-apply above UPDATES guard-other (with the container runtime on it stands aside for the workload kinds in the
+# workload namespace). Admission does not use an updated policy at once: the API server recompiles its policies from an
+# informer cache on a 1-second tick (k8s.io/apiserver policy/generic/policy_source.go, policyRefreshInterval), and
+# status.observedGeneration does not tell when that happened. Writes in that window still meet the OLD guard-other
+# ("the control plane may only write Secrets, ..."). So wait until probes show the new set is in force:
+#  1. the controller's ServiceAccount is allowed: only the updated guard-other allows it (a refusal by any other policy
+#     would not settle and is reported below). A bad Deployment is no probe for this step: the old guard-other and the
+#     workload guard both refuse it, and which message the API server returns is not fixed.
+#  2. then a Deployment with a hostPath volume is refused by the workload guard: guard-other now stands aside for it, so
+#     this message proves the workload policy and its binding (applied after guard-other) are in force too.
+jq -c '.spec.template.spec.volumes+=[{name:"h",hostPath:{path:"/"}}]' "$TMP/ca-Deployment.json" > "$TMP/ca-probe.json"
+probe=""
+for _ in $(seq 1 60); do
+  if probe=$(asctl create --dry-run=server -f "$TMP/ca-ServiceAccount.json" 2>&1); then
+    probe=$(asctl create --dry-run=server -f "$TMP/ca-probe.json" 2>&1 || true)
+    grep -qF "the only volume is an emptyDir" <<<"$probe" && break
+  fi
+  probe="not settled: $probe"
+  sleep 1
+done
+case "$probe" in
+  "not settled: "*) bad "the updated policy set is in force (guard-other stands aside, the workload guard refuses)" "$(printf '%s' "$probe" | head -3 | cut -c1-300)" ;;
+  *) ok "the updated policy set is in force (guard-other stands aside, the workload guard refuses)" ;;
+esac
 for k in ServiceAccount Deployment Service NetworkPolicy; do
   allowed "the controller may create its $k in the workload namespace" asctl create --dry-run=server -f "$TMP/ca-$k.json"
 done

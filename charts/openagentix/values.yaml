@@ -401,7 +401,7 @@ knowledge:
   mcp:
     entryName: knowledge
 
-  # Agents opt in with `knowledge: true`; they then get the three kb tools and this addition to their prompt.
+  # Chart agents (agents[]) opt in with `knowledge: true`, an AgentDefinition with `spec.knowledge.enabled: true`; they then get the three kb tools and this addition to their prompt.
   # {search} and {get} are replaced with the tool names as the agent sees them.
   agentPrompt: |
     For questions about OpenAgentix itself (its components, architecture, security, installation or configuration),
@@ -543,8 +543,8 @@ controlPlane:
     allowedModels: []                 # gateway.models names
     requireToolProfile: true          # every definition names a tool profile (the shared vMCP filters on the client side only, ADR 0006)
     allowedProfiles: []               # mcp.profiles names
-    allowKnowledge: true              # `knowledge: true` is allowed (it still needs knowledge.enabled and a profile that offers the tools)
-    allowNotify: false                # `notify: true` is allowed; needs notify.enabled. Creating a way to message a person stays an opt-in
+    allowKnowledge: true              # an AgentDefinition may set `spec.knowledge.enabled: true` (it still needs knowledge.enabled and a profile that offers the tools)
+    allowNotify: false                # an AgentDefinition may set `spec.notify.enabled: true`; needs notify.enabled. Creating a way to message a person stays an opt-in
     allowedSkills: []                 # names of the top-level `skills`
     memory:
       allowed: false                  # needs the memory stack (a chart agent with memory.enabled) and, with requireExpiry, memory.expiry.enabled
