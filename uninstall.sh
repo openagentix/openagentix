@@ -24,7 +24,7 @@
 # Console (ADR 0007, slice 3): the Deployment, Service, NetworkPolicy, ServiceAccount, Role and RoleBinding go with the release. The login token Secret
 # (console-token) is kept, so a later ./install.sh keeps the same token; PURGE_SECRETS=1 deletes it.
 set -euo pipefail
-CLUSTER=${CLUSTER:-openagentix}; CTX=${KUBE_CONTEXT:-kind-$CLUSTER}
+CLUSTER=${CLUSTER:-openagentix}; CLUSTER_TYPE=${CLUSTER_TYPE:-kind}; CTX=${KUBE_CONTEXT:-$CLUSTER_TYPE-$CLUSTER}
 K=${KUBECTL:-kubectl}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
 $K config use-context "$CTX" >/dev/null || { echo "ERROR: kube context $CTX not found" >&2; exit 1; }
 if $K get crd agentdefinitions.openagentix.io >/dev/null 2>&1 && [ -n "$($K get agentdefinitions.openagentix.io -A -o name 2>/dev/null)" ]; then
