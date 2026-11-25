@@ -361,6 +361,14 @@ spec:
         {{- range $b.otlpFrom }}
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ . | quote }}}}
         {{- end }}
+    {{- if and (.Values.console | default dict).enabled (include "oa.cpOn" .) }}
+    # Only the console (Traces page), on the query port.
+    - ports:
+        - {protocol: TCP, port: 16686}
+      from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ default .Release.Namespace .Values.console.namespace | quote }}}}
+          podSelector: {matchLabels: {app: console}}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

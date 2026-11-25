@@ -1973,6 +1973,21 @@ eq "console.metrics.url overrides the bundled store" "$(q "$D" "$CNC|.env[]|sele
 eq "an override opens no egress to the bundled store" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")]|length')" 0
 eq "a console.metrics.url with a query or credentials is refused" "$(render_err "${CN10[@]}" --set 'console.metrics.url=http://u:p@x:1/?q=1' | /usr/bin/grep -c 'console.metrics.url')" 1
 
+echo "# console: traces (Jaeger's query port is reachable by the console only)"
+D=$(docs "${CN10[@]}")
+JGURL="http://jaeger.openagentix-observability.svc:16686"
+eq "console on + observability on: CONSOLE_TRACES_URL is the bundled Jaeger" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_TRACES_URL\")|.value")" "$JGURL"
+eq "the console NetworkPolicy gets one egress rule to Jaeger's pod and port 16686 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="jaeger")|[.to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],(.ports|map(.port)|join(","))]]|tostring')" '[["openagentix-observability","16686"]]'
+eq "Jaeger's ingress keeps its OTLP ports and adds the console on 16686 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="jaeger-ingress")|[.spec.ingress[]|(.ports|map(.port)|join(","))]|tostring')" '["4317,4318","16686"]'
+eq "the console rule on Jaeger admits the console pods of the console namespace" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="jaeger-ingress")|.spec.ingress[]|select(.ports[0].port==16686)|[.from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],.from[0].podSelector.matchLabels.app]|join(" ")')" "openagentix-system console"
+D=$(docs "${CP9[@]}")
+eq "console off: Jaeger's ingress is OTLP only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="jaeger-ingress")|[.spec.ingress[]|(.ports|map(.port)|join(","))]|tostring')" '["4317,4318"]'
+D=$(docs "${CN10[@]}" --set observability.enabled=false)
+eq "observability off: no CONSOLE_TRACES_URL" "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_TRACES_URL\")]|length")" 0
+D=$(docs "${CN10[@]}" --set console.traces.url=https://jaeger.example.org:16686)
+eq "console.traces.url overrides the bundled Jaeger and opens no egress for it" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_TRACES_URL\")|.value") $(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="jaeger")]|length')" "https://jaeger.example.org:16686 0"
+eq "a console.traces.url with credentials is refused" "$(render_err "${CN10[@]}" --set 'console.traces.url=http://u:p@x:1/' | /usr/bin/grep -c 'console.traces.url')" 1
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

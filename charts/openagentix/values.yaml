@@ -561,6 +561,8 @@ console:
   # VictoriaMetrics (query API, port 8428) and only the console may reach it. url overrides that with your own Prometheus-compatible store
   # (http or https, host[:port], no credentials, path or query); the chart then opens no egress for it. Empty and no bundled store: no metrics.
   metrics: {url: ""}
+  # Traces for the Traces page: the bundled Jaeger query API (port 16686) under the same conditions, or this URL for your own Jaeger query API.
+  traces: {url: ""}
   resources:
     requests: {cpu: 10m, memory: 32Mi}
     limits: {cpu: 250m, memory: 128Mi}
