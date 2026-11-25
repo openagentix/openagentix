@@ -32,6 +32,12 @@ RESP=$(curl -sS --max-time "$TIMEOUT" -w '\n%{http_code}' -X POST "http://127.0.
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' -H "X-User-Id: $USER_ID" -d "$BODY") || { echo "ask.sh: the request failed" >&2; exit 1; }
 CODE=${RESP##*$'\n'}; RESP=${RESP%$'\n'*}
 if [ "$CODE" != 200 ]; then echo "ask.sh: HTTP $CODE from the gate: $RESP" >&2; exit 1; fi
+# A2A 1.0: the result is {"message": ...} (a direct answer, as a container agent may give) or {"task": ...} (kagent agents)
+if jq -e '.result.message' >/dev/null 2>&1 <<<"$RESP"; then
+  jq -r '[.result.message.parts[]?.text] | join("\n")' <<<"$RESP"
+  echo "(answered in $(( $(date +%s) - t0 ))s through the A2A gate)" >&2
+  exit 0
+fi
 STATE=$(jq -r '.result.task.status.state // "none"' <<<"$RESP")
 jq -r '[.result.task.artifacts[]?.parts[]?.text] | join("\n")' <<<"$RESP"
 if [ "$STATE" != TASK_STATE_COMPLETED ]; then echo "ask.sh: the task ended in state $STATE: $(jq -c '.error // .result.task.status' <<<"$RESP")" >&2; exit 1; fi

@@ -159,11 +159,12 @@ func (s *server) sendMessage(w http.ResponseWriter, ctx context.Context, req rpc
 		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "model call failed"})
 		return
 	}
-	writeRPC(w, http.StatusOK, req.ID, map[string]any{
+	// A2A 1.0: the result of SendMessage is {"message": ...} or {"task": ...}
+	writeRPC(w, http.StatusOK, req.ID, map[string]any{"message": map[string]any{
 		"messageId": newID(),
 		"role":      "ROLE_AGENT",
 		"parts":     []part{{Text: fmt.Sprintf("model %s answered: %s", model, answer)}},
-	}, nil)
+	}}, nil)
 }
 
 // askModel returns the assistant content and the model name. Errors never carry the key or the upstream body.

@@ -119,7 +119,7 @@ func TestSendMessageHappyPath(t *testing.T) {
 	if len(msgs) != 1 || m0["role"] != "user" || m0["content"] != "hi there" {
 		t.Errorf("messages %v", msgs)
 	}
-	res := m["result"].(map[string]any)
+	res := m["result"].(map[string]any)["message"].(map[string]any) // A2A 1.0: the result is {"message": ...} or {"task": ...}
 	if res["messageId"] == "" || res["role"] != "ROLE_AGENT" {
 		t.Errorf("result %v", res)
 	}
@@ -142,7 +142,7 @@ func TestKindTextPartAndModelFallback(t *testing.T) {
 	if m["error"] != nil {
 		t.Fatal(raw)
 	}
-	txt := m["result"].(map[string]any)["parts"].([]any)[0].(map[string]any)["text"]
+	txt := m["result"].(map[string]any)["message"].(map[string]any)["parts"].([]any)[0].(map[string]any)["text"]
 	if txt != "model asked-model answered: hello back" {
 		t.Errorf("text %q", txt)
 	}
