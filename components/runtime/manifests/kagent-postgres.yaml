@@ -26,7 +26,9 @@ spec:
           valueFrom: {secretKeyRef: {name: kagent-pg-admin, key: password}}
         - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
         ports: [{containerPort: 5432}]
-        readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 5}
+        # TCP, not the socket: the image's first-boot temporary server listens on the socket only and is then stopped, so a socket probe
+        # can report Ready just before the server restarts (psql then fails with "No such file or directory").
+        readinessProbe: {exec: {command: [pg_isready, -h, 127.0.0.1, -U, postgres]}, periodSeconds: 5}
         resources:
           requests: {cpu: 50m, memory: 128Mi}
           limits: {memory: 384Mi}

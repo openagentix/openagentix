@@ -81,6 +81,11 @@ OUT=$(inst PROFILE=quickstart MODEL_PROVIDER=anthropic); eq "quickstart with MOD
 OUT=$(inst PROFILE=nope); eq "an unknown profile is refused"      "$(/usr/bin/grep -c "unknown PROFILE 'nope'" <<<"$OUT")" 1
 OUT=$(inst PROFILE=quickstart); eq "quickstart with no model env passes the preflight (stops only at the missing cluster)" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
 
+echo "# kagent's own PostgreSQL is ready only when its final server is up"
+RUNTIME="$(cd "$HERE/../runtime" && pwd)"
+eq "readiness probe uses TCP (the first-boot temporary server has no TCP port)" "$(/usr/bin/grep -cE 'readinessProbe:.*pg_isready.*-h, 127\.0\.0\.1' "$RUNTIME/manifests/kagent-postgres.yaml")" 1
+eq "up.sh waits for a working psql before the setup script" "$(/usr/bin/grep -n "select 1" "$RUNTIME/up.sh" | head -1 | cut -d: -f1 | awk -v s="$(/usr/bin/grep -n 'rollout status sts/kagent-pg' "$RUNTIME/up.sh" | cut -d: -f1)" '{print ($1>s && $1<s+3)?"yes":"no"}')" yes
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

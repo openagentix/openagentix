@@ -110,6 +110,7 @@ if ! $K -n kagent get secret kagent-pg-admin >/dev/null 2>&1; then
 fi
 $K apply -f manifests/kagent-postgres.yaml
 $K -n kagent rollout status sts/kagent-pg --timeout=3m
+for _ in $(seq 30); do $K -n kagent exec kagent-pg-0 -- psql --no-psqlrc -U postgres -d kagent -tAc 'select 1' >/dev/null 2>&1 && break; sleep 2; done   # belt and braces after the TCP readiness probe
 if ! $K -n kagent get secret kagent-postgres-owner >/dev/null 2>&1; then
   OW=$(openssl rand -hex 12); RW=$(openssl rand -hex 12)
   $K -n kagent exec -i kagent-pg-0 -- psql --no-psqlrc -U postgres -d kagent --set=ON_ERROR_STOP=1 --single-transaction \
