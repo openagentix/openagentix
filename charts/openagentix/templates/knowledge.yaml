@@ -89,8 +89,10 @@ spec:
       terminationGracePeriodSeconds: 35
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 65532
         runAsGroup: 65532
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       {{- if $pg.enabled }}
       initContainers:
@@ -228,9 +230,11 @@ spec:
       terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: postgres
@@ -337,9 +341,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: embeddings

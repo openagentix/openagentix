@@ -592,3 +592,15 @@ the users from the render and fails if one is missing. */ -}}
 {{- $p := list -}}{{- range $k, $v := . }}{{ $p = append $p (printf "%s: %s" (toJson $k) (toJson $v)) }}{{ end -}}
 { {{- join ", " $p -}} }
 {{- end -}}
+
+{{/* The platform the chart renders for: "" or "kubernetes" (the default) or "openshift". Anything else fails the render. */}}
+{{- define "oa.platform" -}}
+{{- $p := .Values.platform | default "" -}}
+{{- if not (and (kindIs "string" $p) (has $p (list "" "kubernetes" "openshift"))) }}{{ fail (printf "platform must be empty, kubernetes or openshift, not %v" $p) }}{{ end -}}
+{{- $p -}}
+{{- end -}}
+
+{{/* "true" on OpenShift, empty otherwise. On OpenShift no pod pins runAsUser, runAsGroup or fsGroup: the restricted-v2 SCC assigns them from the namespace range. */}}
+{{- define "oa.openshift" -}}
+{{- if eq (include "oa.platform" .) "openshift" }}true{{ end -}}
+{{- end -}}

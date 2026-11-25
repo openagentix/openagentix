@@ -220,9 +220,11 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: control-plane
@@ -282,12 +284,22 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
+    {{- if include "oa.openshift" $ }}
+    # OpenShift: the DNS pods are in openshift-dns and listen on 5353 (a NetworkPolicy sees the pod port, not the service port)
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-dns}}
+          podSelector: {matchLabels: {dns.operator.openshift.io/daemonset-dns: default}}
+      ports:
+        - {protocol: UDP, port: 5353}
+        - {protocol: TCP, port: 5353}
+    {{- else }}
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
           podSelector: {matchLabels: {k8s-app: kube-dns}}
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
+    {{- end }}
     {{- if $c.apiServerCIDRs }}
     # The API server's addresses (install.sh sets them, as for Agent Kourier: on kind the /24 of the node address, elsewhere the exact endpoints).
     - to:
