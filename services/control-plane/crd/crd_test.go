@@ -344,3 +344,94 @@ func TestInstructionsLimitIsInBytesToo(t *testing.T) {
 		t.Fatalf("maxLength stays 16384 characters: %v", ins["maxLength"])
 	}
 }
+
+// ADR 0015: spec.runtime. The one place an image may be named in a spec; typed, bounded, and never a platform-component image.
+func TestRuntimeBlockShape(t *testing.T) {
+	p := specProps(t)
+	rt := dig(t, p, "runtime")
+	if dig(t, rt, "type") != "object" {
+		t.Fatal("runtime is an object")
+	}
+	typ := dig(t, rt, "properties", "type").(map[string]any)
+	var enum []string
+	for _, e := range typ["enum"].([]any) {
+		enum = append(enum, e.(string))
+	}
+	if strings.Join(enum, ",") != "builtin,container" {
+		t.Fatalf("runtime.type enum: %v", enum)
+	}
+	c := dig(t, rt, "properties", "container")
+	cp := dig(t, c, "properties")
+	if dig(t, cp, "image", "maxLength") != float64(300) {
+		t.Fatal("image maxLength 300")
+	}
+	if dig(t, cp, "port", "minimum") != float64(1024) || dig(t, cp, "port", "maximum") != float64(65535) {
+		t.Fatal("port 1024..65535")
+	}
+	if req := dig(t, c, "required").([]any); len(req) != 2 {
+		t.Fatalf("image and port are required: %v", req)
+	}
+	env := dig(t, cp, "env")
+	if dig(t, env, "maxItems") != float64(32) {
+		t.Fatal("env maxItems 32")
+	}
+	if dig(t, env, "items", "properties", "name", "pattern") != "^[A-Z_][A-Z0-9_]*$" {
+		t.Fatal("env name pattern")
+	}
+	if dig(t, env, "items", "properties", "value", "maxLength") != float64(4096) {
+		t.Fatal("env value maxLength")
+	}
+	for _, side := range []string{"requests", "limits"} {
+		for _, k := range []string{"cpu", "memory"} {
+			if dig(t, cp, "resources", "properties", side, "properties", k, "type") != "string" {
+				t.Fatalf("resources.%s.%s", side, k)
+			}
+		}
+	}
+	// nothing that reaches around the platform
+	for _, bad := range []string{"command", "args", "volumes", "securityContext", "serviceAccountName", "imagePullSecrets", "envFrom", "hostNetwork"} {
+		if _, ok := cp.(map[string]any)[bad]; ok {
+			t.Errorf("runtime.container must not have %q", bad)
+		}
+	}
+}
+
+// A container agent is configured in its image: neither instructions nor instructionsFrom is required. A builtin agent keeps
+// "exactly one".
+func TestContainerRuntimeNeedsNoInstructions(t *testing.T) {
+	v := dig(t, load(t), "spec", "versions").([]any)[0]
+	rules := dig(t, v, "schema", "openAPIV3Schema", "properties", "spec", "x-kubernetes-validations").([]any)
+	for _, r := range rules {
+		m := r.(map[string]any)
+		rule := m["rule"].(string)
+		if strings.Contains(rule, "has(self.instructionsFrom)") {
+			if !strings.Contains(rule, "self.runtime.type == 'container'") || !strings.Contains(rule, "has(self.instructions) != has(self.instructionsFrom)") {
+				t.Fatalf("the rule must exempt container agents and keep exactly-one for the rest: %s", rule)
+			}
+			return
+		}
+	}
+	t.Fatal("no instructions rule")
+}
+
+func TestCapabilitiesHaveIsolation(t *testing.T) {
+	v := dig(t, load(t), "spec", "versions").([]any)[0]
+	caps := dig(t, v, "schema", "openAPIV3Schema", "properties", "status", "properties", "capabilities", "properties")
+	if dig(t, caps, "isolation", "type") != "string" {
+		t.Fatal("status.capabilities.isolation is a string")
+	}
+}
+
+func TestChartCopyOfTheCRDIsIdentical(t *testing.T) {
+	a, err := os.ReadFile("agentdefinition.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile("../../../charts/openagentix/files/agentdefinition-crd.yaml")
+	if err != nil {
+		t.Skip("chart not in this checkout")
+	}
+	if string(a) != string(b) {
+		t.Fatal("charts/openagentix/files/agentdefinition-crd.yaml must be a byte copy of crd/agentdefinition.yaml")
+	}
+}

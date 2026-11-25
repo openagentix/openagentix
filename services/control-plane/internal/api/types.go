@@ -20,6 +20,15 @@ const (
 	LabelManagedBy  = "app.kubernetes.io/managed-by"
 	ManagedByValue  = "openagentix-control-plane"
 	LabelDefinition = "openagentix.io/agent-definition"
+	// LabelDefinitionNamespace and AnnotationDefinitionUID are on the objects the container runtime writes in the workload
+	// namespace. An owner reference cannot cross namespaces, so these (with LabelDefinition) are how the controller finds
+	// and recognises what belongs to a definition there.
+	LabelDefinitionNamespace = "openagentix.io/definition-namespace"
+	AnnotationDefinitionUID  = "openagentix.io/definition-uid"
+
+	// Runtime types (spec.runtime.type). Absent means builtin.
+	RuntimeBuiltin   = "builtin"
+	RuntimeContainer = "container"
 
 	// Reserved label keys (ADR 0012, change 12). They are informational: anyone who can write the object can set them, so
 	// no access, policy or billing decision may ever read them. The controller copies team and project onto the objects it
@@ -98,6 +107,47 @@ type InstructionsFrom struct {
 	ConfigMap *ConfigMapKeyRef `json:"configMap,omitempty"`
 }
 
+// ResourceList is a CPU and a memory quantity ("100m", "1", "256Mi", "1Gi").
+type ResourceList struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
+// Resources are the requests and limits of a container agent. The policy sets defaults and ceilings.
+type Resources struct {
+	Requests ResourceList `json:"requests,omitzero"`
+	Limits   ResourceList `json:"limits,omitzero"`
+}
+
+// EnvVar is one plain environment variable of a container agent. There is no way to source one from a Secret or a field.
+type EnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// ContainerRuntime says which image runs as the agent (ADR 0015). It is the only place an image may be named in a spec.
+type ContainerRuntime struct {
+	Image     string     `json:"image"`
+	Port      int        `json:"port"`
+	Env       []EnvVar   `json:"env,omitempty"`
+	Resources *Resources `json:"resources,omitempty"`
+}
+
+// Runtime says how the agent is made: builtin (the platform builds it from instructions) or container (the platform runs the
+// user's digest-pinned image, which speaks A2A).
+type Runtime struct {
+	Type      string            `json:"type,omitempty"`
+	Container *ContainerRuntime `json:"container,omitempty"`
+}
+
+// RuntimeType is the effective runtime type: builtin when none is set.
+func (s Spec) RuntimeType() string {
+	if s.Runtime.Type == "" {
+		return RuntimeBuiltin
+	}
+	return s.Runtime.Type
+}
+
 // Spec is the whole builder surface. There is deliberately no field for a model config, image, tool server, egress
 // policy reference, namespace, caller, gateway user or budget.
 type Spec struct {
@@ -114,6 +164,8 @@ type Spec struct {
 	Egress           Egress            `json:"egress,omitzero"`
 	// Suspend keeps the definition accepted and its objects in place, but the agent takes no new work.
 	Suspend bool `json:"suspend,omitempty"`
+	// Runtime is optional: absent means builtin. ADR 0015.
+	Runtime Runtime `json:"runtime,omitzero"`
 }
 
 type Condition struct {
@@ -150,6 +202,8 @@ type Capabilities struct {
 	MaxStepSeconds       int    `json:"maxStepSeconds"`       // the longest single step (a shell command); 0 is unknown
 	CancelStopsLoop      Tri    `json:"cancelStopsLoop"`      // a cancel really stops the agent's loop
 	PerRunIdentity       string `json:"perRunIdentity"`       // none, session, run or unknown: the granularity of the agent's identity
+	// Isolation is how the agent is separated from others: sandbox-per-session, sandboxed-pod or container. Empty is unknown.
+	Isolation string `json:"isolation,omitempty"`
 }
 
 // Endpoint says where the agent is callable. Protocol and version are data, so that a second protocol needs no new field.
