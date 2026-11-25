@@ -97,7 +97,11 @@ e2e: ## Keyless end-to-end install on kind: not built yet
 	@echo "e2e: not built yet. install.sh needs ANTHROPIC_API_KEY and TELEGRAM_BOT_TOKEN today; see hack/ci/E2E-PLAN.md." >&2; exit 1
 
 # ---- control plane guard tests (own targets: the heavy k8s.io/apiserver dependency stays in hack/ci/guardtest, not in any service module) ----
-.PHONY: test-guard test-apiserver
+.PHONY: test-guard test-apiserver test-python-samples
+
+test-python-samples: ## The Python sample agent: hash-checked install in a throwaway venv, pytest, contract test against stub-model (needs python3; Go for the contract test)
+	$(call need,python3)
+	hack/ci/python-samples-test.sh
 
 test-guard: ## Execute the control plane's admission guard (rendered by helm) with the Kubernetes CEL code: hack/ci/guardtest (needs helm, go)
 	$(call need,go)

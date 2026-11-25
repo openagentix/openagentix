@@ -597,7 +597,7 @@ Proven on the kind demo cluster (2026-11-25): a definition became a Ready agent 
 
 ## Bring your own agent
 
-You can run your own agent image next to the built-in ones (ADR 0015, issue #43). It is off by default. Set `controlPlane.containerAgents.enabled=true`, add `container` to the policy's `allowedRuntimes`, and name the registries you trust in `controlPlane.policy.runtimes.container.images`. Then a definition can say `spec.runtime.type: container` and name an image pinned by digest. The image must speak A2A 1.0 (an agent card at `/.well-known/agent-card.json` and `SendMessage` at `POST /`). A sample is in `examples/agents/echo-a2a`.
+You can run your own agent image next to the built-in ones (ADR 0015, issue #43). It is off by default. Set `controlPlane.containerAgents.enabled=true`, add `container` to the policy's `allowedRuntimes`, and name the registries you trust in `controlPlane.policy.runtimes.container.images`. Then a definition can say `spec.runtime.type: container` and name an image pinned by digest. The image must speak A2A 1.0 (an agent card at `/.well-known/agent-card.json` and `SendMessage` at `POST /`). Samples are in `examples/agents/echo-a2a` (Go) and `examples/agents/echo-a2a-python` (Python, A2A SDK; its README has the steps).
 
 ```sh
 kubectl apply -f examples/agents/echo-a2a/agent.yaml   # after you put your image digest in it

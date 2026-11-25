@@ -14,7 +14,8 @@ Workflows are in `.github/workflows/`. Every check also runs locally through the
 | `shell` | channels, dashboard and bench tests, shellcheck report (non-blocking) | `make test-shell lint-shell` | 2-3 min |
 | `integration` | kb tests against PostgreSQL+pgvector, memory-expiry job (Docker) | `make test-integration` | 3-6 min |
 | `secrets` | gitleaks over the pushed commit range, honours `.gitleaksignore` | `make secrets` | under 1 min |
-| `images` (one per Dockerfile) | `docker buildx build`, linux/amd64, nothing pushed. The context is the Dockerfile's directory unless it has a `# build-context: <path>` comment line (the console image builds from the repo root `.`) | `docker build -f <dir>/Dockerfile <context>` | 1-3 min each |
+| `python-samples` | the Python sample agent: its pinned requirements install with `--require-hashes`, 20 pytest tests, a contract test against a built `services/stub-model` | `make test-python-samples` | 1 min |
+| `images` (one per Dockerfile) | `docker buildx build`, linux/amd64, nothing pushed (Dockerfiles with a Go build stage, or with the comment line `# ci-build:`, like the Python sample). The context is the Dockerfile's directory unless it has a `# build-context: <path>` comment line (the console image builds from the repo root `.`) | `docker build -f <dir>/Dockerfile <context>` | 1-3 min each |
 | `console` | `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm check`, `pnpm test` (vitest), `pnpm build` | `make test-console` | 2-3 min |
 | `console-audit` | `pnpm audit --prod` (blocking), full `pnpm audit` (report only) | `cd console && pnpm audit --prod` | under 1 min |
 | `console-e2e` | builds the web app, installs Chromium with its libraries, runs Playwright against the Go binary in demo mode; uploads the report on failure | `make test-console-e2e` | 4-6 min |
