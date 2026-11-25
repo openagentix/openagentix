@@ -122,6 +122,22 @@ subjects:
 policies limit who can make such a token there, for EVERY user (cluster admins included) except the controller, whose own writes the workload guard
 judges, and the cluster's controllers in kube-system, which only copy templates that were judged here. */}}
 {{- $ctrl := printf "system:serviceaccount:%s:%s" $cpns $sa }}
+{{- $sat := $ca.serviceAccountTokens }}
+{{- if and $sat.anonymousKeys (regexMatch "^https://kubernetes[.]default[.]svc([.]cluster[.]local)?(:[0-9]+)?(/|$)" $sat.jwksUrl) }}
+---
+# The workload vMCP fetches the API server's public signing keys without a token (ToolHive 0.67.1 does not pass one to a vMCP), so the
+# built-in discovery role (the issuer document and the public keys, nothing else) is bound to unauthenticated callers. Public keys only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openagentix-workload-sa-keys
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:service-account-issuer-discovery"}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: "system:unauthenticated"}
+{{- end }}
 ---
 # No pod and no pod template in the workload namespace may carry a projected ServiceAccount token or the tool-profile label, unless the
 # controller wrote it. Covers every kind that makes pods (a Job, a StatefulSet or a bare Pod would otherwise go around the Deployment guard).

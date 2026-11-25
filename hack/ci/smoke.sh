@@ -147,7 +147,7 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   echo "      /tools answered after $(( $(date +%s) - T0 )) s: $(printf '%s' "$TOOLS" | tr '\n' ' ' | cut -c1-300)"
   grep -q 'tools: osv_query_vulnerability' <<<"$TOOLS" && ok "echo-go listed the profile's one tool through the workload tool server (its own token, its own network rule)" \
     || { bad "echo-go could not list the profile's tools" "$(printf '%s' "$TOOLS" | cut -c1-300)"
-         $K logs -n mcp-tools -l toolhive-name=tools-lookup-workload --tail=20 2>&1 | cut -c1-300 | sed 's/^/      workload vMCP log: /'
+         $K logs -n mcp-tools -l toolhive-name=tools-lookup-workload --tail=400 2>&1 | grep -v '"AUDIT"\|cache sync' | tail -20 | cut -c1-400 | sed 's/^/      workload vMCP log: /'
          $K logs -n "$WNS" -l openagentix.io/agent=echo-go --tail=10 2>&1 | cut -c1-300 | sed 's/^/      echo-go log: /'; }
   # The identity, from outside: the port-forward goes around network policy on purpose, so only the token decides here.
   VPF=$((20000 + RANDOM % 20000)); $K port-forward -n mcp-tools svc/vmcp-tools-lookup-workload "$VPF:4483" >/dev/null 2>&1 & VPID=$!; sleep 3
@@ -159,9 +159,11 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   mcp_list() { # mcp_list <token>: "<initialize status>|<session id>|<tools/list status>|<tools/list body>"
     local h st sid ls body
     h=$(mktemp)
-    st=$(curl -sS -D "$h" -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+    st=$(curl -sS -D "$h" -o "$h.body" -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
       -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null)
-    sid=$(tr -d '\r' < "$h" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}'); rm -f "$h"
+    sid=$(tr -d '\r' < "$h" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
+    case "$st" in 401|403) body="initialize: $(tr '\n' ' ' < "$h.body" | cut -c1-300)";; esac   # the server's reason (no token in it)
+    rm -f "$h" "$h.body"
     if [ -n "$sid" ]; then
       curl -sS -o /dev/null --max-time 10 -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
         -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null
