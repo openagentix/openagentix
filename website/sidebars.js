@@ -6,7 +6,7 @@ module.exports = {
       type: 'category',
       label: 'Start here',
       collapsed: false,
-      items: ['guide/why', 'guide/concepts', 'guide/quick-start', 'guide/demo', 'guide/install-k3s', 'guide/openshift', 'guide/bring-your-own-agent', 'guide/built-with', 'guide/use-cases', 'guide/faq'],
+      items: ['guide/why', 'guide/concepts', 'guide/quick-start', 'guide/demo', 'guide/install-k3s', 'guide/openshift', 'guide/bring-your-own-agent', 'guide/verify-release', 'guide/built-with', 'guide/use-cases', 'guide/faq'],
     },
     {
       type: 'category',
