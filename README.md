@@ -537,6 +537,21 @@ kubectl apply -f components/control-plane/researcher.yaml
 
 Proven on the kind demo cluster (2026-11-25): a definition became a Ready agent in 13 to 31 s, the agent answered with a tool from its tool profile, and the gateway recorded the call under the agent's own user. Not done yet: chart agents (`agents[]`) are not migrated to definitions; schedules, Kourier bindings and the Telegram bridge cannot point at built agents; nobody can call a built agent through the A2A gate until an operator adds a caller rule; suspend is a stop, not a pause; bring your own agent is planned for 0.3. Details: [Control plane](docs/diary/features/control-plane.md), `services/control-plane/README.md`, ADR 0007, 0012 and 0013.
 
+## Bring your own agent
+
+You can run your own agent image next to the built-in ones (ADR 0015, issue #43). It is off by default. Set `controlPlane.containerAgents.enabled=true`, add `container` to the policy's `allowedRuntimes`, and name the registries you trust in `controlPlane.policy.runtimes.container.images`. Then a definition can say `spec.runtime.type: container` and name an image pinned by digest. The image must speak A2A 1.0 (an agent card at `/.well-known/agent-card.json` and `SendMessage` at `POST /`). A sample is in `examples/agents/echo-a2a`.
+
+```sh
+kubectl apply -f examples/agents/echo-a2a/agent.yaml   # after you put your image digest in it
+kubectl -n kagent get oad echo-go
+```
+
+What works: the platform runs the container itself in the locked-down namespace `openagentix-agents` (Pod Security `restricted`, deny-by-default network rules, non-root, read-only root file system). The agent gets its own gateway key as `OPENAI_API_KEY` and its own budget. Callers reach it only through the A2A gate, which rewrites its agent card. The controller never reads the key.
+
+What is refused in this release (one sentence each in `status.violations`): `instructions`, `instructionsFrom`, `tools`, `toolProfile`, `egress.allow`, `memory`, `knowledge`, `notify` and `skills`; an image that is not pinned by digest or is outside the operator's registry list; a runtime the policy does not allow.
+
+How it differs from the built-in runtime, honestly: a container agent is less isolated. It shares the node kernel (unless the operator sets a RuntimeClass), one long-lived process serves every conversation, it has one identity for all sessions, and its files do not survive a restart. Outbound traffic is limited by a NetworkPolicy only. kind's network plugin (kindnet) does not enforce that toward the internet, so on the quick start such an agent can reach the internet. Use a cluster whose network plugin enforces egress if that matters. Tools for container agents and an egress allowlist come in later slices.
+
 ## Console
 
 The console is a web page for the agent builder: an agents registry, a builder whose options follow the policy, a YAML view, pause and delete. Other areas say "not available yet". It is a small Go API with a bearer token and a strict Content-Security-Policy, plus a Svelte app in one image. It needs the control plane and is off by default (`console.enabled`). It has no ingress. The installer creates the token Secret `console-token`; open the console with a port-forward:
