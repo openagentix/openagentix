@@ -34,4 +34,17 @@ printf '%s\n' "$HDR" "registry.local/oa/echo-a2a-other:dev-x application/x sha25
 hack/kind-image-digest.sh c registry.local/oa/echo-a2a >/dev/null 2>&1; t "prefix-only repository: fails" "$?" 1
 # 5. the node cannot be listed
 FAKE_FAIL=1 hack/kind-image-digest.sh c registry.local/oa/echo-a2a >/dev/null 2>&1; t "cannot list the node: fails" "$?" 1
+# 6. a reused cluster: an older tag and its digest name are still on the node; the tag just loaded decides
+H3=$(printf '3%.0s' $(seq 1 64))
+printf '%s\n' "$HDR" "registry.local/oa/echo-a2a:dev-old application/x sha256:$H2 1KiB linux/amd64 -" "registry.local/oa/echo-a2a@sha256:$H2 application/x sha256:$H2 1KiB linux/amd64 -" "registry.local/oa/echo-a2a:dev-new application/x sha256:$H3 1KiB linux/amd64 -" > "$D/ls"; : > "$D/tags"
+t "stale digest name on the node: the loaded tag wins" "$(hack/kind-image-digest.sh c registry.local/oa/echo-a2a dev-new 2>/dev/null)" "registry.local/oa/echo-a2a@sha256:$H3"
+t "stale digest name on the node: new name tagged from the loaded tag" "$(cat "$D/tags")" "registry.local/oa/echo-a2a:dev-new registry.local/oa/echo-a2a@sha256:$H3"
+# 7. several images and no tag named: ambiguous, so it fails instead of guessing
+hack/kind-image-digest.sh c registry.local/oa/echo-a2a >/dev/null 2>&1; t "several digests, no tag: fails" "$?" 1
+# 8. the tag is not on the node
+hack/kind-image-digest.sh c registry.local/oa/echo-a2a dev-missing >/dev/null 2>&1; t "tag absent: fails" "$?" 1
+# 9. the name for the loaded tag is already there: printed, nothing tagged
+printf '%s\n' "$HDR" "registry.local/oa/echo-a2a:dev-new application/x sha256:$H3 1KiB linux/amd64 -" "registry.local/oa/echo-a2a@sha256:$H3 application/x sha256:$H3 1KiB linux/amd64 -" > "$D/ls"; : > "$D/tags"
+t "tag with its name present: printed" "$(hack/kind-image-digest.sh c registry.local/oa/echo-a2a dev-new 2>/dev/null)" "registry.local/oa/echo-a2a@sha256:$H3"
+t "tag with its name present: nothing tagged" "$(wc -c < "$D/tags" | tr -d ' ')" 0
 exit $F
