@@ -46,6 +46,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	$(call need,yq,the Python jq wrapper)
 	$(call need,python3)
 	components/channels/tests/run.sh
+	components/quickstart/tests/run.sh
 	hack/dashboard/tests/run.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'
