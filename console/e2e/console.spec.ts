@@ -87,7 +87,6 @@ test('the pages with no data source say so, and show nothing invented', async ({
         ['/knowledge', 'Knowledge'],
         ['/channels', 'Channels and triggers'],
         ['/schedules', 'Schedules'],
-        ['/traces', 'Traces'],
     ]) {
         await goTo(page, href!);
         await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible();
@@ -169,6 +168,23 @@ test('Costs shows the metrics for a window, and the table view', async ({ page }
     await expect(totals).toContainText('Spend, last 7d');
     await expect(totals).toContainText('$1.22');
     await expect(page.getByRole('row', { name: /assistant/ })).toContainText('$');
+    await done();
+});
+
+test('Traces: recent turns and a waterfall with a span detail, no content', async ({ page }) => {
+    const done = await watch(page);
+    await signIn(page);
+    await goTo(page, '/traces');
+    await expect(page.getByRole('heading', { level: 1, name: 'Traces' })).toBeVisible();
+    const row = page.locator('tr[data-trace]').first();
+    await expect(row).toContainText('researcher');
+    await expect(row).toContainText('Completed');
+    await row.getByRole('button', { name: /Open trace/ }).click();
+    const wf = page.getByRole('list', { name: /Spans of the turn/ });
+    await expect(wf.getByRole('button')).toHaveCount(4);
+    await wf.getByRole('button', { name: /execute_tool osv_query_vulnerability/ }).click();
+    await expect(page.getByRole('complementary')).toContainText('gen_ai.tool.name');
+    await expect(page.getByRole('complementary')).not.toContainText(/gen_ai\.prompt|arguments/);
     await done();
 });
 

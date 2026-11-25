@@ -205,6 +205,8 @@ export interface Platform {
     demo: boolean;
     /** Present only when the console API can read a metrics store. */
     metrics?: { available: boolean };
+    /** Present only when the console API can read a trace store. */
+    traces?: { available: boolean };
     adapters: { runtime: string; modelGateway: string; tools: string };
     namespaces: { agents: string; gateway: string; tools: string };
     gatewayBaseUrl: string;

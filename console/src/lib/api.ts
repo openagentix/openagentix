@@ -3,6 +3,7 @@
 
 import { auth } from './auth.svelte';
 import type { MetricsSummary } from './metrics';
+import type { TraceDetail, Turn } from './traces';
 import type { AgentList, Detail, Platform, Session, Spec, ValidateResult, WriteRequest } from './types';
 
 export class ApiError extends Error {
@@ -91,6 +92,9 @@ export const api = {
     platform: (signal?: AbortSignal) => request<Platform>('GET', '/api/v1/platform', undefined, signal),
     metrics: (window: '24h' | '7d', signal?: AbortSignal) =>
         request<MetricsSummary>('GET', `/api/v1/metrics/summary?window=${window}`, undefined, signal),
+    traces: (signal?: AbortSignal) => request<{ items: Turn[] }>('GET', '/api/v1/traces', undefined, signal),
+    trace: (id: string, signal?: AbortSignal) =>
+        request<TraceDetail>('GET', `/api/v1/traces/${encodeURIComponent(id)}`, undefined, signal),
     agents: (signal?: AbortSignal) => request<AgentList>('GET', '/api/v1/agents', undefined, signal),
     agent: (name: string, signal?: AbortSignal) =>
         request<Detail>('GET', `/api/v1/agents/${encodeURIComponent(name)}`, undefined, signal),
