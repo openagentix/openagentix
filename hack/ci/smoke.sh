@@ -94,7 +94,7 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   while :; do
     TRIES=$((TRIES+1)); ANS=$(hack/ask.sh echo-go "Say hello" 2>&1); RC=$?
     [ "$RC" = 0 ] && break
-    [ $(( $(date +%s) - T0 )) -ge "${SMOKE_ROUTE_WAIT:-240}" ] && break
+    [ $(( $(date +%s) - T0 )) -ge "${SMOKE_ROUTE_WAIT:-45}" ] && break
     sleep 5
   done
   echo "      echo-go answered after $(( $(date +%s) - T0 )) s and $TRIES attempt(s) (exit $RC) after it was Ready"
@@ -102,7 +102,16 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
     echo "      route list in the cluster:  $($K get configmap a2a-gate-routes -n openagentix-gateway -o jsonpath='{.data.routes\.json}' 2>&1 | cut -c1-300)"
     GP=$($K get pod -n openagentix-gateway -l app=a2a-gate -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     echo "      route list inside the gate pod ($GP): $($K exec -n openagentix-gateway "$GP" -- cat /etc/a2a-gate/routes/routes.json 2>&1 | cut -c1-300)"
-    $K logs -n openagentix-gateway "$GP" --tail=30 2>&1 | cut -c1-300 | sed 's/^/      gate: /'
+    echo "      gate env: $($K get pod -n openagentix-gateway "$GP" -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value} {end}' 2>&1 | cut -c1-600)"
+    $K logs -n openagentix-gateway "$GP" 2>&1 | grep -iv '"audit"' | head -20 | cut -c1-300 | sed 's/^/      gate log: /'
+    $K logs -n openagentix-gateway "$GP" --tail=3 2>&1 | cut -c1-300 | sed 's/^/      gate last: /'
+    GPF=$((20000 + RANDOM % 20000)); $K port-forward -n openagentix-gateway svc/a2a-gate "$GPF:8080" >/dev/null 2>&1 & GPID=$!; sleep 3
+    TK=$($K create token quickstart-ask -n openagentix-system --audience openagentix-a2a --duration 5m 2>/dev/null)
+    echo "      card via the gate: $(curl -sS --max-time 10 -H "Authorization: Bearer $TK" -H 'X-User-Id: quickstart:ask' "http://127.0.0.1:$GPF/agents/kagent/echo-go/.well-known/agent-card.json" 2>&1 | cut -c1-400)"
+    echo "      raw SendMessage via the gate: $(curl -sS --max-time 20 -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' -X POST -d '{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"messageId":"m1","role":"ROLE_USER","parts":[{"text":"hi"}]}}}' "http://127.0.0.1:$GPF/agents/kagent/echo-go" 2>&1 | cut -c1-500)"
+    kill $GPID 2>/dev/null; unset TK
+    $K get svc,endpoints,networkpolicy,pod -n "$WNS" -o wide 2>&1 | cut -c1-250 | sed 's/^/      workload: /'
+    $K logs -n "$WNS" -l openagentix.io/agent=echo-go --tail=15 2>&1 | cut -c1-300 | sed 's/^/      echo-go log: /'
   fi
   echo "      answer: $(printf '%s' "$ANS" | tr '\n' ' ' | cut -c1-300)"
   check "echo-go answered through the gate (exit 0)" "$RC" 0
