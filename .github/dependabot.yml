@@ -37,8 +37,8 @@ updates:
     schedule:
       interval: weekly
     # Held back on purpose: TypeScript 7 lacks the compiler API SvelteKit needs; prettier-plugin-svelte 4 reformats
-    # every component; @types/node must follow the Node 22 runtime; layout-elk 1.x conflicts with the peer range
-    # of the Docusaurus mermaid theme.
+    # every component; @types/node must follow the Node 22 runtime; layout-elk is held at ^0.1.9 (0.2 and 1.x
+    # conflict with the peer range of the Docusaurus mermaid theme; re-check when the theme updates).
     ignore:
       - dependency-name: typescript
         update-types: ['version-update:semver-major']
@@ -47,7 +47,6 @@ updates:
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
       - dependency-name: '@mermaid-js/layout-elk'
-        update-types: ['version-update:semver-major']
     groups:
       npm-dependencies:
         patterns: ['*']
