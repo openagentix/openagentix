@@ -110,7 +110,7 @@ These values are not part of the policy file. They sit next to it in `controlPla
 | `controlPlane.minInterval` | `""` |
 | `controlPlane.minRecreateInterval` | `""` |
 | `controlPlane.apiServerPorts` | `[443,6443]` |
-| `controlPlane.containerAgents` | `{"enabled":false,"namespace":"openagentix-workloads","runtimeClassName":"","publicUrl":"","gatewayPodPort":0,"imagePullPolicy":"Always","responseTimeoutSeconds":300,"maxInFlightPerAgent":32}` |
+| `controlPlane.containerAgents` | `{"enabled":false,"namespace":"openagentix-workloads","runtimeClassName":"","publicUrl":"","gatewayPodPort":0,"imagePullPolicy":"Always","responseTimeoutSeconds":300,"maxInFlightPerAgent":32,"toolProfiles":[],"serviceAccountTokens":{"issuer":"https://kubernetes.default.svc.cluster.local","jwksUrl":"https://kubernetes.default.svc/openid/v1/jwks"}}` |
 | `controlPlane.memoryDefaultTtlDays` | `15` |
 <!-- generated:end cp-defaults -->
 
