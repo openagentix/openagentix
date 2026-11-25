@@ -79,7 +79,7 @@ No field list is decided yet.
 
 Reserved. The A2A gate's caller rules as a resource: callers, agents, the user id rule and the allowed methods. `Schedule` needs it, and a product's controller becomes a caller with the task methods (get, cancel, subscribe).
 
-Today the same rules are chart values, `governance.a2a.callers[]`. See the [A2A gate reference](./a2a-gate.md). No field list is decided yet beyond the four parts above.
+Today the same rules are chart values, `governance.a2a.callers[]`. See the [A2A gate reference](./a2a-gate.md). A field list is proposed in [ADR 0016](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0016-agent-access.md) (status: Proposed, nothing built yet).
 
 ## `Schedule`
 
