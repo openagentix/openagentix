@@ -35,7 +35,7 @@ flowchart LR
 
 ## Isolation, plainly
 
-Less isolated than the built-in runtime: shared kernel unless a RuntimeClass is set, one process for all conversations, one identity per agent, no persistent files. On kind, outbound traffic to the internet is not enforced by the network plugin. Not verified: egress enforcement on k3s.
+Less isolated than the built-in runtime: shared kernel unless a RuntimeClass is set, one process for all conversations, one identity per agent, no persistent files. On kind, outbound traffic to the internet is not enforced by the network plugin. On k3s (k3d, in CI) a deny-all egress policy did block a connection to the internet, and the sample agent passed the smoke test there ([Install on k3s](../guide/install-k3s.md)).
 
 ## What was run
 

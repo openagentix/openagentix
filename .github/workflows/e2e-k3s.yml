@@ -1,0 +1,99 @@
+name: e2e-k3s
+
+# The keyless quick start on k3s (issue #30): a k3s cluster in Docker made by k3d (CLUSTER_TYPE=k3d), `PROFILE=quickstart ./install.sh` with the
+# stub model, then hack/ci/smoke.sh. Same steps as e2e.yml, other cluster.
+# NOT part of the required `ci-ok` gate and never will be until it has passed reliably; a failure here is a report, not a block.
+# It runs nightly, by hand, and on pull requests that change this file or the cluster helper.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/e2e-k3s.yml
+      - hack/cluster.sh
+      - install.sh
+      - hack/kind-image-digest.sh
+      - components/runtime/up.sh
+      - hack/ci/cluster-test.sh
+      - hack/ci/netpol-test.sh
+  schedule:
+    - cron: '47 3 * * *'   # nightly, after e2e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-k3s-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-k3s:
+    runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
+    timeout-minutes: 45
+    continue-on-error: true        # the job never turns a pull request red
+    env:
+      CLUSTER_TYPE: k3d
+      CLUSTER: oa-k3s-ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq k3d
+      - name: install (PROFILE=quickstart, no key, no token) on k3s
+        id: install
+        env:
+          PROFILE: quickstart
+          QUICKSTART_BYO: "1"   # also the sample container agent (bring your own agent, ADR 0015)
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          start=$(date +%s)
+          ./install.sh 2>&1 | tee install.log
+          echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: smoke test
+        id: smoke
+        env:
+          SMOKE_BYO: "1"
+        run: |
+          set -o pipefail
+          start=$(date +%s)
+          hack/ci/smoke.sh 2>&1 | tee smoke.log
+          echo "smoke_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: does k3s enforce NetworkPolicy? (ingress and egress to the internet)
+        if: always()
+        run: |
+          set -o pipefail
+          hack/ci/netpol-test.sh 2>&1 | tee netpol.log
+      - name: job summary
+        if: always()
+        env:
+          INSTALL_S: ${{ steps.install.outputs.install_seconds }}
+          SMOKE_S: ${{ steps.smoke.outputs.smoke_seconds }}
+        run: |
+          {
+            echo "## Quick start on k3s (k3d), keyless (stub model)"
+            echo
+            echo "- k3s: $(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}' 2>/dev/null || echo n/a)"
+            echo "- install: **${INSTALL_S:-n/a} s**, smoke test: ${SMOKE_S:-n/a} s"
+            echo '```'
+            grep '^=== ' install.log 2>/dev/null || true
+            cat smoke.log 2>/dev/null || true
+            echo '```'
+            echo '### NetworkPolicy'
+            echo '```'
+            cat netpol.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl get agent,agentdefinition -A -o yaml | head -150 || true
+          kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
+          kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
+          kubectl logs -n ate-system ds/atelet --tail=60 | cut -c1-400 || true
+          kubectl logs -n ate-system deploy/ate-controller --tail=40 | cut -c1-400 || true
+          kubectl get pods -A -o wide | grep -v Running || true

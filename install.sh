@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OpenAgentix installer: one command, idempotent, ordered.
-#   1. kind cluster (optional)            4. build/load the bridge and kb images, build/push the example skill
+#   1. cluster, kind or k3s (optional)    4. build/load the bridge and kb images, build/push the example skill
 #   2. prerequisites (upstream Helm)      5. helm upgrade --install openagentix charts/openagentix
 #   3. Secrets from the environment       6. ingest the sample knowledge corpus (when knowledge.enabled)
 #
@@ -15,7 +15,8 @@
 #                              installing never creates a way for agents to message someone without it.
 #   NOTIFY_OWNER_TELEGRAM=1    the same, using the FIRST id of TELEGRAM_ALLOWED_CHAT_IDS when NOTIFY_TELEGRAM_CHAT_ID is not set
 # Switches (all optional):
-#   CLUSTER=openagentix  CREATE_CLUSTER=1  KUBE_CONTEXT=kind-$CLUSTER
+#   CLUSTER=openagentix  CREATE_CLUSTER=1  KUBE_CONTEXT=<type>-$CLUSTER
+#   CLUSTER_TYPE=kind    kind (default) or k3d (k3s in Docker; docs/guides/install-k3s.md). K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1 picks the k3s version.
 #   SKIP_PREREQS=1       never touch kagent/Substrate/agentgateway/ToolHive
 #   FORCE_PREREQS=1      re-run the upstream installers even if their Helm releases exist (this re-applies
 #                        components/runtime/values/substrate.yaml and DROPS any Substrate additions made by spikes/ax)
@@ -61,7 +62,7 @@
 # the controller's key ConfigMap (llm-api-keys-control-plane) nor the Secrets of built agents; the CRD stays when the release is uninstalled.
 # The web console (ADR 0007, slice 3) is opt-in too: the ONE switch is the chart value console.enabled (components/console/demo-values.yaml, which needs the control plane).
 # When the chart renders it, this script builds its image with the REPOSITORY ROOT as the build context (docker build -f services/console/Dockerfile .: the
-# Dockerfile builds the web app, so Docker and network access are needed), loads it into kind, passes the hash of both sources and the API server addresses to the
+# Dockerfile builds the web app, so Docker and network access are needed), loads it into the cluster, passes the hash of both sources and the API server addresses to the
 # chart, creates the login token Secret console-token (48 random characters, only when absent, never printed, kept on re-runs), waits for the Deployment and tells
 # you how to open it (kubectl port-forward; the token is read with a command it prints, never echoed by the installer). Nobody can connect to the console
 # inside the cluster, and there is no Ingress.
@@ -75,9 +76,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 CLUSTER=${CLUSTER:-openagentix}
-CTX=${KUBE_CONTEXT:-kind-$CLUSTER}
-export CLUSTER KUBE_CONTEXT=$CTX   # the component scripts (runtime, gateway, tools) read both
-NODE=${CLUSTER}-control-plane
+# shellcheck source=hack/cluster.sh
+. hack/cluster.sh   # CLUSTER_TYPE=kind (default) or k3d: what differs between the two (context, node, image load, creation)
+cluster_check_type || exit 1
+CTX=${KUBE_CONTEXT:-$(cluster_ctx)}
+export CLUSTER CLUSTER_TYPE KUBE_CONTEXT=$CTX   # the component scripts (runtime, gateway, tools) read all three
+NODE=$(cluster_node)
+CLUSTER_NET=$(cluster_network)
 K=${KUBECTL:-kubectl}
 RELEASE=openagentix
 RELEASE_NS=${RELEASE_NS:-openagentix-system}
@@ -94,11 +99,11 @@ log(){ printf '\n=== %s (+%ss)\n' "$*" "$(( $(date +%s) - t0 ))"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- 0. preflight: tools and env, before anything is changed ----------------------------------------------
-need=(docker kind kubectl helm jq yq openssl shasum)
+need=(docker "$CLUSTER_TYPE" kubectl helm jq yq openssl shasum)
 missing=(); for c in "${need[@]}"; do command -v "$c" >/dev/null || missing+=("$c"); done
 [ ${#missing[@]} -eq 0 ] || die "missing tools on PATH: ${missing[*]}"
 
-CLUSTER_UP=0; kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && CLUSTER_UP=1
+CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
 secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K get secret -n "$1" "$2" >/dev/null 2>&1; }
 
 # The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
@@ -122,8 +127,8 @@ if [ "$QS" = 1 ]; then
   . components/quickstart/model.sh
   QS_MODEL=$(qs_pick_model) || die "model configuration: see the line above"
   QS_OLLAMA_HOST=host.docker.internal
-  if [ "$QS_MODEL" = ollama ] && [ "$(uname -s)" = Linux ]; then   # no host.docker.internal on Linux: the kind network's gateway
-    QS_OLLAMA_HOST=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true); QS_OLLAMA_HOST=${QS_OLLAMA_HOST:-172.18.0.1}
+  if [ "$QS_MODEL" = ollama ] && [ "$(uname -s)" = Linux ]; then   # no host.docker.internal on Linux: the cluster's Docker network gateway
+    QS_OLLAMA_HOST=$(docker network inspect "$CLUSTER_NET" -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true); QS_OLLAMA_HOST=${QS_OLLAMA_HOST:-172.18.0.1}
   fi
   qs_model_values "$QS_MODEL" "$QS_OLLAMA_HOST" > "$QS_TMP/model-values.json"
   [ ! -s "$QS_TMP/model-values.json" ] || VALS+=(-f "$QS_TMP/model-values.json")
@@ -144,11 +149,11 @@ if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
 fi
 
-# --- 1. kind cluster ------------------------------------------------------------------------------------
+# --- 1. cluster (kind, or k3s through k3d) ------------------------------------------------------------------------------------
 log "cluster $CLUSTER"
 if [ "$CLUSTER_UP" = 0 ]; then
-  [ "${CREATE_CLUSTER:-1}" = 1 ] || die "kind cluster '$CLUSTER' does not exist and CREATE_CLUSTER=0"
-  kind create cluster --name "$CLUSTER" --config hack/kind-config.yaml
+  [ "${CREATE_CLUSTER:-1}" = 1 ] || die "$CLUSTER_TYPE cluster '$CLUSTER' does not exist and CREATE_CLUSTER=0"
+  cluster_create "$ROOT"
 fi
 $K config use-context "$CTX" >/dev/null || die "kube context $CTX not found"
 docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null   # gVisor pod networking (see components/runtime/NOTES.md)
@@ -438,7 +443,7 @@ SET=()
 BUILD_Q=()
 queue_build(){ BUILD_Q+=("$1|$2|${3:-}"); }   # image | context | optional Dockerfile
 # tag_image <image var> <chart value path> <source dir>...: retag the image with dev-<hash of its source> and hand the tag to the chart.
-# kind load keeps an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
+# kind load and k3d image import keep an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
 # shellcheck source=hack/image-tag.sh
 . hack/image-tag.sh
 tag_image(){ local v=$1 path=$2 t; shift 2; t=$(src_tag "$@"); printf -v "$v" '%s:%s' "${!v%:*}" "$t"; SET+=(--set-string "$path.image.tag=$t"); }
@@ -455,7 +460,7 @@ run_builds(){
   for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || fail=1; done
   for img in "${imgs[@]}"; do docker image inspect "$img" >/dev/null 2>&1 || fail=1; done
   [ "$fail" = 0 ] || die "an image build failed: re-run with BUILD_JOBS=1 to see which one"
-  kind load docker-image "${imgs[@]}" --name "$CLUSTER"
+  cluster_load_images "${imgs[@]}"
 }
 if [ "${SKIP_BRIDGE_IMAGE:-0}" != 1 ] && [[ "$BRIDGE_IMAGE" == openagentix/telegram-bridge:* ]]; then
   tag_image BRIDGE_IMAGE bridge bridges/telegram
@@ -512,7 +517,7 @@ if [ "$QS_BYO" = 1 ]; then
   queue_build "$BYO_IMAGE" examples/agents/echo-a2a
   log "sample container agent image $BYO_IMAGE"
 fi
-run_builds   # the queued images are built BUILD_JOBS at a time, then loaded into kind in one call
+run_builds   # the queued images are built BUILD_JOBS at a time, then loaded into the cluster in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
   SET+=(--set-string "gateway.stubModel.sourceHash=$STUB_HASH")
@@ -585,30 +590,30 @@ if [ -n "$CN_DEP" ]; then
 fi
 if [ "${SKIP_SKILL:-0}" != 1 ] && jq -e 'select(.kind=="AgentTemplate")|.spec.skills[]?|select(.source.oci|test("/skills/openagentix-canary@"))' <<<"$RENDERED" >/dev/null; then
   log "example skill openagentix-canary"
-  # A registry:2 container of our own on the kind docker network (NOT in the node's network namespace: that dies
+  # A registry:2 container of our own on the cluster's docker network (NOT in the node's network namespace: that dies
   # with the node and breaks on cluster recreation). The node pulls from its IP over plain HTTP (RFC1918 address).
   # The IP is looked up on every run and written into the skill ref, so nothing hard-codes it.
   REGISTRY=${REGISTRY_NAME:-openagentix-registry}
   if ! docker inspect "$REGISTRY" >/dev/null 2>&1; then
-    docker run -d --name "$REGISTRY" --restart unless-stopped --network kind registry:2 >/dev/null
+    docker run -d --name "$REGISTRY" --restart unless-stopped --network "$CLUSTER_NET" registry:2 >/dev/null
   else
     [ "$(docker inspect -f '{{.State.Running}}' "$REGISTRY")" = true ] || docker start "$REGISTRY" >/dev/null
-    docker inspect -f '{{json .NetworkSettings.Networks}}' "$REGISTRY" | jq -e 'has("kind")' >/dev/null || docker network connect kind "$REGISTRY"
+    docker inspect -f '{{json .NetworkSettings.Networks}}' "$REGISTRY" | jq -e --arg n "$CLUSTER_NET" 'has($n)' >/dev/null || docker network connect "$CLUSTER_NET" "$REGISTRY"
   fi
   REG_IP=""
   for _ in $(seq 1 30); do
-    REG_IP=$(docker inspect -f '{{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}' "$REGISTRY")
+    REG_IP=$(docker inspect -f '{{with index .NetworkSettings.Networks "'"$CLUSTER_NET"'"}}{{.IPAddress}}{{end}}' "$REGISTRY")
     [ -n "$REG_IP" ] && break; sleep 1
   done
-  [ -n "$REG_IP" ] || die "registry container $REGISTRY has no address on the kind network"
+  [ -n "$REG_IP" ] || die "registry container $REGISTRY has no address on the $CLUSTER_NET network"
   REG="$REG_IP:5000"
   ARCH=$(docker exec "$NODE" uname -m); case "$ARCH" in aarch64) ARCH=arm64;; x86_64) ARCH=amd64;; esac
   T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
   docker build -q --platform "linux/$ARCH" -t openagentix-canary-skill:1.0.0 -f components/tools/skills/Dockerfile components/tools/skills >/dev/null
   docker save -o "$T/skill.tar" openagentix-canary-skill:1.0.0
-  DIGEST=$(docker run --rm --network kind -v "$T:/w" "$CRANE_IMAGE" push /w/skill.tar "$REG/skills/openagentix-canary:1.0.0" --insecure 2>&1 \
+  DIGEST=$(docker run --rm --network "$CLUSTER_NET" -v "$T:/w" "$CRANE_IMAGE" push /w/skill.tar "$REG/skills/openagentix-canary:1.0.0" --insecure 2>&1 \
     | grep -Eo 'sha256:[0-9a-f]{64}' | tail -1)
-  [ -n "$DIGEST" ] || die "could not push the skill image to $REG (is $REGISTRY reachable on the kind docker network?)"
+  [ -n "$DIGEST" ] || die "could not push the skill image to $REG (is $REGISTRY reachable on the $CLUSTER_NET docker network?)"
   SET+=(--set-string "skills.openagentix-canary.oci=$REG/skills/openagentix-canary@$DIGEST")
   echo "skill pinned at $REG/skills/openagentix-canary@$DIGEST"
 fi
@@ -766,7 +771,7 @@ EOT
     sign-in token (read it yourself; this script does not print it):
     $K get secret -n $CN_NS $CN_TOKEN_S -o jsonpath='{.data.$CN_TOKEN_K}' | base64 -d; echo
   Remove everything:
-    kind delete cluster --name $CLUSTER
+    $(cluster_delete_hint)
 ============================================================================
 EOT
 fi

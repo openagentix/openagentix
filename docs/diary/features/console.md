@@ -52,15 +52,15 @@ The "predicted" list in the validate answer is a small rule set written for the 
 
 ### Routes
 
-The API has these routes only: `GET /healthz`, `GET /api/v1/session`, `GET /api/v1/platform`, `GET`, `POST` on `/api/v1/agents`, `POST /api/v1/agents/validate`, and `GET`, `PUT`, `DELETE` on `/api/v1/agents/{name}`. Chart agents are listed as read-only.
+The API has these routes only: `GET /healthz`, `GET /api/v1/session`, `GET /api/v1/platform`, `GET /api/v1/metrics/summary`, `GET /api/v1/traces`, `GET /api/v1/traces/{traceId}`, `GET`, `POST` on `/api/v1/agents`, `POST /api/v1/agents/validate`, and `GET`, `PUT`, `DELETE` on `/api/v1/agents/{name}`. Chart agents are listed as read-only.
 
 ### Protection
 
 - The login is a bearer token from a mounted Secret. The real mode refuses a token shorter than 32 characters.
 - A Host allowlist closes DNS rebinding. Failed sign-ins are throttled.
 - Errors written by the Kubernetes API server are never sent to the browser. The console maps them to its own short sentences.
-- There is no ingress. The network policy admits nobody. Reach the console with `kubectl port-forward`.
-- Every user acts as one operator identity, `console`. There are extension points for authentication, authorization and audit. They are not filled in yet.
+- There is no ingress. The network policy (on by default, `networkPolicy.enabled`) admits no ingress. Reach the console with `kubectl port-forward`.
+- Every user acts as one operator identity, `console`. There are extension points for authentication, authorization and audit. Only the built-in ones exist: a bearer token, one role (read only with `console.viewer: true`) and one JSON audit line for each write on standard output.
 - The ServiceAccount can read what it shows and can write only `agentdefinitions`. `console.viewer: true` makes a read-only console.
 
 ## Screenshots
