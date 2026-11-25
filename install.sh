@@ -832,10 +832,15 @@ EOT
 
   Ask the agent (no chat app needed):
     hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
+EOT
+  if [ -n "$CN_DEP" ]; then cat <<EOT
   Open the console:
     $K port-forward -n $CN_NS svc/openagentix-console 8080:8080       then open http://127.0.0.1:8080
     sign-in token (read it yourself; this script does not print it):
     $K get secret -n $CN_NS $CN_TOKEN_S -o jsonpath='{.data.$CN_TOKEN_K}' | base64 -d; echo
+EOT
+  fi
+  cat <<EOT
   Remove everything:
     $(cluster_delete_hint)
 ============================================================================
