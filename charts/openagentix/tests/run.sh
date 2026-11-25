@@ -1841,7 +1841,7 @@ rm -f "$CNX"
 eq "the ten demo files render"                         "$([ -z "$(render_err "${CN10[@]}")" ] && echo rendered || echo failed)" rendered
 
 echo "# console: the objects"
-D=$(docs "${CN10[@]}")
+D=$(docs "${CN10[@]}" --set observability.enabled=false)
 CNNS=openagentix-system
 CND='.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-console")'
 CNP="$CND|.spec.template.spec"
@@ -1927,7 +1927,7 @@ eq "no ingress at all"                                 "$(q "$D" "$CNN|[(.spec.p
 eq "egress: DNS first"                                 "$(q "$D" "$CNN|.spec.egress[0]|[.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"],.to[0].podSelector.matchLabels[\"k8s-app\"],(.ports|map(.protocol+(.port|tostring))|sort|join(\",\"))]|join(\" \")")" "kube-system kube-dns TCP53,UDP53"
 eq "egress: two rules without CIDRs"                   "$(q "$D" "$CNN|.spec.egress|length")" 2
 eq "egress without CIDRs: the API server ports towards any address (documented fallback)" "$(q "$D" "$CNN|.spec.egress[1]|[(.to//[]|length|tostring),(.ports|map(.port|tostring)|join(\",\"))]|join(\" \")")" "0 443,6443"
-DCA=$(docs "${CN10[@]}" --set 'console.apiServerCIDRs={172.18.0.0/24,10.1.2.3/32}')
+DCA=$(docs "${CN10[@]}" --set observability.enabled=false --set 'console.apiServerCIDRs={172.18.0.0/24,10.1.2.3/32}')
 eq "egress with CIDRs: only those, on the API server ports" "$(q "$DCA" "$CNN|.spec.egress[1]|[(.to|map(.ipBlock.cidr)|join(\",\")),(.ports|map(.port|tostring)|join(\",\"))]|join(\" \")")" "172.18.0.0/24,10.1.2.3/32 443,6443"
 eq "networkPolicy.enabled=false renders no NetworkPolicy for the console" "$(count "$(docs "${CN10[@]}" --set networkPolicy.enabled=false)" '.kind=="NetworkPolicy" and .metadata.name=="openagentix-console"')" 0
 
@@ -1956,6 +1956,22 @@ eq "chart renders no Secret objects"                   "$(count "$D" '.kind=="Se
 eq "no stringData/data anywhere"                       "$(q "$D" '[.[]|select(has("data") or has("stringData"))]|length')" 0
 eq "stray secret-looking values are never rendered"    "$(q "$D" 'tostring|contains("SENTINEL-TOKEN-123")')" false
 eq "no Secret-valued env var has a literal value"      "$(q "$D" '[.[]|select(.kind=="Deployment")|.spec.template.spec.containers[].env[]|select((.name|test("TOKEN|KEY|CHAT_IDS")) and has("value"))]|length')" 0
+
+echo "# console: metrics (the bundled metrics store is reachable by the console only)"
+D=$(docs "${CN10[@]}")
+VMURL="http://victoria-metrics.openagentix-observability.svc:8428"
+eq "console on + observability on: CONSOLE_METRICS_URL is the bundled store" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_METRICS_URL\")|.value")" "$VMURL"
+eq "the console NetworkPolicy gets one egress rule to the store's pod and port 8428 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")|[.to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],(.ports|map(.port)|join(","))]]|tostring')" '[["openagentix-observability","8428"]]'
+eq "the store's ingress admits the console pods only, on 8428 only" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="victoria-metrics-ingress")|[.spec.ingress[]|[.from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"],.from[0].podSelector.matchLabels.app,(.ports|map(.port)|join(","))]]|tostring')" '[["openagentix-system","console","8428"]]'
+D=$(docs "${CP9[@]}")
+eq "observability on, console off: the store's ingress still admits nobody" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="victoria-metrics-ingress")|(.spec.ingress // [])|length')" 0
+D=$(docs "${CN10[@]}" --set observability.enabled=false)
+eq "console on, observability off: no CONSOLE_METRICS_URL" "$(q "$D" "$CNC|[.env[]|select(.name==\"CONSOLE_METRICS_URL\")]|length")" 0
+eq "console on, observability off: no egress to a metrics store" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")]|length')" 0
+D=$(docs "${CN10[@]}" --set console.metrics.url=https://metrics.example.org:8428)
+eq "console.metrics.url overrides the bundled store" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_METRICS_URL\")|.value")" "https://metrics.example.org:8428"
+eq "an override opens no egress to the bundled store" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="victoria-metrics")]|length')" 0
+eq "a console.metrics.url with a query or credentials is refused" "$(render_err "${CN10[@]}" --set 'console.metrics.url=http://u:p@x:1/?q=1' | /usr/bin/grep -c 'console.metrics.url')" 1
 
 echo
 echo "passed=$PASS failed=$FAIL"

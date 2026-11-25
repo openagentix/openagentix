@@ -11,6 +11,11 @@
 {{- if not (and (kindIs "string" $x) (regexMatch "^[A-Za-z0-9.:\\[\\]-]+$" $x)) }}{{ fail (printf "console.allowedHosts entry %v is not a host name (no scheme, path or comma; for example console.example.org or console.example.org:8443)" $x) }}{{ end }}
 {{- end }}
 {{- $ts := $c.tokenSecret | default dict }}
+{{- $mOver := (($c.metrics | default dict).url | default "") }}
+{{- if and $mOver (not (and (kindIs "string" $mOver) (regexMatch "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$" $mOver))) }}{{ fail "console.metrics.url must be an http or https URL of the form scheme://host[:port], without credentials, path or query" }}{{ end }}
+{{- $mBundled := and (include "oa.obsOn" .) .Values.observability.bundled.enabled (not $mOver) }}
+{{- $mURL := $mOver }}
+{{- if $mBundled }}{{ $mURL = printf "http://victoria-metrics.%s.svc:8428" .Values.observability.namespace }}{{ end }}
 {{- if not (and (kindIs "string" $ts.name) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ts.name)) }}{{ fail "console.tokenSecret.name must be a Secret name" }}{{ end }}
 {{- if not (and (kindIs "string" $ts.key) (regexMatch "^[-._a-zA-Z0-9]+$" $ts.key)) }}{{ fail "console.tokenSecret.key must be a Secret key (letters, digits, - _ .)" }}{{ end }}
 {{- if not (kindIs "slice" ($c.apiServerCIDRs | default list)) }}{{ fail "console.apiServerCIDRs must be a list of CIDRs" }}{{ end }}
@@ -127,6 +132,9 @@ spec:
             {{- if $c.viewer }}
             - {name: CONSOLE_VIEWER, value: "1"}
             {{- end }}
+            {{- if $mURL }}
+            - {name: CONSOLE_METRICS_URL, value: {{ $mURL | quote }}}
+            {{- end }}
             {{- if $c.allowedHosts }}
             - {name: CONSOLE_ALLOWED_HOSTS, value: {{ join "," $c.allowedHosts | quote }}}
             {{- end }}
@@ -201,6 +209,14 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
+    {{- if $mBundled }}
+    # The bundled metrics store's query port, nothing else in that namespace.
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ .Values.observability.namespace | quote }}}}
+          podSelector: {matchLabels: {app: victoria-metrics}}
+      ports:
+        - {protocol: TCP, port: 8428}
+    {{- end }}
     {{- if $c.apiServerCIDRs }}
     # The API server's addresses (install.sh sets them, as for the control plane: on kind the /24 of the node address, elsewhere the exact endpoints).
     - to:
