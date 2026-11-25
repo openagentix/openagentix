@@ -332,6 +332,15 @@ metadata:
 spec:
   podSelector: {matchLabels: {app: victoria-metrics}}
   policyTypes: [Ingress]
+  {{- if and (.Values.console | default dict).enabled (include "oa.cpOn" .) }}
+  # Only the console (Overview and Costs pages), on the query port.
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 8428}
+      from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ default .Release.Namespace .Values.console.namespace | quote }}}}
+          podSelector: {matchLabels: {app: console}}
+  {{- end }}
 ---
 # OTLP only, from the namespaces that export (agent sandboxes arrive from the Substrate egress proxy in ate-system).
 # kindnet does not enforce egress rules for destinations outside the cluster; this policy is about who may SEND traces here.

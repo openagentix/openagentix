@@ -557,6 +557,10 @@ console:
   # API server ports towards ANY address (a closed policy would cut the console off).
   apiServerCIDRs: []
   apiServerPorts: [443, 6443]
+  # Metrics for the Overview and Costs pages. With observability.enabled and observability.bundled.enabled the console reads the bundled
+  # VictoriaMetrics (query API, port 8428) and only the console may reach it. url overrides that with your own Prometheus-compatible store
+  # (http or https, host[:port], no credentials, path or query); the chart then opens no egress for it. Empty and no bundled store: no metrics.
+  metrics: {url: ""}
   resources:
     requests: {cpu: 10m, memory: 32Mi}
     limits: {cpu: 250m, memory: 128Mi}
