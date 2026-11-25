@@ -45,7 +45,7 @@ The installer ends with a summary: how long it took, which model is active, and 
 - Not built yet: human approval, identity per agent, budgets in money (budgets are in tokens), a Slack channel proven on a real workspace.
 - Demo-grade parts: development databases, one replica of most services. Read [what works](docs/diary/what-works.md) before you rely on anything.
 
-**Read next:** [Why OpenAgentix](docs/diary/guide/why.md) · [Concepts](docs/diary/guide/concepts.md) · [Quick start](docs/diary/guide/quick-start.md) · [Built with](docs/diary/guide/built-with.md) · [Use cases](docs/diary/guide/use-cases.md) · [FAQ](docs/diary/guide/faq.md) · [What works](docs/diary/what-works.md) · [Docs site](https://openagentix.github.io/openagentix/) · [Roadmap](docs/roadmap.md)
+**Read next:** [Why OpenAgentix](docs/diary/guide/why.md) · [Concepts](docs/diary/guide/concepts.md) · [Quick start](docs/diary/guide/quick-start.md) · [Built with](docs/diary/guide/built-with.md) · [Use cases](docs/diary/guide/use-cases.md) · [FAQ](docs/diary/guide/faq.md) · [API reference](docs/diary/reference/index.md) · [What works](docs/diary/what-works.md) · [Docs site](https://openagentix.github.io/openagentix/) · [Roadmap](docs/roadmap.md)
 
 ---
 

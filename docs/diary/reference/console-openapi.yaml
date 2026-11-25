@@ -1,0 +1,705 @@
+openapi: 3.1.0
+info:
+  title: OpenAgentix console API
+  version: v1
+  description: >
+    The JSON API of the OpenAgentix console (services/console). Written by hand from the Go code.
+    The check hack/docs/check-console-openapi.sh fails when the paths and methods here differ from the routes in
+    services/console/internal/server/server.go. Human-readable reference: docs/diary/reference/console-api.md.
+servers:
+  - url: http://127.0.0.1:8080
+    description: A console reached with kubectl port-forward, or a demo console
+security:
+  - bearerAuth: []
+tags:
+  - name: health
+  - name: session
+  - name: agents
+  - name: observability
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness and readiness
+      security: []
+      operationId: getHealth
+      responses:
+        "200":
+          description: The console is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, const: ok}
+        "421": {$ref: "#/components/responses/HostNotAllowed"}
+  /api/v1/session:
+    get:
+      tags: [session]
+      summary: Who you are and what you may do
+      operationId: getSession
+      responses:
+        "200":
+          description: The session.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+  /api/v1/platform:
+    get:
+      tags: [session]
+      summary: Catalog and policy summary
+      operationId: getPlatform
+      responses:
+        "200":
+          description: The platform summary.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Platform"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "503":
+          description: platform_unavailable. The console cannot read its mounted files.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /api/v1/agents:
+    get:
+      tags: [agents]
+      summary: List agents
+      operationId: listAgents
+      responses:
+        "200":
+          description: Built and chart agents.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502": {$ref: "#/components/responses/ClusterError"}
+    post:
+      tags: [agents]
+      summary: Create an agent definition
+      operationId: createAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WriteRequest"}
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location:
+              description: The path of the new agent.
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Detail"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409":
+          description: exists. An agent with this name already exists.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502": {$ref: "#/components/responses/ClusterError"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
+  /api/v1/agents/validate:
+    post:
+      tags: [agents]
+      summary: Dry run of a definition. Writes nothing.
+      operationId: validateAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WriteRequest"}
+      responses:
+        "200":
+          description: The schema check and the predictions.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ValidateResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "429":
+          description: too_many_attempts or rate_limited. Header Retry-After says how many seconds to wait.
+          headers:
+            Retry-After:
+              schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "502": {$ref: "#/components/responses/ClusterError"}
+        "503":
+          description: platform_unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /api/v1/agents/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: A DNS label, at most 40 characters.
+        schema: {$ref: "#/components/schemas/AgentName"}
+    get:
+      tags: [agents]
+      summary: Read one agent
+      operationId: getAgent
+      responses:
+        "200":
+          description: The agent.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Detail"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502": {$ref: "#/components/responses/ClusterError"}
+    put:
+      tags: [agents]
+      summary: Change an agent definition
+      operationId: updateAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WriteRequest"}
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Detail"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: conflict. The resourceVersion is stale.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "413": {$ref: "#/components/responses/TooLarge"}
+        "415": {$ref: "#/components/responses/UnsupportedMediaType"}
+        "422": {$ref: "#/components/responses/Invalid"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502": {$ref: "#/components/responses/ClusterError"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
+    delete:
+      tags: [agents]
+      summary: Delete an agent definition
+      operationId: deleteAgent
+      responses:
+        "202":
+          description: Accepted. The controller removes the rest.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, deleting]
+                properties:
+                  name: {type: string}
+                  deleting: {type: boolean, const: true}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502": {$ref: "#/components/responses/ClusterError"}
+        "503": {$ref: "#/components/responses/AuditUnavailable"}
+  /api/v1/metrics/summary:
+    get:
+      tags: [observability]
+      summary: Spend and tokens. Off by default (needs CONSOLE_METRICS_URL).
+      operationId: getMetricsSummary
+      parameters:
+        - name: window
+          in: query
+          required: false
+          schema: {type: string, enum: ["24h", "7d"], default: "24h"}
+      responses:
+        "200":
+          description: The summary.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MetricsSummary"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "503":
+          description: metrics_unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /api/v1/traces:
+    get:
+      tags: [observability]
+      summary: Recent agent turns. Off by default (needs CONSOLE_TRACES_URL).
+      operationId: listTraces
+      responses:
+        "200":
+          description: At most 30 turns.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Turn"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "503":
+          description: traces_unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /api/v1/traces/{traceId}:
+    parameters:
+      - name: traceId
+        in: path
+        required: true
+        description: 32 lower-case hexadecimal characters.
+        schema: {type: string, pattern: "^[0-9a-f]{32}$"}
+    get:
+      tags: [observability]
+      summary: The spans of one turn. Off by default (needs CONSOLE_TRACES_URL).
+      operationId: getTrace
+      responses:
+        "200":
+          description: The spans, with an allowlist of attributes.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TraceDetail"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "503":
+          description: traces_unavailable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The console token, from the mounted Secret. At least 32 characters in the real mode.
+  responses:
+    Unauthenticated:
+      description: unauthenticated. No or wrong token.
+      headers:
+        WWW-Authenticate:
+          schema: {type: string, examples: ['Bearer realm="openagentix-console"']}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TooManyAttempts:
+      description: too_many_attempts. Too many failed sign-ins. Header Retry-After says how many seconds to wait.
+      headers:
+        Retry-After:
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    HostNotAllowed:
+      description: The Host header is not on the allowlist. Empty body.
+    BadRequest:
+      description: bad_request or invalid. The body, the window or the trace id is not valid.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: forbidden, cross_origin or read_only.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: not_found.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    TooLarge:
+      description: too_large. The body is over 256 KiB.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    UnsupportedMediaType:
+      description: unsupported_media_type. Send application/json.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Invalid:
+      description: invalid, admission_denied or quota_exceeded.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    ClusterError:
+      description: cluster_forbidden, cluster_missing, cluster_unreachable or cluster_error.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    AuditUnavailable:
+      description: audit_unavailable. The audit sink failed before the write, so nothing was written.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: A short stable word.
+              examples: [unauthenticated, forbidden, not_found, conflict, invalid]
+            message:
+              type: string
+              description: One plain sentence.
+    AgentName:
+      type: string
+      maxLength: 40
+      pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
+    Session:
+      type: object
+      required: [subject, role, canWrite, capabilities, demo, version, edition, namespace, context]
+      properties:
+        subject: {type: string, examples: [console]}
+        role: {type: string, enum: [operator, viewer]}
+        canWrite: {type: boolean}
+        capabilities:
+          type: object
+          properties:
+            create: {type: boolean}
+            update: {type: boolean}
+            delete: {type: boolean}
+            validate: {type: boolean}
+        demo: {type: boolean}
+        version: {type: string}
+        edition: {type: string, const: community}
+        namespace: {type: string}
+        context: {type: string}
+    Memory:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+        ttlDays: {type: integer}
+    Feature:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+        collections: {type: array, items: {type: string}}
+        destinations: {type: array, items: {type: string}}
+    Skill:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        version: {type: string}
+    Egress:
+      type: object
+      properties:
+        allow: {type: array, items: {type: string}}
+    Spec:
+      type: object
+      required: [model, instructions]
+      properties:
+        description: {type: string}
+        model: {type: string}
+        instructions: {type: string}
+        toolProfile: {type: string}
+        tools: {type: array, items: {type: string}}
+        knowledge: {$ref: "#/components/schemas/Feature"}
+        notify: {$ref: "#/components/schemas/Feature"}
+        memory: {$ref: "#/components/schemas/Memory"}
+        skills: {type: array, items: {$ref: "#/components/schemas/Skill"}}
+        egress: {$ref: "#/components/schemas/Egress"}
+        suspend: {type: boolean}
+    WriteRequest:
+      type: object
+      description: Unknown fields are refused. The body must be at most 256 KiB.
+      required: [spec]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Required on create. On update it must equal the path name if given. May be empty on validate.
+        resourceVersion:
+          type: string
+          description: Required on update. The value read from the agent.
+        spec: {$ref: "#/components/schemas/Spec"}
+    Condition:
+      type: object
+      required: [type, status, reason]
+      properties:
+        type: {type: string}
+        status: {type: string}
+        reason: {type: string}
+        message: {type: string}
+        observedGeneration: {type: integer}
+        lastTransitionTime: {type: string}
+    ObjectRef:
+      type: object
+      required: [apiVersion, kind, name]
+      properties:
+        apiVersion: {type: string}
+        kind: {type: string}
+        name: {type: string}
+    Endpoint:
+      type: object
+      properties:
+        protocol: {type: string}
+        url: {type: string}
+        protocolVersion: {type: string}
+    Status:
+      type: object
+      required: [observedGeneration, conditions, effectiveTools, effectiveEgress, violations]
+      properties:
+        observedGeneration: {type: integer}
+        conditions: {type: array, items: {$ref: "#/components/schemas/Condition"}}
+        endpoint: {$ref: "#/components/schemas/Endpoint"}
+        revision: {type: string}
+        effectiveTools: {type: array, items: {type: string}}
+        effectiveEgress: {type: array, items: {type: string}}
+        violations: {type: array, items: {type: string}}
+        capabilities: {type: object, additionalProperties: true}
+        agentRef: {$ref: "#/components/schemas/ObjectRef"}
+        controller: {type: object, additionalProperties: true}
+    Agent:
+      type: object
+      required: [name, namespace, source, description, model, toolProfile, toolsCount, knowledge, notify, suspended, skills,
+        egressCount, effectiveTools, effectiveEgress, state, stateReason, deleting, conditions, generation, updated]
+      properties:
+        name: {type: string}
+        namespace: {type: string}
+        source: {type: string, enum: [built, chart]}
+        description: {type: string}
+        model: {type: string}
+        toolProfile: {type: string}
+        toolsCount: {type: integer}
+        knowledge: {type: boolean}
+        notify: {type: boolean}
+        memory: {$ref: "#/components/schemas/Memory"}
+        suspended: {type: boolean}
+        team: {type: string}
+        project: {type: string}
+        skills: {type: array, items: {type: string}}
+        egressCount: {type: integer}
+        effectiveTools: {type: array, items: {type: string}}
+        effectiveEgress: {type: array, items: {type: string}}
+        state: {type: string, enum: [ready, pending, refused, error, paused]}
+        stateReason: {type: string}
+        deleting: {type: boolean}
+        conditions: {type: array, items: {$ref: "#/components/schemas/Condition"}}
+        generation: {type: integer}
+        updated: {type: string}
+        resourceVersion: {type: string}
+    AgentList:
+      type: object
+      required: [items, used, warnings, truncated, cap]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Agent"}}
+        used: {type: integer, description: Built definitions read. The policy maxAgents applies to this count.}
+        warnings: {type: array, items: {type: string}}
+        truncated: {type: boolean}
+        cap: {type: integer}
+    OwnedObject:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string}
+        name: {type: string}
+        state: {type: string}
+        note: {type: string}
+    Detail:
+      allOf:
+        - $ref: "#/components/schemas/Agent"
+        - type: object
+          required: [readOnly, yaml, objects]
+          properties:
+            readOnly: {type: boolean}
+            spec: {$ref: "#/components/schemas/Spec"}
+            status: {$ref: "#/components/schemas/Status"}
+            yaml: {type: string}
+            chart: {type: object, additionalProperties: true}
+            objects: {type: array, items: {$ref: "#/components/schemas/OwnedObject"}}
+            unmanaged: {type: array, items: {type: string}}
+    ValidateResult:
+      type: object
+      required: [schema, predicted, prediction, note]
+      properties:
+        schema:
+          type: object
+          required: [ok, skipped, errors]
+          properties:
+            ok: {type: boolean}
+            skipped: {type: boolean}
+            errors: {type: array, items: {type: string}}
+        predicted:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: {type: string}
+              message: {type: string}
+        prediction: {type: boolean, const: true}
+        note: {type: string}
+    Profile:
+      type: object
+      properties:
+        name: {type: string}
+        toolServer: {type: string}
+        codeMode: {type: boolean}
+        tools: {type: array, items: {type: string}}
+    Platform:
+      type: object
+      properties:
+        demo: {type: boolean}
+        adapters:
+          type: object
+          properties:
+            runtime: {type: string}
+            modelGateway: {type: string}
+            tools: {type: string}
+        namespaces:
+          type: object
+          properties:
+            agents: {type: string}
+            gateway: {type: string}
+            tools: {type: string}
+        gatewayBaseUrl: {type: string}
+        gateEnabled: {type: boolean}
+        models: {type: array, items: {type: string}}
+        toolServer: {type: string}
+        profiles: {type: array, items: {$ref: "#/components/schemas/Profile"}}
+        knowledge: {$ref: "#/components/schemas/PlatformFeature"}
+        notify: {$ref: "#/components/schemas/PlatformFeature"}
+        memory:
+          type: object
+          properties:
+            available: {type: boolean}
+            expiryEnabled: {type: boolean}
+            defaultTtlDays: {type: integer}
+            prompt: {type: string}
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              name: {type: string}
+              ref: {type: string}
+        reservedNames: {type: array, items: {type: string}}
+        policy: {$ref: "#/components/schemas/Policy"}
+        metrics: {$ref: "#/components/schemas/Availability"}
+        traces: {$ref: "#/components/schemas/Availability"}
+    PlatformFeature:
+      type: object
+      properties:
+        available: {type: boolean}
+        tools: {type: array, items: {type: string}}
+        prompt: {type: string}
+    Availability:
+      type: object
+      required: [available]
+      properties:
+        available: {type: boolean}
+    Policy:
+      type: object
+      properties:
+        maxAgents: {type: integer}
+        allowedModels: {type: array, items: {type: string}}
+        requireToolProfile: {type: boolean}
+        allowedProfiles: {type: array, items: {type: string}}
+        allowKnowledge: {type: boolean}
+        allowNotify: {type: boolean}
+        allowedSkills: {type: array, items: {type: string}}
+        memory:
+          type: object
+          properties:
+            allowed: {type: boolean}
+            maxTtlDays: {type: integer}
+            requireExpiry: {type: boolean}
+        egress:
+          type: object
+          properties:
+            allowedOrigins: {type: array, items: {type: string}}
+            inClusterDestinations: {type: array, items: {type: string}}
+        reservedNames: {type: array, items: {type: string}}
+        suspendAll: {type: boolean}
+    MetricsSummary:
+      type: object
+      required: [window, spendUsd, spendTodayUsd, tokensIn, tokensOut, requests, byUser, series, generatedAt]
+      properties:
+        window: {type: string, enum: ["24h", "7d"]}
+        spendUsd: {type: number}
+        spendTodayUsd: {type: number}
+        tokensIn: {type: number}
+        tokensOut: {type: number}
+        requests: {type: number}
+        cacheReadShare: {type: number}
+        byUser:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [user, costUsd, tokensIn, tokensOut, tokensCacheRead]
+            properties:
+              user: {type: string}
+              costUsd: {type: number}
+              tokensIn: {type: number}
+              tokensOut: {type: number}
+              tokensCacheRead: {type: number}
+        series: {type: array, maxItems: 24, items: {type: number}}
+        generatedAt: {type: string}
+    Turn:
+      type: object
+      required: [traceId, start, agent, outcome, modelCalls, durationMs, tokensIn, tokensOut]
+      properties:
+        traceId: {type: string}
+        conversationId: {type: string}
+        start: {type: string}
+        agent: {type: string}
+        outcome: {type: string}
+        modelCalls: {type: integer}
+        durationMs: {type: integer}
+        tokensIn: {type: integer}
+        tokensOut: {type: integer}
+    Span:
+      type: object
+      required: [id, service, name, offsetMs, durationMs, error, attrs]
+      properties:
+        id: {type: string}
+        parentId: {type: string}
+        service: {type: string}
+        name: {type: string}
+        offsetMs: {type: integer}
+        durationMs: {type: integer}
+        error: {type: boolean}
+        attrs: {type: object, additionalProperties: {type: string}}
+    TraceDetail:
+      type: object
+      required: [traceId, durationMs, spans]
+      properties:
+        traceId: {type: string}
+        durationMs: {type: integer}
+        spans: {type: array, items: {$ref: "#/components/schemas/Span"}}

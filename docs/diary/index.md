@@ -118,6 +118,7 @@ Two layers. `install.sh` creates the kind cluster, installs the upstream release
 | [Security](./features/security.md) | Identity, network policies, what is not protected |
 | [Control plane](./features/control-plane.md) | `AgentDefinition`, the controller, policy and the admission guard |
 | [Console](./features/console.md) | The web console and the agent builder |
+| [Reference](./reference/index.md) | Exact fields, limits and APIs: `AgentDefinition`, policy, catalog, console API, A2A gate, admission guard |
 | [Install](./features/install.md) | install.sh, values files, uninstall, demo values |
 | [Maintainer notes](https://github.com/openagentix/openagentix/blob/main/docs/diary/README.md) | How to keep this diary current |
 
