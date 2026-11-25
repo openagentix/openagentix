@@ -6,11 +6,12 @@ const marks = () => Object.fromEntries(NAV.flatMap((g) => g.items).map((i) => [i
 describe('sidebar markers', () => {
     it('marks the pages that show real data as read-only', () => {
         const m = marks();
-        for (const id of ['models', 'tools', 'skills', 'memory', 'governance']) expect(m[id], id).toBe('readonly');
+        for (const id of ['models', 'tools', 'skills', 'memory', 'governance', 'schedules', 'access'])
+            expect(m[id], id).toBe('readonly');
     });
     it('marks the pages without a data source differently', () => {
         const m = marks();
-        for (const id of ['knowledge', 'channels', 'schedules']) expect(m[id], id).toBe('nodata');
+        for (const id of ['knowledge', 'channels']) expect(m[id], id).toBe('nodata');
     });
     it('marks nothing on Overview and Agents, which are live', () => {
         const m = marks();

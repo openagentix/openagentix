@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var nsRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 const (
 	saDir         = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -43,6 +46,8 @@ type Config struct {
 	HSTS                bool   // send Strict-Transport-Security
 	MetricsURL          string // CONSOLE_METRICS_URL: base URL of a Prometheus-compatible query API; empty: no metrics
 	TracesURL           string // CONSOLE_TRACES_URL: base URL of the Jaeger query API; empty: no traces
+	SchedulesNamespace  string // CONSOLE_SCHEDULES_NAMESPACE: where the chart's schedule CronJobs are; empty: the Schedules page says so
+	GateNamespace       string // CONSOLE_GATE_NAMESPACE: where the A2A gate's rules ConfigMap is; empty: the Access page says so
 	ListMax             int    // most objects of one kind a list reads (default 500)
 	AllowInsecureKube   bool   // dev only: accept an http:// Kubernetes API address
 }
@@ -107,6 +112,16 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if c.ListMax, err = intEnv(getenv, "CONSOLE_LIST_MAX", 500, 1, 5000); err != nil {
 		return c, err
+	}
+	for _, e := range []struct {
+		dst  *string
+		name string
+	}{{&c.SchedulesNamespace, "CONSOLE_SCHEDULES_NAMESPACE"}, {&c.GateNamespace, "CONSOLE_GATE_NAMESPACE"}} {
+		v := strings.TrimSpace(getenv(e.name))
+		if v != "" && !nsRE.MatchString(v) {
+			return c, fmt.Errorf("%s must be a namespace name (lower case letters, digits and '-')", e.name)
+		}
+		*e.dst = v
 	}
 	c.HSTS, c.AllowInsecureKube = truthy(getenv("CONSOLE_HSTS")), truthy(getenv("CONSOLE_ALLOW_INSECURE_KUBE_API"))
 	for _, h := range strings.Split(getenv("CONSOLE_ALLOWED_HOSTS"), ",") {

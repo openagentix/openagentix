@@ -17,7 +17,7 @@ It needs the control plane. It is off by default (`console.enabled`).
 Two parts, one image:
 
 - `services/console`: a small Go API. It has fixed routes, a bearer token and a strict Content-Security-Policy. It does not proxy requests to the cluster. It uses only the standard library.
-- `console/`: a SvelteKit single-page app, built into the Go binary. It has a shell, an agents registry, an agent builder whose options follow the platform policy, a YAML view, pause and delete. Overview, Models, Tools, Skills, Memory and Governance show read-only data from the cluster. With the bundled observability on, Overview and Costs show spend and tokens per agent and Traces shows recent turns. Areas without a data source (Knowledge, Channels and triggers, Schedules, Playground) say "not available yet".
+- `console/`: a SvelteKit single-page app, built into the Go binary. It has a shell, an agents registry, an agent builder whose options follow the platform policy, a YAML view, pause and delete. Overview, Models, Tools, Skills, Memory, Governance, Schedules and Access show read-only data from the cluster. With the bundled observability on, Overview and Costs show spend and tokens per agent and Traces shows recent turns. Areas without a data source (Knowledge, Channels and triggers, Playground) say "not available yet".
 
 The design contract is `docs/console/UI-SPEC.md`. The approved mockup is `docs/console/mockup.html`.
 
@@ -109,6 +109,17 @@ All from the console in demo mode, which holds fake data only. They are made by 
 
 *Console in demo mode.*
 
+### Schedules and Access (read-only)
+
+Two pages show what governs an agent today. They read what the chart defines now. They do not use the `Schedule` and `AgentAccess` kinds of the proposed ADRs 0016 and 0017, which do not exist yet.
+
+- **Schedules** lists the schedules of `schedules` in chart values. The console lists the CronJobs that carry the label `openagentix.io/schedule` in the schedules namespace. Each row has the agent, the cron expression in words (for the common shapes only, other expressions are shown as they are), the time zone, the state (active or suspended) and the last start. A click opens a detail view with the overlap policy, the call timeout, the last start and last success, and the creation time. It does not read the prompt, the token or the user id of a schedule. It does not read Jobs, so it cannot say whether the last run worked.
+- **Access** lists the callers of the A2A gate, read from the ConfigMap `a2a-gate-rules`: caller name, whether the chart derived it or `governance.a2a.callers` set it, the ServiceAccount, whether it uses a key, its agents and methods, and the kind of user id rule (exact, prefix or fixed). A user id value, a key and a key hash are never read, because a user id can name a person. The Governance page keeps the platform policy and links to Access from its "Gate callers" tab.
+
+Both pages say in plain words when there is nothing to show: no schedule is defined, the gate is off, or the rules file is missing. An unreadable answer shows an error sentence; the Kubernetes text goes to the console log only.
+
+The chart gives the console two small extra Roles, and only when there is something to read. With `schedules` set it adds a Role in the schedules namespace that may `list` CronJobs. With the gate on it adds a Role in the gate namespace that may `get` the one ConfigMap `a2a-gate-rules`. Neither names a Secret. The console gets the namespaces from `CONSOLE_SCHEDULES_NAMESPACE` and `CONSOLE_GATE_NAMESPACE`. With the console off, the chart renders as before.
+
 ## How to enable
 
 Add `components/console/demo-values.yaml` after `components/control-plane/demo-values.yaml` (see [Control plane](./control-plane.md)). The installer builds the image, loads it into kind and creates the token Secret `console-token` (48 random characters, only when absent, never printed).
@@ -130,6 +141,8 @@ On the kind demo cluster, 2026-11-25:
 
 Tests: Go tests with `-race`, 116 component tests including accessibility checks, and 15 Playwright flows. The Playwright flows run in a demo mode with an in-memory backend.
 
+The Schedules and Access pages (issue #5) were tested only offline, on 2026-11-26: Go tests of the CronJob and ConfigMap readers against a fake Kubernetes API (no secret, prompt or user id in the answer), route and auth tests, 181 vitest tests in total with accessibility checks, 22 Playwright flows in demo mode (one new, for these two pages), and chart render tests for the two extra Roles. They were not run against a cluster, so the Roles and the real CronJob and ConfigMap shapes are not proven live.
+
 The second review of the control plane ran after the console was built. Its console findings were fixed (token strength, Host allowlist, no upstream error text in answers).
 
 ## Known limits
@@ -137,6 +150,7 @@ The second review of the control plane ran after the console was built. Its cons
 - The browser UI was not driven against the real cluster. In the live run only the API was used. The UI was exercised in demo mode.
 - The Playground (a chat with the agent inside the console) does not exist yet.
 - Chart agents are read-only. Areas without a data source show "not available yet".
+- Schedules shows the CronJob's own times, not the result of single runs. Access shows the kind of user id rule, never its value. Neither reads `Schedule` or `AgentAccess` resources, which do not exist yet.
 - One shared operator identity. No login by user, no per-user audit yet.
 - Reachable only through a port-forward. Serving it over TLS behind an ingress is not done or tested.
 - One kind node, one namespace.

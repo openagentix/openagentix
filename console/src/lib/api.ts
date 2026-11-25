@@ -4,7 +4,17 @@
 import { auth } from './auth.svelte';
 import type { MetricsSummary } from './metrics';
 import type { TraceDetail, Turn } from './traces';
-import type { AgentList, Detail, Platform, Session, Spec, ValidateResult, WriteRequest } from './types';
+import type {
+    AccessList,
+    AgentList,
+    Detail,
+    Platform,
+    ScheduleList,
+    Session,
+    Spec,
+    ValidateResult,
+    WriteRequest,
+} from './types';
 
 export class ApiError extends Error {
     constructor(
@@ -90,6 +100,8 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
 export const api = {
     session: (signal?: AbortSignal) => request<Session>('GET', '/api/v1/session', undefined, signal),
     platform: (signal?: AbortSignal) => request<Platform>('GET', '/api/v1/platform', undefined, signal),
+    schedules: (signal?: AbortSignal) => request<ScheduleList>('GET', '/api/v1/schedules', undefined, signal),
+    access: (signal?: AbortSignal) => request<AccessList>('GET', '/api/v1/access', undefined, signal),
     metrics: (window: '24h' | '7d', signal?: AbortSignal) =>
         request<MetricsSummary>('GET', `/api/v1/metrics/summary?window=${window}`, undefined, signal),
     traces: (signal?: AbortSignal) => request<{ items: Turn[] }>('GET', '/api/v1/traces', undefined, signal),

@@ -103,6 +103,8 @@ All routes are **available** unless the table says otherwise.
 | PUT | `/api/v1/agents/{name}` | yes | update | Change an agent definition |
 | DELETE | `/api/v1/agents/{name}` | yes | delete | Delete an agent definition |
 | GET | `/api/v1/metrics/summary` | yes | read | Spend and tokens (**available but off by default**) |
+| GET | `/api/v1/schedules` | yes | read | The chart's schedules |
+| GET | `/api/v1/access` | yes | read | The A2A gate's caller rules |
 | GET | `/api/v1/traces` | yes | read | Recent agent turns (**available but off by default**) |
 | GET | `/api/v1/traces/{traceId}` | yes | read | The spans of one turn (**available but off by default**) |
 | GET, HEAD | any other path | no | none | The web app (see below) |
@@ -355,6 +357,45 @@ Answer 200:
 The queries are fixed text. The browser chooses only the window name.
 
 Limits: 8 second timeout, 1 MiB read per answer, 100 series. Any failure is 503 `metrics_unavailable`.
+
+### GET /api/v1/schedules
+
+Needs `CONSOLE_SCHEDULES_NAMESPACE`. The chart sets it when `schedules` is not empty. Without it the answer is 200 with `"configured": false` and an empty list.
+
+Answer 200: `{"configured": true, "namespace": "...", "items": [Schedule]}`, sorted by name. The console lists the CronJobs that carry the label `openagentix.io/schedule`.
+
+| Schedule field | Type | Meaning |
+|---|---|---|
+| `name` | string | CronJob name |
+| `agent` | string | The agent the schedule calls, read from the end of the call address. Empty if it cannot be read |
+| `cron` | string | The cron expression |
+| `timeZone` | string | Time zone name, or empty |
+| `concurrencyPolicy` | string | `Forbid`, `Allow` or `Replace` |
+| `timeout` | string | The call timeout, for example `5m` |
+| `state` | string | `active` or `suspended` |
+| `active` | integer | Runs going now |
+| `lastScheduled` | string | Time of the last start, or empty |
+| `lastSucceeded` | string | Time of the last success, or empty |
+| `created` | string | Time |
+
+The prompt, the token and the user id of a schedule are not read into the answer. The console does not read Jobs, so the outcome of single runs is not shown. A refused read is 502 `cluster_error`.
+
+### GET /api/v1/access
+
+Needs `CONSOLE_GATE_NAMESPACE`. The chart sets it when `governance.a2a.enabled` is true. Without it the answer is 200 with `"configured": false` and an empty list. If the ConfigMap `a2a-gate-rules` is not there the answer is 404 `gate_rules_missing`.
+
+Answer 200: `{"configured": true, "namespace": "...", "items": [Caller]}`, sorted by name.
+
+| Caller field | Type | Meaning |
+|---|---|---|
+| `name` | string | Caller name |
+| `source` | string | `chart` for the bridge, schedule and channel callers, `values` for `governance.a2a.callers` |
+| `serviceAccount` | string | `namespace/name`, or empty for a caller that uses a key |
+| `key` | boolean | The caller signs in with a static key. The key and its hash are never read |
+| `agents` | array of string | `namespace/name` of each agent it may call |
+| `userIdRule` | string | `exact`, `prefix` or `fixed`. The value is never sent, because it can name a person |
+| `methods` | array of string | The methods it may use. The gate's default when the rule has none |
+| `memory` | boolean | May list and delete memories for its own user ids |
 
 ### GET /api/v1/traces
 

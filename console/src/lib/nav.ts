@@ -44,7 +44,7 @@ export const NAV: NavGroup[] = [
             { id: 'tools', label: 'Tools', href: '/tools', icon: 'i-tool', mark: 'readonly' },
             { id: 'knowledge', label: 'Knowledge', href: '/knowledge', icon: 'i-book', mark: 'nodata' },
             { id: 'channels', label: 'Channels and triggers', href: '/channels', icon: 'i-channel', mark: 'nodata' },
-            { id: 'schedules', label: 'Schedules', href: '/schedules', icon: 'i-clock', mark: 'nodata' },
+            { id: 'schedules', label: 'Schedules', href: '/schedules', icon: 'i-clock', mark: 'readonly' },
         ],
     },
     {
@@ -57,7 +57,10 @@ export const NAV: NavGroup[] = [
     },
     {
         label: 'Govern',
-        items: [{ id: 'governance', label: 'Governance', href: '/governance', icon: 'i-shield', mark: 'readonly' }],
+        items: [
+            { id: 'governance', label: 'Governance', href: '/governance', icon: 'i-shield', mark: 'readonly' },
+            { id: 'access', label: 'Access', href: '/access', icon: 'i-agent', mark: 'readonly' },
+        ],
     },
 ];
 export const SETTINGS: NavItem = { id: 'settings', label: 'Settings', href: '/settings', icon: 'i-gear' };

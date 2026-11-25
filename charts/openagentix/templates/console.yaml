@@ -90,6 +90,65 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}}
 subjects:
   - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $ns }}}
+{{- if .Values.schedules }}
+---
+# The Schedules page lists the chart's CronJobs: one read verb (list) on one kind, in the schedules namespace only. It never reads a
+# Job, a Pod or the prompt ConfigMap. Rendered only when the chart defines schedules.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}-schedules
+  namespace: {{ .Values.scheduling.namespace }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}-schedules
+  namespace: {{ .Values.scheduling.namespace }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}-schedules}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $ns }}}
+{{- end }}
+{{- if include "oa.a2aGateOn" . }}
+---
+# The Access page reads the gate's caller rules: one ConfigMap, by name, one read verb (get). The ConfigMap holds names, agents and
+# methods; the keys are hashes in a Secret that the console cannot read. Rendered only when the gate is on.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}-gate
+  namespace: {{ .Values.governance.a2a.namespace }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [a2a-gate-rules]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}-gate
+  namespace: {{ .Values.governance.a2a.namespace }}
+  labels:
+    app: console
+    {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}-gate}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $ns }}}
+{{- end }}
 ---
 # One replica, hardened like the A2A gate and the control plane. The Secret of the token is created by install.sh (only when absent, never printed); until it
 # exists the pod waits in ContainerCreating.
@@ -145,6 +204,12 @@ spec:
             - {name: CONSOLE_CATALOG_FILE, value: /etc/console/catalog/catalog.json}
             - {name: CONSOLE_POLICY_FILE, value: /etc/console/policy/policy.json}
             - {name: CONSOLE_NAMESPACE, value: {{ $kns | quote }}}
+            {{- if .Values.schedules }}
+            - {name: CONSOLE_SCHEDULES_NAMESPACE, value: {{ .Values.scheduling.namespace | quote }}}
+            {{- end }}
+            {{- if include "oa.a2aGateOn" . }}
+            - {name: CONSOLE_GATE_NAMESPACE, value: {{ .Values.governance.a2a.namespace | quote }}}
+            {{- end }}
             {{- if $c.viewer }}
             - {name: CONSOLE_VIEWER, value: "1"}
             {{- end }}
