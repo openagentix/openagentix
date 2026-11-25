@@ -598,7 +598,9 @@ kubectl apply -f examples/agents/echo-a2a/agent.yaml   # after you put your imag
 kubectl -n kagent get oad echo-go
 ```
 
-What works: the platform runs the container itself in the locked-down namespace `openagentix-agents` (Pod Security `restricted`, deny-by-default network rules, non-root, read-only root file system). The agent gets its own gateway key as `OPENAI_API_KEY` and its own budget. Callers reach it only through the A2A gate, which rewrites its agent card. The controller never reads the key.
+To try it on the quick start (kind, no key): `QUICKSTART_BYO=1 PROFILE=quickstart ./install.sh`. It builds the sample image, loads it into kind, allows its (name-only) registry prefix `registry.local/oa/` for the quick start only, and applies the sample definition; then `hack/ask.sh echo-go "hello"`. A real cluster pushes the image to its own registry, lists that prefix in `controlPlane.policy.runtimes.container.images` and pins the digest the push prints.
+
+What works: the platform runs the container itself in the locked-down namespace `openagentix-workloads` (Pod Security `restricted`, deny-by-default network rules, non-root, read-only root file system). The agent gets its own gateway key as `OPENAI_API_KEY` and its own budget. Callers reach it only through the A2A gate, which rewrites its agent card. The controller never reads the key.
 
 What is refused in this release (one sentence each in `status.violations`): `instructions`, `instructionsFrom`, `tools`, `toolProfile`, `egress.allow`, `memory`, `knowledge`, `notify` and `skills`; an image that is not pinned by digest or is outside the operator's registry list; a runtime the policy does not allow.
 

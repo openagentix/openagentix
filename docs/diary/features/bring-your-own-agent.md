@@ -15,7 +15,7 @@ Teams already have agents. This feature lets one of them run on OpenAgentix with
 ```mermaid
 flowchart LR
   U[Caller] --> G[A2A gate]
-  G -->|fixed URL template| S[Service in openagentix-agents]
+  G -->|fixed URL template| S[Service in openagentix-workloads]
   S --> P[Agent pod]
   P -->|own key| M[Model gateway]
   C[Control plane] -->|writes| D[Deployment, Service, ServiceAccount, NetworkPolicy, key Secret]
@@ -24,7 +24,7 @@ flowchart LR
 ```
 
 - `spec.runtime.type: container` and `spec.runtime.container.image` (digest pinned, from an operator-approved registry) in an `AgentDefinition`.
-- The control plane runs the image as a Deployment in the namespace `openagentix-agents`. The namespace enforces Pod Security `restricted` and has a default-deny network policy.
+- The control plane runs the image as a Deployment in the namespace `openagentix-workloads`. The namespace enforces Pod Security `restricted` and has a default-deny network policy.
 - The key Secret is created in that namespace and mounted as `OPENAI_API_KEY`. The controller can create and delete Secrets there but never read them.
 - The controller writes the list of container agents to a ConfigMap. The gate reads it and builds the upstream URL itself from a fixed template, so the list cannot point the gate at another host.
 - An admission guard (allowlists on every field) limits what even a compromised controller can write.

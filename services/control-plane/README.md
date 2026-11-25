@@ -232,7 +232,7 @@ Catalog (all optional; an old catalog is `{builtin: adapters.runtime}`):
 
 ```json
 "adapters": {"runtime": "kagent", "runtimes": {"builtin": "kagent", "container": "container"}, ...},
-"runtime": {"container": {"namespace": "openagentix-agents", "runtimeClassName": "", "gatewayNamespace": "...",
+"runtime": {"container": {"namespace": "openagentix-workloads", "runtimeClassName": "", "gatewayNamespace": "...",
   "gatewayPodSelector": {"app": "..."}, "gatewayPort": 8080, "gateNamespace": "...", "gatePodSelector": {"app": "a2a-gate"},
   "dnsNamespace": "kube-system"}}
 ```

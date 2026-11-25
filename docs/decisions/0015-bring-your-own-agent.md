@@ -35,7 +35,7 @@ Option A.
 ### What it is
 
 - An `AgentDefinition` gets an optional `spec.runtime` block. `type` is `builtin` (default, today's behaviour) or `container`. The word is a platform word. A later `external` or `sandbox` value can be added without breaking anyone.
-- With `type: container` the controller runs the image itself. It writes a Deployment (one replica at most), a Service, a ServiceAccount, a NetworkPolicy and the agent's own gateway key Secret. All of them live in a separate workload namespace, `openagentix-agents` (chart value `controlPlane.containerAgents.namespace`). That namespace carries Pod Security `restricted` and a default-deny network policy. Definitions stay in `kagent`.
+- With `type: container` the controller runs the image itself. It writes a Deployment (one replica at most), a Service, a ServiceAccount, a NetworkPolicy and the agent's own gateway key Secret. All of them live in a separate workload namespace, `openagentix-workloads` (chart value `controlPlane.containerAgents.namespace`). That namespace carries Pod Security `restricted` and a default-deny network policy. Definitions stay in `kagent`.
 - The platform does **not** enrol a workload the user runs (`targetRef`) in 0.3. Reason: it could not guarantee the key, the pod settings, the egress rules or the identity. Those guarantees are the point of the feature. `external` becomes sensible once the identity adapter (0.4, ADR 0013) exists.
 
 ### Resource shape
@@ -165,6 +165,7 @@ Deliberately left out of 0.3: `external` and `targetRef`, `sandbox`, private reg
 
 - **`docs/api-conventions.md`** said a spec names no image. One exception is added: `spec.runtime.container.image`, the user's own artifact, pinned by digest and matched against an operator allowlist. It exists nowhere else. The other rules stay.
 - **ADR 0007** said there is no field for a harness or image. A dated amendment note now points here. What changed: one image field, for the user's own agent, only when the operator allows the `container` runtime. What did not change: no harness image, no platform component image and no other image field.
+- **Implementation notes (slice 1, 2026-11-25).** The workload namespace is `openagentix-workloads` (chart value `controlPlane.containerAgents.namespace`). Because it differs from the definition's namespace, no owner reference can tie an object to its definition: every object carries both labels, the definition namespace as a label and the definition UID as an annotation, the controller deletes by name and by those labels, and the definition's finalizer holds until the workload objects and the key Secret are gone. The route list ConfigMap name is fixed (`a2a-gate-routes`). The guard checks that an image is digest-pinned and under an allowed prefix, not that it is the definition's image (the guard cannot see the definition); the controller derives the Deployment from the definition. The guard is six policies (Deployment, Service, ServiceAccount, NetworkPolicy, Secret, route list) next to the eight of ADR 0007; the three that would refuse these writes step aside for exactly these objects. A locally loaded kind image has no registry digest: the quick start reads `name@sha256:...` from the node (`hack/kind-image-digest.sh`; kind imports with digests) and allows the name-only prefix `registry.local/oa/` for the quick start only.
 
 ## Consequences
 
@@ -182,7 +183,7 @@ Deliberately left out of 0.3: `external` and `targetRef`, `sandbox`, private reg
 - *Unverified*: whether the tool server's service account may need the service-account-issuer-discovery role to fetch the key set on all target clusters (OpenShift in particular).
 - *Unverified*: that a mounted ConfigMap update reaches the gate fast enough. It can take about a minute, and never happens for `subPath` mounts, so the chart must mount the directory. `Ready=True` may come before the gate sees the route. The controller should set Ready only after the route patch succeeded, and the end-to-end test must poll.
 - *Unverified*: that a Helm upgrade does not wipe `a2a-gate-routes` (same open point as the key ConfigMap in ADR 0007).
-- *Unverified*: that the Deployment allowlist fits the admission policy cost budget. It may need splitting.
+- The Deployment allowlist fits the admission policy cost budget as one policy (the guard tests execute it with the Kubernetes CEL code; the API-server test applies it to a real server). Results are in the pull request.
 - *Unverified*: which mainstream frameworks serve A2A 1.0 today, including the current Google ADK release, and whether ADK runs with a read-only root file system. The gate does not translate older versions.
 - *Unverified*: the A2A spec sections 5, 9.1 and 10.1 (whether one binding is mandatory), and how the gate's existing request checks behave against a foreign agent's responses (the gate inspects requests, not responses).
 - *Unverified*: the exact tool-server memory cost on the 6 CPU, 8 GB node (one more server per opted-in profile).
