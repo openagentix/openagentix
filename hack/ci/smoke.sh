@@ -162,7 +162,7 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
     st=$(curl -sS -D "$h" -o "$h.body" -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
       -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null)
     sid=$(tr -d '\r' < "$h" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
-    case "$st" in 401|403) body="initialize: $(tr '\n' ' ' < "$h.body" | cut -c1-300)";; esac   # the server's reason (no token in it)
+    case "$st" in 401|403) body="initialize: $(tr '\n' ' ' < "$h.body" | cut -c1-700)";; esac   # the server's reason (no token in it)
     rm -f "$h" "$h.body"
     if [ -n "$sid" ]; then
       curl -sS -o /dev/null --max-time 10 -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
@@ -175,7 +175,7 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   }
   denied() { # denied <desc> <mcp_list output>: an explicit refusal, or a list without the profile's tool
     local st sid ls body; IFS='|' read -r st sid ls body <<<"$2"
-    echo "      $1: initialize HTTP $st, session ${sid:+set}${sid:-EMPTY}, tools/list HTTP ${ls:--}: $(printf '%s' "$body" | cut -c1-200)"
+    echo "      $1: initialize HTTP $st, session ${sid:+set}${sid:-EMPTY}, tools/list HTTP ${ls:--}: $(printf '%s' "$body" | cut -c1-700)"
     case "$st" in 401|403) ok "$1: refused at initialize (HTTP $st)"; return;; esac
     if [ -z "$sid" ]; then bad "$1: no session id, so the check cannot judge" "initialize HTTP $st"; return; fi
     case "$ls" in 401|403) ok "$1: tools/list refused (HTTP $ls)"; return;; esac

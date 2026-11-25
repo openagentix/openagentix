@@ -61,6 +61,6 @@ Option A, with an explicit opt-in per profile.
 
 ## Not checked / open points
 
-- *Unverified* on a cluster at the time of writing: that ToolHive 0.67.1 accepts the token (issuer, keys fetched from the API server with the server's own token, audience) and that the default RBAC binding `system:service-account-issuer-discovery` lets the server read the key set. The end-to-end job is the first place this runs; the pull request says what it showed.
+- Run on kind in CI (2026-11-26): ToolHive 0.67.1 accepted the agent's pod-bound token with the key binding of this record, and refused another audience and another namespace. On k3s the keys could not be fetched; that k3s turns off anonymous authentication is the likely reason, *unverified*.
 - *Unverified*: OpenShift (container agents are refused there anyway) and managed clusters whose issuer is not the in-cluster URL. The issuer and key URL are values for that reason.
 - The agent's NetworkPolicy and the server's ingress rule are not cross-checked by the guard (the guard sees one object at a time). A mismatch fails closed.

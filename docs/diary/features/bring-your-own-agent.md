@@ -68,7 +68,7 @@ Two admission policies cover the workload namespace for every user except the co
 
 Limits, plainly: any pod in the cluster can ask for a token with this audience for its own ServiceAccount, so the namespace rule in the server's policy is what keeps other namespaces out. A token is not revoked when the agent is removed; it stays valid until it expires (at most one hour). Where NetworkPolicy is not enforced, a token that leaves the pod can be used from elsewhere until then; the network rule is a second layer only where the cluster enforces NetworkPolicy. All agents on one profile look the same to the server. One more pod per opened profile.
 
-Try it in the quick start (`QUICKSTART_BYO=1`): the profile `lookup` is open and the sample has `toolProfile: lookup`. `hack/ask.sh echo-go /tools` is expected to answer `tools: osv_query_vulnerability`; what the end-to-end job showed is in [What works](../what-works.md).
+Try it in the quick start (`QUICKSTART_BYO=1`): the profile `lookup` is open and the sample has `toolProfile: lookup`. `hack/ask.sh echo-go /tools` answers `tools: osv_query_vulnerability`. This was shown on kind in the `e2e` job; on k3s the tool server could not fetch the cluster's signing keys. Details in [What works](../what-works.md).
 
 What was run: see the row in [What works](../what-works.md).
 
