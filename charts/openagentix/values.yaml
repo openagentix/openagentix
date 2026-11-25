@@ -517,6 +517,17 @@ controlPlane:
   # Sets CONTROL_PLANE_MIN_RECREATE_INTERVAL only when given.
   minRecreateInterval: ""
   apiServerPorts: [443, 6443]         # 443 is the Service port, 6443 the endpoint port of kind and kubeadm clusters (policies may see either)
+  # Bring your own agent (ADR 0015, issue #43): run a digest-pinned image that speaks A2A as an agent. OFF by default; with it off the chart
+  # renders byte-identically to a chart without this block. It needs governance.a2a.enabled (clients reach the agent only through the gate).
+  # Turning it on only gives the controller a place to run such agents; a definition may still use it only when policy.allowedRuntimes lists
+  # "container" AND policy.runtimes.container.images allows its registry prefix. The workload namespace gets Pod Security `restricted`, a
+  # deny-by-default NetworkPolicy, and the controller's namespaced Role there (no Secret get/list/watch). Foreign code never shares a namespace with a platform component.
+  containerAgents:
+    enabled: false
+    namespace: openagentix-workloads    # where the containers run; must not be a platform namespace
+    runtimeClassName: ""                # optional RuntimeClass (for example gVisor's "gvisor"); isolation then reports "sandboxed-pod"
+    publicUrl: ""                       # how clients reach the gate (used in rewritten agent cards); empty = the gate's in-cluster Service URL
+    gatewayPodPort: 0                   # the model gateway pods' port for the NetworkPolicy; 0 = gateway.port
   # What kagent uses as the lifetime of a saved memory when a definition sets none (kagent default 15). The controller needs it to check
   # `ttlDays` against policy.memory.maxTtlDays.
   memoryDefaultTtlDays: 15
@@ -548,6 +559,15 @@ controlPlane:
       # start and the admission guard refuses them even if they were listed. DNS rebinding of an allowed public name is not handled here (the egress
       # proxy has to refuse private addresses).
       inClusterDestinations: []
+    # Runtime types a definition may use. Container agents are refused unless "container" is listed here AND controlPlane.containerAgents.enabled
+    # (these two keys are rendered only when containerAgents.enabled; with it off the policy file is exactly what it was).
+    allowedRuntimes: [builtin]
+    runtimes:
+      container:
+        images: []                      # registry prefixes a container image must start with, each with a path and a trailing slash (ghcr.io/acme/agents/). Empty: no image
+        defaultResources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}
+        maxResources: {cpu: "1", memory: 1Gi}   # ceiling for limits
+        maxAgents: 3                    # container agents per namespace, inside policy.maxAgents
     reservedNames: []                 # more names a definition may not use: "name" in every namespace, "namespace/name" in one (the chart agents and kb, kb-extract, memory are always reserved in the agents namespace)
     suspendAll: false                 # the operator's stop switch: every definition is STOPPED: its agent object is removed (conversations end) and its gateway key is cut (resume: the same key, a fresh start), see the README
 

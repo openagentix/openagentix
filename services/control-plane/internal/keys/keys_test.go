@@ -100,6 +100,29 @@ func TestCreated201WritesHash(t *testing.T) {
 	}
 }
 
+// A Secret in another namespace than the definition cannot be owned by it (an owner reference does not cross namespaces):
+// with no owner UID the Secret carries no ownerReferences at all.
+func TestNoOwnerReferencesWhenThereIsNoOwnerUID(t *testing.T) {
+	s, sec, reg := setup(t)
+	p := params()
+	p.Namespace, p.Owner = "openagentix-agents", OwnerRef{}
+	p.Labels["openagentix.io/definition-namespace"] = "kagent"
+	if _, err := Ensure(context.Background(), p, sec, reg, fixed("vk-one")); err != nil {
+		t.Fatal(err)
+	}
+	o, ok := s.Get(secrets, "openagentix-agents", p.SecretName)
+	if !ok {
+		t.Fatal("secret not created in the workload namespace")
+	}
+	m := o["metadata"].(map[string]any)
+	if _, has := m["ownerReferences"]; has {
+		t.Fatalf("no ownerReferences expected: %v", m)
+	}
+	if m["labels"].(map[string]any)["openagentix.io/definition-namespace"] != "kagent" {
+		t.Fatalf("labels %v", m["labels"])
+	}
+}
+
 func TestConflictWithHashPresentAndNothingKnownAdoptsIt(t *testing.T) {
 	s, sec, reg := setup(t)
 	s.Seed(secrets, kubetest.Object{"metadata": kubetest.Object{"name": "r-virtual-key-0a1b2c3d", "namespace": "kagent"}})

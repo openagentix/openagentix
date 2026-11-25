@@ -63,6 +63,46 @@ What it does for each request:
 | `A2A_GATE_MAX_BODY` | `8388608` | largest request body (REST routes; JSON-RPC bodies are limited by the line above) |
 | `A2A_GATE_MAX_INFLIGHT` | `128` | requests handled at once; the next gets 503 with `Retry-After` and `reason: busy` |
 | `A2A_GATE_ADDR` | `:8080` | listen address |
+| `A2A_GATE_ROUTES_FILE` | empty | path of the controller-written routes file; empty switches "bring your own agent" off and the gate behaves exactly as before |
+| `A2A_GATE_WORKLOAD_NAMESPACE` | required with the routes file | DNS label of the namespace container agents run in |
+| `A2A_GATE_WORKLOAD_PORT` | `8080` | port of those agents |
+| `A2A_GATE_PUBLIC_URL` | required with the routes file | address clients use for the gate (`https://a2a.example.com`); used in rewritten agent cards |
+
+## Bring your own A2A agent (container agents)
+
+An agent that runs as its own container (not in kagent) is listed in the routes file. The **controller** writes it; the
+gate only reads it. The chart mounts the ConfigMap as a **directory** (not `subPath`), because the kubelet updates a
+directory mount in place and never updates a `subPath` mount; `A2A_GATE_ROUTES_FILE` points at the file inside it.
+
+```json
+{"container": ["kagent/echo-go", "kagent/other"]}
+```
+
+That member and nothing else. Parsing is strict: any other or repeated key, a wrong type, an entry that is not
+`<namespace>/<name>` with both parts lowercase DNS labels (1-63 characters, `a-z0-9-`, no dots), a duplicate entry,
+more than 1000 entries, a file over 256 KiB, or data after the object rejects the whole file.
+
+- **No host in the list.** For a listed agent the gate builds the upstream itself:
+  `http://<name>.<A2A_GATE_WORKLOAD_NAMESPACE>.svc.cluster.local:<port>`. The list chooses only *which* agent goes to
+  the workload namespace; whoever can write it cannot point the gate at another host. Agents not listed go to
+  `A2A_GATE_UPSTREAM` exactly as before.
+- **Paths.** JSON-RPC `POST /agents/<ns>/<name>` goes to `POST /` on the agent; `message:send` and `message:stream`
+  (with or without the `v1/` alias) go to `POST /message:send` and `/message:stream`; the card path goes to
+  `GET /.well-known/agent-card.json`. The query is wiped and headers are stripped as for any agent.
+- **Callers.** Rules are unchanged: a caller needs the agent in its `agents` list, and the agent receives the
+  resolved `X-User-Id` (information, not proof).
+- **Reload.** The file is checked every 10 s and swapped atomically when its content changes. No restart.
+- **Fail closed.** Missing or malformed at start: the feature stays on with an empty list, so a listed agent is not
+  routed to the workload namespace; it goes to the kagent upstream like an unlisted one (a 404 there). The gate does
+  not refuse to start, because that would take every kagent agent down for one bad file, and an empty list can never
+  add a route. A malformed update keeps the last good list and logs one line (the reason, never the file content).
+  The rule: a malformed list never adds a route. A *valid* list that no longer names an agent removes its route.
+- **Agent card.** The card of a listed agent is parsed (at most 64 KiB; it must be one JSON object, else
+  `502 {"error":"agent card ..."}`). `supportedInterfaces` is replaced with the gate's own two (`JSONRPC` and `HTTP+JSON`,
+  `url` = `A2A_GATE_PUBLIC_URL/agents/<ns>/<name>`, `protocolVersion` `1.0`); `securitySchemes`, `security`,
+  `securityRequirements` (the gate is the authentication) and the legacy `url`, `preferredTransport`,
+  `additionalInterfaces` are dropped; all other members pass through. Without this a client would call the pod directly.
+  A non-200 answer from the agent passes through unchanged.
 
 The gate needs the `system:auth-delegator` ClusterRole for TokenReview (the chart binds it). It has no
 dependency outside the Go standard library.

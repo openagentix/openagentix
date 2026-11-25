@@ -111,6 +111,12 @@ case "$PROFILE" in
   quickstart) QS=1; VALS+=(-f components/quickstart/values.yaml) ;;
   *) die "unknown PROFILE '$PROFILE' (known: quickstart)" ;;
 esac
+# QUICKSTART_BYO=1 adds the sample container agent (examples/agents/echo-a2a, ADR 0015): the runtime is switched on, one registry prefix is allowed.
+QS_BYO=0
+if [ "${QUICKSTART_BYO:-0}" = 1 ]; then
+  [ "$QS" = 1 ] || die "QUICKSTART_BYO=1 needs PROFILE=quickstart"
+  QS_BYO=1; VALS+=(-f components/quickstart/byo-values.yaml)
+fi
 for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
 if [ "$QS" = 1 ]; then
   . components/quickstart/model.sh
@@ -169,7 +175,8 @@ $K config use-context "$CTX" >/dev/null
 # --- 3. what will the chart render? (agents, namespaces, images) -------------------------------------------
 # --api-versions: the Agent Kourier CRDs are installed later in this run, but the objects they define must be planned now.
 AGENT_KEYS=$(jq -r 'select(.kind=="ModelConfig")|[.metadata.annotations["openagentix.io/agent"],.spec.apiKeySecret,.metadata.namespace]|@tsv' <<<"$RENDERED")
-NAMESPACES=$(jq -r 'select(.metadata.namespace!=null)|.metadata.namespace' <<<"$RENDERED" | sort -u)
+# (not the namespaces the chart renders itself as a Namespace object, such as the container agents' workload namespace: Helm must create those, or it cannot adopt them)
+NAMESPACES=$(jq -rs '[.[]|select(.kind=="Namespace")|.metadata.name] as $own | [.[]|select(.metadata.namespace!=null)|.metadata.namespace]|unique|.[]|select(. as $n|($own|index($n))|not)' <<<"$RENDERED")
 BRIDGE_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].image' <<<"$RENDERED")
 KB_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="kb")' <<<"$RENDERED")   # empty when knowledge.enabled=false
 # Consumers other than agents that need their own gateway virtual key (the kb, for embeddings): "user<TAB>secret<TAB>ns"
@@ -499,6 +506,12 @@ if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:
   log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
   queue_build "$CN_IMAGE" . services/console/Dockerfile
 fi
+if [ "$QS_BYO" = 1 ]; then
+  BYO_REPO=registry.local/oa/echo-a2a
+  BYO_IMAGE="$BYO_REPO:$(src_tag examples/agents/echo-a2a)"
+  queue_build "$BYO_IMAGE" examples/agents/echo-a2a
+  log "sample container agent image $BYO_IMAGE"
+fi
 run_builds   # the queued images are built BUILD_JOBS at a time, then loaded into kind in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
@@ -697,13 +710,32 @@ if [ "$QS" = 1 ]; then
   QS_DESC="Looks up known vulnerabilities of a package. Model: $(qs_model_label "$QS_MODEL")"
   yq --arg d "$QS_DESC" '.spec.description=$d' components/quickstart/agent.yaml > "$QS_TMP/agent.json"
   # the ResourceQuota on definitions has no status for a moment after the chart is installed ("status unknown for quota"): retry
-  for qs_try in 1 2 3 4 5 6 7 8 9 10; do
+  for qs_try in $(seq 1 40); do
     $K apply -f "$QS_TMP/agent.json" >/dev/null 2>"$QS_TMP/apply.err" && break
-    [ "$qs_try" -lt 10 ] && /usr/bin/grep -q "status unknown for quota" "$QS_TMP/apply.err" || { cat "$QS_TMP/apply.err" >&2; die "could not create the quickstart AgentDefinition"; }
+    [ "$qs_try" -lt 40 ] && /usr/bin/grep -q "status unknown for quota" "$QS_TMP/apply.err" || { cat "$QS_TMP/apply.err" >&2; $K get resourcequota -n $KAGENT_NS -o yaml >&2 2>&1 || true; die "could not create the quickstart AgentDefinition"; }
+    # The quota controller learns the new CRD only at its next discovery pass (30 s) and backs off after the failed first sync, so the
+    # status can stay unknown for minutes. A change of the quota's spec makes it sync again at once: set the limit up by one and back.
+    if [ $((qs_try % 10)) = 0 ]; then
+      qs_hard=$($K get resourcequota openagentix-agentdefinitions -n $KAGENT_NS -o json 2>/dev/null | jq -r '.spec.hard["count/agentdefinitions.openagentix.io"] // empty')
+      if [[ "$qs_hard" =~ ^[0-9]+$ ]]; then
+        for qs_v in $((qs_hard + 1)) "$qs_hard"; do
+          $K patch resourcequota openagentix-agentdefinitions -n $KAGENT_NS --type merge -p "{\"spec\":{\"hard\":{\"count/agentdefinitions.openagentix.io\":\"$qs_v\"}}}" >/dev/null 2>&1 || true
+        done
+      fi
+    fi
     sleep 3
   done
   $K wait agentdefinition/quickstart -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
     || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition quickstart -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
+  if [ "$QS_BYO" = 1 ]; then
+    log "sample container agent (bring your own agent)"
+    BYO_REF=$(hack/kind-image-digest.sh "$CLUSTER" "$BYO_REPO") || die "no digest for the sample image: see the line above"
+    echo "image $BYO_REF"
+    yq --arg i "$BYO_REF" '.spec.runtime.container.image=$i' examples/agents/echo-a2a/agent.yaml > "$QS_TMP/byo.json"
+    $K apply -f "$QS_TMP/byo.json" >/dev/null || die "could not create the echo-go AgentDefinition"
+    $K wait agentdefinition/echo-go -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
+      || { echo "WARN: the echo-go agent is not Ready yet: $K get agentdefinition echo-go -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition echo-go -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
+  fi
 fi
 
 log "DONE"

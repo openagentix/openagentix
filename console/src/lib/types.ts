@@ -90,6 +90,8 @@ export interface Agent {
     notify: boolean;
     memory?: Memory;
     suspended: boolean;
+    runtimeType?: 'builtin' | 'container';
+    isolation?: string;
     team?: string;
     project?: string;
     skills: string[];

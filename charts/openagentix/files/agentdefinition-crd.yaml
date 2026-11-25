@@ -7,8 +7,10 @@
 #   - description at most 256 characters; instructions 1 to 16384 characters (the controller counts bytes), exactly one of
 #     instructions and instructionsFrom by a rule;
 #   - ttlDays at least 1; egress.allow at most 64 origins.
-# There is deliberately no field for a model config, image, tool server, egress policy reference, namespace, caller, gateway
-# user or budget: those come from the platform, so a definition cannot reach around the policy. No upstream product is named
+# There is deliberately no field for a model config, tool server, egress policy reference, namespace, caller, gateway user or
+# budget, and none that names a platform component's image: those come from the platform, so a definition cannot reach around
+# the policy. The one image in a spec is the user's own agent, in spec.runtime.container.image (ADR 0015): pinned by digest and
+# checked against the operator's registry prefixes by the controller. No upstream product is named
 # in a spec field or in the public status; the status is a contract (conditions, observedGeneration, endpoint, revision,
 # effectiveTools, effectiveEgress, violations, capabilities, agentRef) and everything the controller keeps for itself is under
 # status.controller, which may change without notice.
@@ -63,7 +65,9 @@ spec:
               type: object
               required: [model]
               x-kubernetes-validations:
-                - rule: "has(self.instructions) != has(self.instructionsFrom)"
+                # A container agent (spec.runtime.type container) is configured in its image: neither field is required (the
+                # controller refuses both with a sentence). Every other agent sets exactly one.
+                - rule: "(has(self.runtime) && has(self.runtime.type) && self.runtime.type == 'container') || has(self.instructions) != has(self.instructionsFrom)"
                   message: "set exactly one of instructions and instructionsFrom"
               properties:
                 description:
@@ -155,6 +159,52 @@ spec:
                 suspend:
                   type: boolean
                   description: Stops the agent (Ready=False, reason Suspended). The runtime has no pause, so suspend is a STOP - the runtime agent is removed and running conversations end - and the agent's gateway key is cut (it opens nothing until resume). Resume is a fresh start with the same definition, key and revision, and at most once per two minutes. The definition stays accepted. The operator's policy (suspendAll) can stop every definition too.
+                runtime:
+                  type: object
+                  description: How the agent is made. Absent means builtin (the platform builds it from the instructions). The operator's policy says which types a definition may use (allowedRuntimes, default only builtin).
+                  properties:
+                    type:
+                      type: string
+                      enum: [builtin, container]
+                      description: builtin (default) or container (the platform runs your digest-pinned image, which speaks A2A, as the agent).
+                    container:
+                      type: object
+                      required: [image, port]
+                      description: Set when type is container, and only then.
+                      properties:
+                        image:
+                          type: string
+                          maxLength: 300
+                          description: "Your agent's image, pinned by digest: registry/path@sha256:<64 hex>. It must be under a registry prefix the operator's policy lists."
+                        port:
+                          type: integer
+                          minimum: 1024
+                          maximum: 65535
+                          description: The port the container serves A2A on.
+                        env:
+                          type: array
+                          maxItems: 32
+                          description: Plain environment variables. Never a secret; names the platform owns (OPENAGENTIX_, OPENAI_, OTEL_, KUBERNETES_) are refused.
+                          items:
+                            type: object
+                            required: [name, value]
+                            properties:
+                              name: {type: string, minLength: 1, maxLength: 63, pattern: '^[A-Z_][A-Z0-9_]*$'}
+                              value: {type: string, maxLength: 4096}
+                        resources:
+                          type: object
+                          description: Optional. Requests default and limits are capped by the operator's policy.
+                          properties:
+                            requests:
+                              type: object
+                              properties:
+                                cpu: {type: string, maxLength: 16}
+                                memory: {type: string, maxLength: 16}
+                            limits:
+                              type: object
+                              properties:
+                                cpu: {type: string, maxLength: 16}
+                                memory: {type: string, maxLength: 16}
             status:
               type: object
               description: The public fields are the contract; everything the controller keeps for itself is under controller and may change without notice.
@@ -207,6 +257,7 @@ spec:
                     maxStepSeconds: {type: integer, description: "0 is unknown"}
                     cancelStopsLoop: {type: string, enum: ["yes", "no", "unknown"]}
                     perRunIdentity: {type: string, enum: [none, session, run, unknown]}
+                    isolation: {type: string, description: "How the agent is separated from others: sandbox-per-session, sandboxed-pod or container. Absent is unknown."}
                 agentRef:
                   type: object
                   description: One generic reference to the runtime's object, for people who debug.

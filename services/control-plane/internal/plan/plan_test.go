@@ -257,6 +257,127 @@ func TestRevisionIsStableAndSensitive(t *testing.T) {
 	}
 }
 
+// A builtin revision must never change because the container runtime exists: a revision is what products compare, and a change
+// would roll every running agent. This value was computed before the runtime field existed.
+func TestBuiltinRevisionIsIdenticalToBeforeTheContainerRuntime(t *testing.T) {
+	c := cat(t)
+	d := def()
+	d.Spec.Knowledge = api.Knowledge{Enabled: true}
+	d.Spec.Memory = api.Memory{Enabled: true, TTLDays: 7}
+	d.Spec.Egress.Allow = []string{"https://api.osv.dev"}
+	d.Spec.Skills = []api.Skill{{Name: "openagentix-canary"}}
+	p := must(build(d, c))
+	if p.Revision != "983c7e170779" {
+		t.Fatalf("revision %s", p.Revision)
+	}
+	if p.RuntimeType != api.RuntimeBuiltin || p.Container != nil {
+		t.Fatalf("%+v", p)
+	}
+	// an explicit builtin hashes like an absent runtime
+	d.Spec.Runtime = api.Runtime{Type: api.RuntimeBuiltin}
+	if q := must(build(d, c)); q.Revision != p.Revision {
+		t.Fatal("explicit builtin must not change the revision")
+	}
+}
+
+func containerDef() *api.AgentDefinition {
+	return &api.AgentDefinition{Metadata: api.ObjectMeta{Name: "echo", Namespace: "kagent", UID: "0a1b2c3d-1111-4222-8333-444444444444"}, Spec: api.Spec{
+		Description: "d", Model: "claude-haiku",
+		Runtime: api.Runtime{Type: api.RuntimeContainer, Container: &api.ContainerRuntime{
+			Image: "ghcr.io/acme/agents/echo@sha256:" + strings.Repeat("a", 64), Port: 8080,
+			Env: []api.EnvVar{{Name: "B", Value: "2"}, {Name: "A", Value: "1"}},
+		}},
+	}}
+}
+
+func TestContainerPlanCarriesTheSpecAndResolvedResources(t *testing.T) {
+	c := cat(t)
+	pl := &catalog.Policy{Runtimes: catalog.PolicyRuntimes{Container: catalog.PolicyContainerRuntime{
+		DefaultResources: api.Resources{Requests: api.ResourceList{CPU: "50m", Memory: "64Mi"}, Limits: api.ResourceList{CPU: "400m", Memory: "300Mi"}}}}}
+	p, err := Build(containerDef(), c, tools{c}, pl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.RuntimeType != api.RuntimeContainer || p.Container == nil || p.Container.Port != 8080 || !strings.HasPrefix(p.Container.Image, "ghcr.io/acme/agents/echo@") {
+		t.Fatalf("%+v", p)
+	}
+	if p.Container.Resources.Requests.CPU != "50m" || p.Container.Resources.Limits.Memory != "300Mi" {
+		t.Fatalf("resources resolved from the policy defaults: %+v", p.Container.Resources)
+	}
+	if p.Prompt != "" || len(p.Tools) != 0 || p.ToolBackend != "" {
+		t.Fatalf("a container plan resolves no tools and has no prompt: %+v", p)
+	}
+	// the plan does not alias the definition's env
+	d := containerDef()
+	p2 := must(Build(d, c, tools{c}, pl))
+	p2.Container.Env[0].Value = "changed"
+	if d.Spec.Runtime.Container.Env[0].Value != "2" {
+		t.Fatal("plan aliases the definition")
+	}
+	if p.Container.Env[0].Name != "A" || p.Container.Env[1].Name != "B" {
+		t.Fatalf("env sorted by name: %+v", p.Container.Env)
+	}
+}
+
+func TestContainerBuildSkipsToolResolution(t *testing.T) {
+	c := cat(t)
+	d := containerDef()
+	d.Spec.ToolProfile = "nope" // would fail resolution for a builtin agent; policy refuses it for a container agent anyway
+	d.Spec.Tools = []string{"x"}
+	if _, err := Build(d, c, tools{c}, pol()); err != nil {
+		t.Fatalf("a container plan must not resolve tools: %v", err)
+	}
+}
+
+func TestContainerRevisionIsSensitiveToImagePortEnvAndResources(t *testing.T) {
+	c := cat(t)
+	rev := func(edit func(*api.AgentDefinition)) string {
+		d := containerDef()
+		if edit != nil {
+			edit(d)
+		}
+		return must(build(d, c)).Revision
+	}
+	base := rev(nil)
+	if base != rev(nil) {
+		t.Fatal("stable")
+	}
+	seen := map[string]string{"base": base}
+	for name, edit := range map[string]func(*api.AgentDefinition){
+		"image": func(d *api.AgentDefinition) {
+			d.Spec.Runtime.Container.Image = "ghcr.io/acme/agents/echo@sha256:" + strings.Repeat("b", 64)
+		},
+		"port": func(d *api.AgentDefinition) { d.Spec.Runtime.Container.Port = 9090 },
+		"env":  func(d *api.AgentDefinition) { d.Spec.Runtime.Container.Env[0].Value = "3" },
+		"envextra": func(d *api.AgentDefinition) {
+			d.Spec.Runtime.Container.Env = append(d.Spec.Runtime.Container.Env, api.EnvVar{Name: "C", Value: "1"})
+		},
+		"resources": func(d *api.AgentDefinition) {
+			d.Spec.Runtime.Container.Resources = &api.Resources{Limits: api.ResourceList{CPU: "700m"}}
+		},
+		"model": func(d *api.AgentDefinition) { d.Spec.Model = "other" },
+	} {
+		r := rev(edit)
+		for k, v := range seen {
+			if v == r {
+				t.Errorf("%s has the same revision as %s", name, k)
+			}
+		}
+		seen[name] = r
+	}
+	// env order is a set; the description is not behaviour
+	if rev(func(d *api.AgentDefinition) {
+		d.Spec.Runtime.Container.Env[0], d.Spec.Runtime.Container.Env[1] = d.Spec.Runtime.Container.Env[1], d.Spec.Runtime.Container.Env[0]
+		d.Spec.Description = "other"
+	}) != base {
+		t.Fatal("env order and description must not change the revision")
+	}
+	// a container revision differs from a builtin one with the same model
+	if rev(nil) == must(build(def(), c)).Revision {
+		t.Fatal("runtime type is part of the revision")
+	}
+}
+
 func TestKeySecretNameCarriesTheUID(t *testing.T) {
 	c := cat(t)
 	d := def()

@@ -399,6 +399,18 @@ reach a vMCP or an unauthenticated backend proxy around the profile. */}}
 {{- if $c.enabled -}}true{{- end -}}
 {{- end -}}
 
+{{/* "true" when container agents (bring your own agent, ADR 0015) are switched on. Needs the control plane. */}}
+{{- define "oa.caOn" -}}
+{{- $c := .Values.controlPlane | default dict -}}
+{{- $ca := $c.containerAgents | default dict -}}
+{{- if and $c.enabled $ca.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/* The workload namespace of container agents. */}}
+{{- define "oa.caNamespace" -}}
+{{- .Values.controlPlane.containerAgents.namespace -}}
+{{- end -}}
+
 {{/* Namespace of the controller: controlPlane.namespace, else the release namespace. */}}
 {{- define "oa.cpNamespace" -}}
 {{- default .Release.Namespace .Values.controlPlane.namespace -}}
@@ -461,6 +473,12 @@ the users from the render and fails if one is missing. */ -}}
     "skills" $skills
     "gateUrl" $gate
     "reservedNames" $reserved -}}
+{{- if include "oa.caOn" . -}}
+{{- $ca := .Values.controlPlane.containerAgents -}}
+{{- $gp := int $ca.gatewayPodPort | default (int .Values.gateway.port) -}}
+{{- $_ := set $cat.adapters "runtimes" (dict "builtin" "kagent" "container" "container") -}}
+{{- $_ := set $cat.runtime "container" (dict "namespace" $ca.namespace "runtimeClassName" $ca.runtimeClassName "gatewayNamespace" .Values.gateway.namespace "gatewayPodSelector" (dict "gateway.networking.k8s.io/gateway-name" .Values.gateway.name) "gatewayPort" $gp "gateNamespace" .Values.governance.a2a.namespace "gatePodSelector" (dict "app" "a2a-gate") "dnsNamespace" "kube-system") -}}
+{{- end -}}
 {{- $cat | toPrettyJson -}}
 {{- end -}}
 
@@ -469,7 +487,7 @@ the users from the render and fails if one is missing. */ -}}
 {{- $p := .Values.controlPlane.policy -}}
 {{- $m := $p.memory | default dict -}}
 {{- $e := $p.egress | default dict -}}
-{{- dict
+{{- $pol := dict
     "maxAgents" (int $p.maxAgents)
     "allowedModels" ($p.allowedModels | default list)
     "requireToolProfile" $p.requireToolProfile
@@ -480,8 +498,13 @@ the users from the render and fails if one is missing. */ -}}
     "memory" (dict "allowed" $m.allowed "maxTtlDays" (int $m.maxTtlDays) "requireExpiry" $m.requireExpiry)
     "egress" (dict "allowedOrigins" ($e.allowedOrigins | default list) "inClusterDestinations" ($e.inClusterDestinations | default list))
     "reservedNames" ($p.reservedNames | default list)
-    "suspendAll" (default false $p.suspendAll)
-  | toPrettyJson -}}
+    "suspendAll" (default false $p.suspendAll) -}}
+{{- if include "oa.caOn" . -}}
+{{- $c := $p.runtimes.container -}}
+{{- $_ := set $pol "allowedRuntimes" ($p.allowedRuntimes | default (list "builtin")) -}}
+{{- $_ := set $pol "runtimes" (dict "container" (dict "images" ($c.images | default list) "defaultResources" $c.defaultResources "maxResources" $c.maxResources "maxAgents" (int $c.maxAgents))) -}}
+{{- end -}}
+{{- $pol | toPrettyJson -}}
 {{- end -}}
 
 {{/* Fails the render when controlPlane is malformed or the catalog makes it meaningless. Prints nothing. */}}
@@ -536,6 +559,20 @@ the users from the render and fails if one is missing. */ -}}
 {{- if not (include "oa.memoryEnabled" .) }}{{ fail "controlPlane.policy.memory.allowed needs the memory stack: it is installed only when a chart agent has memory.enabled (agents[].memory.enabled), see README Memory. Without it every definition asking for memory would be refused" }}{{ end -}}
 {{- if and $m.requireExpiry (not .Values.memory.expiry.enabled) }}{{ fail "controlPlane.policy.memory.allowed with requireExpiry needs memory.expiry.enabled=true: without the expiry job the time limit of a memory is not enforced. Enable the job or set requireExpiry=false on purpose" }}{{ end -}}
 {{- end -}}
+{{- $ca := $c.containerAgents | default dict -}}
+{{- if $ca.enabled -}}
+{{- if not .Values.governance.a2a.enabled }}{{ fail "controlPlane.containerAgents.enabled needs governance.a2a.enabled=true: clients reach a container agent only through the A2A gate" }}{{ end -}}
+{{- if not (regexMatch "^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$" (toString $ca.namespace)) }}{{ fail "controlPlane.containerAgents.namespace must be a namespace name" }}{{ end -}}
+{{- range $what, $n := (dict "agents" .Values.kagent.namespace "gateway" .Values.gateway.namespace "tools" .Values.mcp.namespace "gate" .Values.governance.a2a.namespace "controller" (include "oa.cpNamespace" .) "kube-system" "kube-system" "release" .Release.Namespace) }}
+{{- if eq $n $ca.namespace }}{{ fail (printf "controlPlane.containerAgents.namespace %q is the %s namespace: foreign code needs a namespace of its own" $ca.namespace $what) }}{{ end }}
+{{- end }}
+{{- $ar := $p.allowedRuntimes | default list -}}
+{{- if not (kindIs "slice" $ar) }}{{ fail "controlPlane.policy.allowedRuntimes must be a list (builtin, container)" }}{{ end -}}
+{{- range $x := $ar }}{{ if not (has $x (list "builtin" "container")) }}{{ fail (printf "controlPlane.policy.allowedRuntimes lists %v, which is not a runtime type (builtin, container)" $x) }}{{ end }}{{ end -}}
+{{- range $x := (($p.runtimes | default dict).container | default dict).images | default list }}
+{{- if not (regexMatch "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+/$" (toString $x)) }}{{ fail (printf "controlPlane.policy.runtimes.container.images entry %v must be a registry prefix with a path and a trailing slash, for example ghcr.io/acme/agents/" $x) }}{{ end }}
+{{- end }}
+{{- end -}}
 {{- if not (kindIs "slice" ($c.apiServerCIDRs | default list)) }}{{ fail "controlPlane.apiServerCIDRs must be a list of CIDRs" }}{{ end -}}
 {{- range $x := ($c.apiServerCIDRs | default list) }}
 {{- if not (and (kindIs "string" $x) (or (regexMatch "^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$" $x) (regexMatch "^[0-9a-fA-F:]*:[0-9a-fA-F:.]*/([0-9]{1,2}|1[01][0-9]|12[0-8])$" $x))) }}{{ fail (printf "controlPlane.apiServerCIDRs entry %v is not a CIDR (for example 10.0.0.0/24)" $x) }}{{ end }}
@@ -548,4 +585,10 @@ the users from the render and fails if one is missing. */ -}}
 {{- range $x := $c.apiServerPorts }}
 {{- if not (and (or (kindIs "float64" $x) (kindIs "int64" $x) (kindIs "int" $x)) (ge (int $x) 1) (le (int $x) 65535)) }}{{ fail (printf "controlPlane.apiServerPorts entry %v is not a port number" $x) }}{{ end }}
 {{- end }}
+{{- end -}}
+
+{{/* A string map as a CEL map literal: {"a": "b", ...} (used by the guard of the container runtime). */}}
+{{- define "oa.celMap" -}}
+{{- $p := list -}}{{- range $k, $v := . }}{{ $p = append $p (printf "%s: %s" (toJson $k) (toJson $v)) }}{{ end -}}
+{ {{- join ", " $p -}} }
 {{- end -}}

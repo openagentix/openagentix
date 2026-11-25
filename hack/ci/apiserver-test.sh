@@ -56,7 +56,7 @@ NODE_IMAGE=()
 [ -z "${KIND_NODE_IMAGE:-}" ] || NODE_IMAGE=(--image "$KIND_NODE_IMAGE")
 
 echo "# cluster $CLUSTER (kubeconfig $KUBECONFIG)"
-kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s "${NODE_IMAGE[@]}" >/dev/null
+kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s ${NODE_IMAGE[@]+"${NODE_IMAGE[@]}"} >/dev/null
 CREATED=1
 kubectl version 2>/dev/null | head -2
 for n in kagent agentgateway-system openagentix-system; do kubectl create namespace "$n" >/dev/null; done
@@ -276,6 +276,66 @@ code=$(curl -sk -o "$TMP/status.out" -w '%{http_code}' -X PATCH -H "Authorizatio
 kubectl -n kagent get oad researcher -o json | jq -c '.metadata.finalizers=["openagentix.io/gateway-key"]' > "$TMP/def-finalizer.json"
 allowed "...and update the definition (the finalizer: a full PUT)" asctl -n kagent replace --dry-run=server -f "$TMP/def-finalizer.json"
 allowed "a user other than the controller is not restricted by the guard (admin writes a ConfigMap)" kubectl -n kagent create configmap free --from-literal=a=b
+
+# ---- the container runtime (bring your own agent, ADR 0015): the workload namespace, its Role and its guard ----
+echo "# the container runtime: Pod Security, RBAC and the workload guard (server-side dry run as the controller)"
+CARGS=("${ARGS[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.allowedRuntimes={builtin,container}' --set 'controlPlane.policy.runtimes.container.images={registry.local/oa/}')
+helm "${CARGS[@]}" | yq -c 'select(.!=null)' > "$TMP/render-ca.jsonl"
+WNS=openagentix-workloads
+GNS=openagentix-gateway
+kubectl create namespace "$GNS" >/dev/null
+jq -c 'select(.kind=="Namespace" and .metadata.name=="'$WNS'")' "$TMP/render-ca.jsonl" | kubectl apply --server-side -f - >/dev/null
+jq -c 'select((.kind|IN("Role","RoleBinding","NetworkPolicy")) and (.metadata.namespace=="'$WNS'"))' "$TMP/render-ca.jsonl" | kubectl apply --server-side --validate=strict -f - >/dev/null
+jq -c 'select(.kind=="ConfigMap" and .metadata.name=="a2a-gate-routes")' "$TMP/render-ca.jsonl" | kubectl apply --server-side --validate=strict -f - >/dev/null
+jq -c 'select((.kind|IN("Role","RoleBinding")) and (.metadata.name=="openagentix-control-plane-routes"))' "$TMP/render-ca.jsonl" | kubectl apply --server-side --validate=strict -f - >/dev/null
+jq -c 'select(.kind=="ValidatingAdmissionPolicy" or .kind=="ValidatingAdmissionPolicyBinding")' "$TMP/render-ca.jsonl" > "$TMP/policies-ca.jsonl"
+NPOL=$(jq -s '[.[]|select(.kind=="ValidatingAdmissionPolicy")]|length' "$TMP/policies-ca.jsonl")
+allowed "the $NPOL policies (the workload ones included) are accepted with server-side validation" bash -c "kubectl apply --server-side --force-conflicts --validate=strict -f - < '$TMP/policies-ca.jsonl'"
+[ "$NPOL" = 14 ] && ok "fourteen policies with the container runtime on" || bad "fourteen policies with the container runtime on" "got $NPOL"
+for p in $(kubectl get validatingadmissionpolicy -o name | grep control-plane-guard-workload); do
+  j=""
+  for _ in $(seq 1 90); do
+    j=$(kubectl get "$p" -o json)
+    jq -e '(.status.observedGeneration // 0) >= .metadata.generation' >/dev/null <<<"$j" && break
+    sleep 1
+  done
+  w=$(jq -c '[.status.typeChecking.expressionWarnings[]?|{fieldRef,warning}]' <<<"$j")
+  [ "$w" = "[]" ] && ok "$p: no type-checking warning" || bad "$p: type-checking warnings" "$w"
+done
+[ "$(kubectl get namespace "$WNS" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')" = restricted ] && ok "the workload namespace enforces Pod Security restricted" || bad "the workload namespace enforces Pod Security restricted" ""
+for _ in $(seq 1 30); do asctl auth can-i create deployments.apps -n "$WNS" 2>/dev/null | grep -q yes && break; sleep 1; done
+[ "$(asctl auth can-i get secrets -n "$WNS" 2>&1)" = no ] && ok "RBAC: the controller cannot get Secrets in the workload namespace" || bad "RBAC: the controller cannot get Secrets in the workload namespace" ""
+[ "$(asctl auth can-i list secrets -n "$WNS" 2>&1)" = no ] && ok "RBAC: ...nor list them" || bad "RBAC: ...nor list them" ""
+[ "$(asctl auth can-i create pods -n "$WNS" 2>&1)" = no ] && ok "RBAC: ...nor create Pods" || bad "RBAC: ...nor create Pods" ""
+IMG="registry.local/oa/echo@sha256:$(printf 'a%.0s' $(seq 1 64))"
+SUB='s#ghcr.io/acme/agents/echo-go@sha256:a*#'"$IMG"'#; s#openagentix-agents#'$WNS'#g; s#echo-go-virtual-key-0a1b2c3d#echo-go-virtual-key-'$HEX8'#; s#"app":"model-gateway"#"gateway.networking.k8s.io/gateway-name":"model-gateway"#'
+jq -c '.items[]' services/control-plane/testdata/container-objects.json | sed -E "$SUB" > "$TMP/ca-objects.jsonl"
+jq -c --argjson p "$(jq -r 'select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.runtime.container.gatewayPort' "$TMP/render-ca.jsonl")" 'if .kind=="NetworkPolicy" then .spec.egress[1].ports[0].port=$p else . end' "$TMP/ca-objects.jsonl" > "$TMP/ca-objects2.jsonl"
+for k in ServiceAccount Deployment Service NetworkPolicy; do jq -c "select(.kind==\"$k\")" "$TMP/ca-objects2.jsonl" > "$TMP/ca-$k.json"; done
+for k in ServiceAccount Deployment Service NetworkPolicy; do
+  allowed "the controller may create its $k in the workload namespace" asctl create --dry-run=server -f "$TMP/ca-$k.json"
+done
+# The API server validates the object before admission runs, so each bad Deployment must be valid
+# to it (a privileged container needs allowPrivilegeEscalation, a second container needs its own
+# name); otherwise the refusal comes from validation and not from the guard under test.
+dep_refused() { # dep_refused <desc> <pattern> <jq filter on the Deployment>
+  jq -c "$3" "$TMP/ca-Deployment.json" > "$TMP/ca-dep-bad.json"
+  refused "$1" "$2" asctl create --dry-run=server -f "$TMP/ca-dep-bad.json"
+}
+dep_refused "a Deployment with hostNetwork is refused" "must use only its own ServiceAccount" '.spec.template.spec.hostNetwork=true'
+dep_refused "a Deployment with a privileged container is refused" "no privilege escalation" '.spec.template.spec.containers[0].securityContext|=(.privileged=true|.allowPrivilegeEscalation=true)'
+dep_refused "a Deployment with another ServiceAccount is refused" "must use only its own ServiceAccount" '.spec.template.spec.serviceAccountName="default"'
+dep_refused "a Deployment with a hostPath volume is refused" "the only volume is an emptyDir" '.spec.template.spec.volumes+=[{name:"h",hostPath:{path:"/"}}]'
+dep_refused "a Deployment with an image by tag is refused" "digest-pinned image" '.spec.template.spec.containers[0].image="registry.local/oa/echo:v1"'
+dep_refused "a Deployment with an image of another registry is refused" "digest-pinned image" '.spec.template.spec.containers[0].image="docker.io/evil/x@sha256:'$(printf 'a%.0s' $(seq 1 64))'"'
+dep_refused "a Deployment with an extra container is refused" "digest-pinned image" '.spec.template.spec.containers+=[.spec.template.spec.containers[0]|.name="second"]'
+SECRET_CA=$(jq -nc --arg n "echo-go-virtual-key-$HEX8" '{apiVersion:"v1",kind:"Secret",type:"Opaque",immutable:true,metadata:{name:$n,namespace:"'$WNS'",labels:{"app.kubernetes.io/managed-by":"openagentix-control-plane","openagentix.io/agent-definition":"echo-go","openagentix.io/definition-namespace":"kagent"}},data:{OPENAI_API_KEY:"dmstMDAwMDAw"}}')
+printf '%s' "$SECRET_CA" > "$TMP/ca-secret.json"
+allowed "the controller may create the key Secret in the workload namespace" asctl create --dry-run=server -f "$TMP/ca-secret.json"
+jq -c '.metadata.ownerReferences=[{apiVersion:"openagentix.io/v1alpha1",kind:"AgentDefinition",name:"echo-go",uid:"x",controller:true}]' "$TMP/ca-secret.json" > "$TMP/ca-secret-own.json"
+refused "a key Secret with an owner reference in the workload namespace is refused" "no owner reference" asctl create --dry-run=server -f "$TMP/ca-secret-own.json"
+allowed "the controller may patch the route list" asctl -n "$GNS" patch configmap a2a-gate-routes --type merge --dry-run=server -p '{"data":{"routes.json":"{\"container\":[\"kagent/echo-go\"]}"}}'
+refused "the route list may not hold a URL" "namespace/name entries" asctl -n "$GNS" patch configmap a2a-gate-routes --type merge --dry-run=server -p '{"data":{"routes.json":"{\"container\":[\"http://evil.example\"]}"}}'
 
 echo
 echo "apiserver-test: passed=$PASS failed=$FAIL"

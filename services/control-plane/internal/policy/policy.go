@@ -64,6 +64,8 @@ type Input struct {
 	// Earlier holds the names of the other definitions that rank before this one (oldest first). They count against
 	// maxAgents, so that when the limit is lowered the newest definitions are the ones refused.
 	Earlier []string
+	// EarlierContainers is how many of those use the container runtime (policy.runtimes.container.maxAgents counts them).
+	EarlierContainers int
 }
 
 // Validate returns the violations, in a fixed order; empty means accepted.
@@ -87,6 +89,20 @@ func Validate(in Input) []string {
 	if len(in.Earlier) >= p.MaxAgents {
 		add("the platform policy allows at most %d agents in namespace %q and %d already exist", p.MaxAgents, d.Metadata.Namespace, len(in.Earlier))
 	}
+	// runtime type (ADR 0015)
+	rt := s.RuntimeType()
+	container := rt == api.RuntimeContainer
+	switch {
+	case rt != api.RuntimeBuiltin && !container:
+		add("runtime.type %q is not known (use builtin or container)", rt)
+	case !p.RuntimeAllowed(rt):
+		add("runtime %s is not allowed by the platform policy", rt)
+	case !c.RuntimeAvailable(rt):
+		add("runtime %s is not available on this platform", rt)
+	}
+	if rt == api.RuntimeBuiltin && s.Runtime.Container != nil {
+		add("runtime.container is set but runtime.type is builtin; set runtime.type to container or remove the block")
+	}
 	for _, k := range []string{api.LabelTeam, api.LabelProject} {
 		if v, ok := d.Metadata.Labels[k]; ok && (len(v) > 63 || !labelValueRE.MatchString(v)) {
 			add("label %s %q is not a valid label value (at most 63 characters: letters, digits, '-', '_' and '.', starting and ending with a letter or digit)", k, v)
@@ -103,6 +119,8 @@ func Validate(in Input) []string {
 		add("description is %d characters; at most %d", n, MaxDescriptionLen)
 	}
 	switch {
+	case container:
+		// a container agent is configured in its image: the builtin-only features are refused below with one sentence each
 	case s.InstructionsFrom != nil && strings.TrimSpace(s.Instructions) != "":
 		add("set exactly one of instructions and instructionsFrom")
 	case s.InstructionsFrom != nil:
@@ -141,6 +159,28 @@ func Validate(in Input) []string {
 		add("model %q is not allowed by the platform policy", s.Model)
 	}
 
+	if container {
+		containerRefusals(s, add)
+		if s.Runtime.Container != nil || rt == api.RuntimeContainer {
+			containerRules(d, p, in.EarlierContainers, add)
+		}
+	} else {
+		validateBuiltin(in, add)
+	}
+	// a sentence that quotes a value (a model, a tool, an origin) must not repeat something shaped like a secret
+	for i := range v {
+		for _, sh := range secretShapes {
+			v[i] = sh.re.ReplaceAllString(v[i], "[redacted]")
+		}
+	}
+	return v
+}
+
+// validateBuiltin holds the rules of the builtin runtime: tools, features, memory, skills and egress. They are unchanged by
+// the container runtime; a container agent refuses them instead (containerRefusals).
+func validateBuiltin(in Input, add func(string, ...any)) {
+	d, c, p := in.Def, in.Catalog, in.Policy
+	s := d.Spec
 	// tool profile and tools
 	var prof catalog.ToolProfile
 	haveProf := false
@@ -282,13 +322,6 @@ func Validate(in Input) []string {
 			seen[o] = true
 		}
 	}
-	// a sentence that quotes a value (a model, a tool, an origin) must not repeat something shaped like a secret
-	for i := range v {
-		for _, sh := range secretShapes {
-			v[i] = sh.re.ReplaceAllString(v[i], "[redacted]")
-		}
-	}
-	return v
 }
 
 // SkillVersion is the version of a skill the catalog offers: the digest of its OCI reference ("sha256:<64 hex>"). The

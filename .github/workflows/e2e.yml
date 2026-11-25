@@ -48,6 +48,7 @@ jobs:
         id: install
         env:
           PROFILE: quickstart
+          QUICKSTART_BYO: "1"   # also the sample container agent (bring your own agent, ADR 0015)
           AGENT_WAIT: 300s
         run: |
           set -o pipefail
@@ -56,6 +57,8 @@ jobs:
           echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: smoke test
         id: smoke
+        env:
+          SMOKE_BYO: "1"
         run: |
           set -o pipefail
           start=$(date +%s)
@@ -97,6 +100,8 @@ jobs:
           kubectl get agent,agentdefinition -A -o yaml | head -150 || true
           kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
           kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
+          kubectl get resourcequota -A -o yaml | head -60 || true
+          kubectl logs -n kube-system -l component=kube-controller-manager --tail=400 | grep -i quota | tail -20 || true
           echo "--- what the admission guard says about a key Secret"
           hack/ci/guard-probe.sh
           kind export logs ./kind-logs --name openagentix || true

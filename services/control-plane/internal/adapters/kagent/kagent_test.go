@@ -419,7 +419,7 @@ func TestSuspendedPlanOmitsOnlyTheAgent(t *testing.T) {
 
 func TestCapabilitiesAreOnlyWhatTheKagentDocsAndSourceSay(t *testing.T) {
 	got := New(loadCat(t), nil).Capabilities()
-	want := api.Capabilities{Approvals: api.Yes, DurableWaits: api.Yes, WorkspacePersistence: "snapshot", MaxStepSeconds: 600, CancelStopsLoop: api.Unknown, PerRunIdentity: "session"}
+	want := api.Capabilities{Approvals: api.Yes, DurableWaits: api.Yes, WorkspacePersistence: "snapshot", MaxStepSeconds: 600, CancelStopsLoop: api.Unknown, PerRunIdentity: "session", Isolation: "sandbox-per-session"}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}

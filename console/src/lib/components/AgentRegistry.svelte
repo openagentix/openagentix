@@ -319,6 +319,7 @@
         >
         <td>
             <div class="tags">
+                {#if a.runtimeType === 'container'}<Tag>container{a.isolation ? ` · ${a.isolation}` : ''}</Tag>{/if}
                 {#if a.knowledge}<Tag>knowledge</Tag>{/if}
                 {#if a.notify}<Tag>notify</Tag>{/if}
                 {#if mem}<Tag>{mem}</Tag>{/if}

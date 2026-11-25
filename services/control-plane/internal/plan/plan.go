@@ -61,6 +61,26 @@ type Plan struct {
 	Labels map[string]string
 	// Revision is a stable hash of what was applied (see Revision).
 	Revision string
+	// RuntimeType is the effective runtime type (api.RuntimeBuiltin or api.RuntimeContainer).
+	RuntimeType string
+	// Container is set for a container agent only. The workload namespace is not here: the runtime adapter owns it.
+	Container *ContainerSpec
+}
+
+// ContainerSpec is the user's image as the plan carries it: copied from the spec, with the resources resolved against the
+// policy (requests default to the policy defaults, limits are always set) and the env sorted by name.
+type ContainerSpec struct {
+	Image     string
+	Port      int
+	Env       []api.EnvVar
+	Resources api.Resources
+}
+
+type containerHash struct {
+	Image     string
+	Port      int
+	Env       []api.EnvVar
+	Resources api.Resources
 }
 
 // GatewayUser is the opaque gateway user id of a definition: "<namespace>.<name>". A dot cannot occur in a namespace or
@@ -78,8 +98,12 @@ func Build(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolResolver, 
 	if err != nil {
 		return Plan{}, err
 	}
+	if s.RuntimeType() == api.RuntimeContainer {
+		return buildContainer(d, c, pol, secret)
+	}
 	p := Plan{
-		Name: d.Metadata.Name, Namespace: d.Metadata.Namespace, Description: s.Description, Model: s.Model,
+		RuntimeType: api.RuntimeBuiltin,
+		Name:        d.Metadata.Name, Namespace: d.Metadata.Namespace, Description: s.Description, Model: s.Model,
 		GatewayBaseURL: c.GatewayBaseURL, GatewayUserID: GatewayUser(d.Metadata.Namespace, d.Metadata.Name),
 		KeySecret: secret,
 		Prompt:    s.Instructions,
@@ -133,6 +157,38 @@ func Build(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolResolver, 
 	return p, nil
 }
 
+// buildContainer is Build for a container agent: no prompt, no tools, no skills (the policy refused them), so nothing is resolved.
+func buildContainer(d *api.AgentDefinition, c *catalog.Catalog, pol *catalog.Policy, secret string) (Plan, error) {
+	s := d.Spec
+	cr := s.Runtime.Container
+	if cr == nil {
+		return Plan{}, fmt.Errorf("definition %s has runtime type container but no runtime.container block", d.Metadata.Name)
+	}
+	if pol == nil {
+		pol = &catalog.Policy{}
+	}
+	p := Plan{
+		RuntimeType: api.RuntimeContainer,
+		Name:        d.Metadata.Name, Namespace: d.Metadata.Namespace, Description: s.Description, Model: s.Model,
+		GatewayBaseURL: c.GatewayBaseURL, GatewayUserID: GatewayUser(d.Metadata.Namespace, d.Metadata.Name),
+		KeySecret: secret,
+		Egress:    slices.Clone(s.Egress.Allow),
+		Suspended: s.Suspend || pol.SuspendAll,
+		Container: &ContainerSpec{Image: cr.Image, Port: cr.Port, Env: slices.Clone(cr.Env), Resources: pol.ResolveContainerResources(cr.Resources)},
+	}
+	slices.SortFunc(p.Container.Env, func(a, b api.EnvVar) int { return strings.Compare(a.Name, b.Name) })
+	for _, k := range []string{api.LabelTeam, api.LabelProject} {
+		if v, ok := d.Metadata.Labels[k]; ok && v != "" {
+			if p.Labels == nil {
+				p.Labels = map[string]string{}
+			}
+			p.Labels[k] = v
+		}
+	}
+	p.Revision = revision(s, p, c.Memory.DefaultTTLDays)
+	return p, nil
+}
+
 // revision is the first 12 hex characters of the SHA-256 of a canonical encoding of what was applied: the final prompt,
 // the model, the tool profile and the effective tools, the skills with their digests, the knowledge, notify and memory
 // settings, and the egress. Lists are sets, so they are sorted; the encoding is JSON of a fixed struct, never of a map.
@@ -166,6 +222,10 @@ func revision(s api.Spec, p Plan, defaultTTL int) string {
 		MemoryOn  bool
 		MemoryTTL int
 		Egress    []string
+		// Runtime and Container are in the hash for a container agent only (both omitted otherwise), so that a builtin
+		// revision is the same as it was before the container runtime existed.
+		Runtime   string         `json:",omitempty"`
+		Container *containerHash `json:",omitempty"`
 	}{V: 1, Model: p.Model, ToolProfile: s.ToolProfile, Prompt: p.Prompt, Tools: sorted(p.Tools), Egress: sorted(p.Egress), Skills: []skill{}}
 	for _, sk := range p.Skills {
 		in.Skills = append(in.Skills, skill{sk.Name, sk.Ref})
@@ -178,6 +238,14 @@ func revision(s api.Spec, p Plan, defaultTTL int) string {
 		if in.MemoryTTL == 0 {
 			in.MemoryTTL = defaultTTL
 		}
+	}
+	if p.Container != nil {
+		in.Runtime = p.RuntimeType
+		env := slices.Clone(p.Container.Env)
+		if env == nil {
+			env = []api.EnvVar{}
+		}
+		in.Container = &containerHash{Image: p.Container.Image, Port: p.Container.Port, Env: env, Resources: p.Container.Resources}
 	}
 	b, _ := json.Marshal(in)
 	sum := sha256.Sum256(b)

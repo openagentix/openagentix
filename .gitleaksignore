@@ -4,3 +4,12 @@ f8174d2e73d4cc790ca4382b61951f87f7a92a59:charts/openagentix/tests/memory-expiry-
 services/control-plane/internal/adapters/kagent/kagent_test.go:generic-api-key:287
 hack/ci/guardtest/cases_test.go:generic-api-key:126
 hack/ci/apiserver-test.sh:generic-api-key:176
+# Synthetic key fingerprints and a fake key Secret name of the container runtime's fixtures (adapter test, golden files). Not credentials.
+services/control-plane/internal/adapters/container/container_test.go:generic-api-key:22
+services/control-plane/internal/adapters/container/container_test.go:generic-api-key:40
+services/control-plane/testdata/container-objects.json:generic-api-key:50
+services/control-plane/testdata/golden-container.json:generic-api-key:36
+76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/internal/adapters/container/container_test.go:generic-api-key:22
+76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/internal/adapters/container/container_test.go:generic-api-key:40
+76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/testdata/container-objects.json:generic-api-key:50
+76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/testdata/golden-container.json:generic-api-key:36

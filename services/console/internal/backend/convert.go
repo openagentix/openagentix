@@ -66,7 +66,15 @@ func BuiltAgent(d Definition) model.Agent {
 	for _, sk := range s.Skills {
 		skills = append(skills, sk.Name)
 	}
+	rt, iso := "builtin", ""
+	if r, _ := s.Runtime["type"].(string); r != "" {
+		rt = r
+	}
+	if rt == "container" {
+		iso, _ = d.Status.Capabilities["isolation"].(string)
+	}
 	return model.Agent{
+		RuntimeType: rt, Isolation: iso,
 		Name: d.Meta.Name, Namespace: d.Meta.Namespace, Source: "built", Description: s.Description, Model: s.Model,
 		ToolProfile: s.ToolProfile, ToolsCount: len(s.Tools), Knowledge: s.Knowledge != nil && s.Knowledge.Enabled, Notify: s.Notify != nil && s.Notify.Enabled, Memory: mem,
 		Suspended: s.Suspend, Team: d.Meta.Labels["openagentix.io/team"], Project: d.Meta.Labels["openagentix.io/project"],

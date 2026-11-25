@@ -1,0 +1,120 @@
+{{- /*
+Bring your own agent (ADR 0015, issue #43): the workload namespace of container agents and what the controller needs to run them there.
+Renders nothing unless controlPlane.enabled and controlPlane.containerAgents.enabled are both true (with either off the chart renders
+byte-identically to a chart without this file). The pieces:
+  - the workload namespace, Pod Security `restricted` (enforce, audit, warn), and a deny-by-default NetworkPolicy for every pod in it. The
+    controller adds one NetworkPolicy per agent (ingress from the A2A gate only; egress to DNS and the model gateway only);
+  - the controller's namespaced Role and RoleBinding there. Secrets: create and delete only, never get, list or watch;
+  - the gate's route list ConfigMap (the controller is its only writer; the gate mounts it; it holds namespace/name entries, never a URL) and the
+    controller's Role for it (get and patch of that one ConfigMap).
+What the controller may write there is limited again by the guard (control-plane-guard-workload.yaml). The chart never renders a Secret.
+*/ -}}
+{{- if include "oa.caOn" . }}
+{{- $_ := include "oa.cpCheck" . }}
+{{- $ca := .Values.controlPlane.containerAgents }}
+{{- $wns := $ca.namespace }}
+{{- $cpns := include "oa.cpNamespace" . }}
+{{- $gate := .Values.governance.a2a.namespace }}
+{{- $sa := "openagentix-control-plane" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $wns }}
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    app: container-agents
+    {{- include "oa.labels" . | nindent 4 }}
+---
+# Every pod of the namespace starts with no ingress and no egress. The controller's per-agent NetworkPolicy opens exactly two things for that agent's pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $wns }}
+  labels:
+    app: container-agents
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Namespaced, no wildcard. Secrets: create and delete only (the controller can never read a key back).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $wns }}
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [""]
+    resources: [services, serviceaccounts]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}
+  namespace: {{ $wns }}
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $cpns }}}
+---
+# The gate's route list. The data below is only the empty start: the controller rewrites routes.json, and Helm's three-way merge leaves a key alone
+# when the chart did not change it. Kept on uninstall so that a re-install does not drop live routes before the controller has resynced them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: a2a-gate-routes
+  namespace: {{ $gate }}
+  labels:
+    app: a2a-gate
+    {{- include "oa.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  routes.json: '{"container":[]}'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}-routes
+  namespace: {{ $gate }}
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [a2a-gate-routes]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}-routes
+  namespace: {{ $gate }}
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $sa }}-routes}
+subjects:
+  - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $cpns }}}
+{{- end }}

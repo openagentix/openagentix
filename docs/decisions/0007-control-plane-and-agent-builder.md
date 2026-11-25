@@ -150,6 +150,8 @@ status:
 
 There is deliberately no field for a ModelConfig reference, a harness or image, a RemoteMCPServer name, an EgressPolicy reference, an output namespace, A2A callers, a gateway user id or a budget. Those come from the platform, so a definition cannot reach around the policy.
 
+> Amendment (2026-11-25, [ADR 0015](0015-bring-your-own-agent.md)): "no field for a harness or image" is now narrowed by one exception. `spec.runtime.container.image` is the user's own agent image, pinned by digest and matched against an operator allowlist. What changed: a definition may name that one image when the operator allows the `container` runtime. What did not change: there is still no field for a harness image, a platform component image, a ModelConfig, a RemoteMCPServer, an EgressPolicy reference, a gateway user or a budget, and no other image field is added.
+
 Refused, with `Accepted=False` and a sentence in `violations`:
 
 - a model, profile or skill that the catalog does not have or the policy does not allow;

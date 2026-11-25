@@ -378,6 +378,9 @@ func (c *Client) Watch(ctx context.Context, r Resource, ns, rv string) (*Stream,
 type Manifest struct {
 	Resource Resource
 	Object   Object
+	// Namespace is where the object goes. "" means the definition's own namespace (the default, and what every builtin
+	// runtime uses); a container runtime sets its workload namespace here.
+	Namespace string
 }
 
 // MetaMap gives safe access to the metadata of an unstructured object.
