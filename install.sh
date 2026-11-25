@@ -16,7 +16,7 @@
 #   NOTIFY_OWNER_TELEGRAM=1    the same, using the FIRST id of TELEGRAM_ALLOWED_CHAT_IDS when NOTIFY_TELEGRAM_CHAT_ID is not set
 # Switches (all optional):
 #   CLUSTER=openagentix  CREATE_CLUSTER=1  KUBE_CONTEXT=<type>-$CLUSTER
-#   CLUSTER_TYPE=kind    kind (default) or k3d (k3s in Docker; docs/guides/install-k3s.md). K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1 picks the k3s version.
+#   CLUSTER_TYPE=kind    kind (default) or k3d (k3s in Docker; docs/diary/guide/install-k3s.md). K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1 picks the k3s version.
 #   SKIP_PREREQS=1       never touch kagent/Substrate/agentgateway/ToolHive
 #   FORCE_PREREQS=1      re-run the upstream installers even if their Helm releases exist (this re-applies
 #                        components/runtime/values/substrate.yaml and DROPS any Substrate additions made by spikes/ax)

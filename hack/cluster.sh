@@ -3,7 +3,7 @@
 # Tests: hack/ci/cluster-test.sh (fake kind, k3d and docker; no cluster).
 #
 #   CLUSTER_TYPE=kind (default)   a kind cluster named $CLUSTER, context kind-$CLUSTER
-#   CLUSTER_TYPE=k3d              a k3s cluster in Docker made by k3d, named $CLUSTER, context k3d-$CLUSTER (see docs/guides/install-k3s.md)
+#   CLUSTER_TYPE=k3d              a k3s cluster in Docker made by k3d, named $CLUSTER, context k3d-$CLUSTER (see docs/diary/guide/install-k3s.md)
 #   K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1   the k3s image k3d starts (the runtime needs Kubernetes 1.37 or newer)
 #
 # Functions (all read CLUSTER and CLUSTER_TYPE):
