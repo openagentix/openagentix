@@ -119,14 +119,19 @@ func TestRunRefusesBadSetup(t *testing.T) {
 	b, _ := os.ReadFile("../../testdata/catalog.json")
 	_ = os.WriteFile(badCat, []byte(strings.Replace(string(b), `"runtime": "kagent"`, `"runtime": "ax"`, 1)), 0o600)
 	badPol := filepath.Join(dir, "pol.json")
+	badRT := filepath.Join(dir, "rt.json")
+	rt := strings.Replace(string(b), `"adapters": {`, `"adapters": {"runtimes": {"builtin": "kagent", "container": "sandbox9"},`, 1)
+	rt = strings.Replace(rt, `"runtime": {`, `"runtime": {"container": {"namespace": "ws", "gatewayNamespace": "g", "gatewayPodSelector": {"a": "b"}, "gateNamespace": "gt", "gatePodSelector": {"a": "b"}}, `, 1)
+	_ = os.WriteFile(badRT, []byte(rt), 0o600)
 	_ = os.WriteFile(badPol, []byte(`{"maxAgents": 1, "egress": {"inClusterDestinations": ["vmcp.mcp-tools.svc:4483"]}}`), 0o600)
 	for name, tc := range map[string]struct {
 		env  map[string]string
 		want string
 	}{
-		"no files":            {map[string]string{}, "CONTROL_PLANE_CATALOG_FILE"},
-		"missing catalog":     {map[string]string{"CONTROL_PLANE_CATALOG_FILE": filepath.Join(dir, "none.json"), "CONTROL_PLANE_POLICY_FILE": "../../testdata/policy.json"}, "catalog"},
-		"unsupported runtime": {map[string]string{"CONTROL_PLANE_CATALOG_FILE": badCat, "CONTROL_PLANE_POLICY_FILE": "../../testdata/policy.json"}, `adapter "ax"`},
+		"no files":                      {map[string]string{}, "CONTROL_PLANE_CATALOG_FILE"},
+		"missing catalog":               {map[string]string{"CONTROL_PLANE_CATALOG_FILE": filepath.Join(dir, "none.json"), "CONTROL_PLANE_POLICY_FILE": "../../testdata/policy.json"}, "catalog"},
+		"unsupported runtime":           {map[string]string{"CONTROL_PLANE_CATALOG_FILE": badCat, "CONTROL_PLANE_POLICY_FILE": "../../testdata/policy.json"}, `adapter "ax"`},
+		"unsupported container adapter": {map[string]string{"CONTROL_PLANE_CATALOG_FILE": badRT, "CONTROL_PLANE_POLICY_FILE": "../../testdata/policy.json"}, `adapter "sandbox9"`},
 		"an in-cluster destination in the tools namespace": {map[string]string{"CONTROL_PLANE_CATALOG_FILE": "../../testdata/catalog.json", "CONTROL_PLANE_POLICY_FILE": badPol}, "tools namespace"},
 	} {
 		t.Run(name, func(t *testing.T) {

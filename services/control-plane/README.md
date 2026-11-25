@@ -223,6 +223,55 @@ The `Runtime` adapter reports a small struct; the core copies it to `status.capa
 
 No run-side methods exist yet.
 
+## Runtimes: builtin and container (ADR 0015)
+
+`spec.runtime.type` is `builtin` (default: the platform builds the agent from `instructions` on the catalog's runtime) or `container`
+(the platform runs your digest-pinned image, which speaks A2A, as the agent). The core keeps one runtime adapter per type.
+
+Catalog (all optional; an old catalog is `{builtin: adapters.runtime}`):
+
+```json
+"adapters": {"runtime": "kagent", "runtimes": {"builtin": "kagent", "container": "container"}, ...},
+"runtime": {"container": {"namespace": "openagentix-agents", "runtimeClassName": "", "gatewayNamespace": "...",
+  "gatewayPodSelector": {"app": "..."}, "gatewayPort": 8080, "gateNamespace": "...", "gatePodSelector": {"app": "a2a-gate"},
+  "dnsNamespace": "kube-system"}}
+```
+
+Policy (`allowedRuntimes` absent or empty means only `builtin`):
+
+```json
+"allowedRuntimes": ["builtin", "container"],
+"runtimes": {"container": {"images": ["ghcr.io/acme/agents/"], "defaultResources": {"requests": {"cpu": "100m", "memory": "256Mi"},
+  "limits": {"cpu": "500m", "memory": "512Mi"}}, "maxResources": {"cpu": "1", "memory": "1Gi"}, "maxAgents": 3}}
+```
+
+A container agent is refused (one sentence each, in `status.violations`) when: the runtime is not allowed or not offered; the image is not
+`registry/path@sha256:<64 hex>` or not under a policy prefix; the port is outside 1024..65535; an env name is malformed, platform owned
+(`OPENAGENTIX_`, `OPENAI_`, `OTEL_`, `KUBERNETES_`), too many (32), too big (4 KiB a value, 16 KiB in all) or a value looks like a secret;
+resources are above `maxResources` or requests above limits; it sets `instructions`, `instructionsFrom`, `tools`, `toolProfile`,
+`egress.allow`, `memory`, `knowledge`, `notify` or `skills`.
+
+What the controller writes, in the workload namespace: ServiceAccount, Deployment, Service, NetworkPolicy (same name as the agent; the pod,
+selectors and policy use the label `openagentix.io/agent: <name>`), and the key Secret (created and deleted only, never read). Owner
+references cannot cross namespaces, so these objects carry the labels `app.kubernetes.io/managed-by`, `openagentix.io/agent-definition`,
+`openagentix.io/definition-namespace` and the annotation `openagentix.io/definition-uid`; the controller treats an object as its own only
+when all four match, and removes them by label (union of every runtime's owned kinds) on delete, type switch and prune. The finalizer also
+deletes the key Secret by name and removes the gate route; a failure keeps the finalizer. A type switch makes the key Secret in the new
+namespace and deletes the old one by name.
+
+The gate route list is the ConfigMap `a2a-gate-routes` (key `routes.json`, exactly `{"container":["ns/name",...]}`, sorted). A route is
+listed after the objects are applied and before readiness (a failure is `Applied=False/ApplyFailed`, "route list: ..."), and removed on
+delete, suspend and type switch; each pass ends by syncing it with the statuses.
+
+RBAC (exactly): in the workload namespace `deployments`, `services`, `serviceaccounts`, `networkpolicies`: get, list, create, patch, delete;
+`secrets`: create, delete only; in the gate namespace the ConfigMap `a2a-gate-routes`: get, patch.
+
+`status.capabilities.isolation`: `sandbox-per-session` (builtin on Agent Substrate), `container` (container agent), `sandboxed-pod` (a container
+agent when the catalog names a RuntimeClass); absent means unknown. Honest notes: a container agent shares the node kernel unless a
+RuntimeClass is set; one long-lived process serves every conversation and has one identity; `/tmp` is an emptyDir; outbound traffic is
+limited by NetworkPolicy only (DNS and the model gateway), which kindnet does not enforce toward the internet; capabilities `approvals`,
+`durableWaits` and `cancelStopsLoop` are `unknown`. Readiness comes from the Deployment status only (no Pod is read).
+
 ## Reserved labels
 
 `openagentix.io/team`, `openagentix.io/project` and `openagentix.io/work-item` are reserved. They are **informational**: anyone who can write

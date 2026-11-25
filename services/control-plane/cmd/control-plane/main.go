@@ -17,13 +17,16 @@ import (
 	"time"
 
 	"github.com/openagentix/openagentix/services/control-plane/internal/adapters/agentgateway"
+	"github.com/openagentix/openagentix/services/control-plane/internal/adapters/container"
 	"github.com/openagentix/openagentix/services/control-plane/internal/adapters/kagent"
 	"github.com/openagentix/openagentix/services/control-plane/internal/adapters/toolhive"
+	"github.com/openagentix/openagentix/services/control-plane/internal/api"
 	"github.com/openagentix/openagentix/services/control-plane/internal/catalog"
 	"github.com/openagentix/openagentix/services/control-plane/internal/config"
 	"github.com/openagentix/openagentix/services/control-plane/internal/core"
 	"github.com/openagentix/openagentix/services/control-plane/internal/keys"
 	"github.com/openagentix/openagentix/services/control-plane/internal/kube"
+	"github.com/openagentix/openagentix/services/control-plane/internal/routes"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=...".
@@ -77,16 +80,25 @@ func run(ctx context.Context, getenv func(string) string, d deps) error {
 			return fmt.Errorf("catalog names the %s adapter %q; this build has only %q", a.kind, a.got, a.want)
 		}
 	}
+	if a := cat.Adapters.Runtimes[api.RuntimeContainer]; a != "" && a != "container" {
+		return fmt.Errorf("catalog names the runtime adapter %q for container agents; this build has only %q", a, "container")
+	}
 	cl := d.Kube
 	if cl == nil {
 		if cl, err = kube.InCluster(); err != nil {
 			return err
 		}
 	}
+	runtimes := map[string]core.Runtime{api.RuntimeBuiltin: kagent.New(cat, cl)}
+	var routeList core.Routes // nil: no container runtime, no route list
+	if cat.RuntimeAvailable(api.RuntimeContainer) {
+		runtimes[api.RuntimeContainer] = container.New(cat, cl)
+		routeList = &routes.Store{Kube: cl, Namespace: cat.Runtime.Container.GateNamespace, Name: routes.DefaultName}
+	}
 	ctrl := core.New(core.Config{
 		Namespace: cat.Namespaces.Agents, Catalog: cat, Policy: pol,
 		Kube: cl, Secrets: &keys.KubeSecrets{C: cl},
-		Runtime: kagent.New(cat, cl), Gateway: agentgateway.New(cl, cat.Namespaces.Gateway), Tools: toolhive.New(cat),
+		Runtime: runtimes[api.RuntimeBuiltin], Runtimes: runtimes, Routes: routeList, Gateway: agentgateway.New(cl, cat.Namespaces.Gateway), Tools: toolhive.New(cat),
 		Log: d.Log, Mint: d.Mint, Resync: cfg.Resync, Backoff: cfg.Backoff, MinInterval: cfg.MinInterval, MinRecreateInterval: cfg.MinRecreateInterval,
 	})
 
