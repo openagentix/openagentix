@@ -719,3 +719,4 @@ EOT
 ============================================================================
 EOT
 fi
+[ -z "${QS_NOT_READY:-}" ] || { echo "ERROR: the quickstart agent did not become Ready" >&2; exit 1; }

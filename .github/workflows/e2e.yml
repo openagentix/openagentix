@@ -103,7 +103,9 @@ jobs:
           kubectl get agent,agentdefinition -A -o yaml | head -150 || true
           kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
           kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
-          echo "--- what the admission guard says about a key Secret (server-side dry run as the controller)"\n          UID_=$(kubectl get agentdefinition quickstart -n kagent -o jsonpath=\x27{.metadata.uid}\x27 2>/dev/null)\n          cat <<EOF | kubectl create --dry-run=server -f - --as=system:serviceaccount:openagentix-system:openagentix-control-plane 2>&1 || true\napiVersion: v1\nkind: Secret\ntype: Opaque\nimmutable: true\nmetadata:\n  name: quickstart-virtual-key-4a5caddf\n  namespace: kagent\n  labels: {app.kubernetes.io/managed-by: openagentix-control-plane, openagentix.io/agent-definition: quickstart}\n  annotations: {openagentix.io/key-fingerprint: abcdef01}\n  ownerReferences: [{apiVersion: openagentix.io/v1alpha1, kind: AgentDefinition, name: quickstart, uid: "$UID_", controller: true}]\ndata: {OPENAI_API_KEY: dmstMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=}\nEOF\n          kind export logs ./kind-logs --name openagentix || true
+          echo "--- what the admission guard says about a key Secret"
+          hack/ci/guard-probe.sh
+          kind export logs ./kind-logs --name openagentix || true
       - name: upload cluster logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
