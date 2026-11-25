@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # Verify OpenAgentix release artefacts: that each image and the chart was signed by the release workflow of this
-# repository (keyless cosign, GitHub OIDC), that each image has its SPDX SBOM attestation, that each has a build
-# provenance attestation (gh attestation verify), and that the release assets match the signed checksums file.
+# repository for a tag push (keyless cosign, GitHub OIDC), that each image has its SPDX SBOM attestation, that each has
+# a build provenance attestation (gh attestation verify), and that the release files match the signed checksums file
+# and each has provenance too.
 #
 #   hack/verify-release.sh [--tag vX.Y.Z] [--repo owner/name] [--no-sbom] [--no-provenance] [--dry-run]
 #                          [--checksums path/to/SHA256SUMS] [REF@sha256:<digest> ...]
 #
 #   REF            an image or OCI chart by digest, for example ghcr.io/openagentix/kb@sha256:<64 hex>. A tag such as
 #                  :0.3.0 is refused: a tag can be moved, a digest cannot. The release notes list every digest.
-#   --tag          accept only signatures made by the workflow run of this tag. Without it, a signature of the
-#                  release workflow from any vX.Y.Z tag is accepted.
+#   --tag          accept only signatures made by the workflow run of this tag (recommended). Without it, a signature
+#                  of the release workflow from any vX.Y.Z tag is accepted. Note: anyone who may push a v* tag to the
+#                  repository, on any commit, gets a matching signature; a tag ruleset is what limits that.
 #   --repo         the repository that released it (default openagentix/openagentix).
 #   --no-sbom      skip the SBOM attestation check (the chart has no SBOM).
-#   --no-provenance skip `gh attestation verify` (it needs gh and a GitHub login).
+#   --no-provenance skip `gh attestation verify` (it needs gh 2.83 or newer and a GitHub login).
 #   --checksums    verify SHA256SUMS with the bundle next to it (SHA256SUMS.sigstore.json), then every file it lists,
-#                  in the directory of SHA256SUMS. Download the assets first: gh release download vX.Y.Z
+#                  in the directory of SHA256SUMS, and the provenance of each file. Download the files first:
+#                  gh release download vX.Y.Z
 #   --dry-run      print the commands, run nothing.
 #
 # Needs cosign v3 (and gh for provenance). Exit 0: every check passed. 1: a check failed. 2: bad usage or a missing tool.
@@ -54,17 +57,22 @@ if [ -n "$sums" ]; then [ -f "$sums" ] || die "checksums file '$sums' not found"
 [ ${#refs[@]} -gt 0 ] || [ -n "$sums" ] || die "nothing to check: give a reference by digest or --checksums (see --help)"
 
 # The signer: the release workflow of this repository, run for a tag. Same values as docs/diary/guide/verify-release.md.
+# Only a tag push makes a release, so the trigger must be `push`.
 if [ -n "$tag" ]; then
-  identity=(--certificate-identity "https://github.com/$repo/$WORKFLOW@refs/tags/$tag")
+  id="https://github.com/$repo/$WORKFLOW@refs/tags/$tag"
+  identity=(--certificate-identity "$id")
+  gh_identity=(--cert-identity "$id" --source-ref "refs/tags/$tag")
 else
   re_repo=$(printf '%s' "$repo" | sed 's/[.]/\\./g')
-  identity=(--certificate-identity-regexp "^https://github\\.com/$re_repo/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\$")
+  id_re="^https://github\\.com/$re_repo/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?\$"
+  identity=(--certificate-identity-regexp "$id_re")
+  gh_identity=(--cert-identity-regex "$id_re")
 fi
-signer=("${identity[@]}" --certificate-oidc-issuer "$ISSUER")
+signer=("${identity[@]}" --certificate-oidc-issuer "$ISSUER" --certificate-github-workflow-trigger push)
 
 if [ "$dry" = 0 ]; then
   command -v cosign >/dev/null 2>&1 || die "cosign is not installed (https://docs.sigstore.dev/cosign/system_config/installation/)"
-  if [ "$prov" = 1 ] && [ ${#refs[@]} -gt 0 ]; then
+  if [ "$prov" = 1 ]; then
     command -v gh >/dev/null 2>&1 || die "gh is not installed; install it or pass --no-provenance"
   fi
 fi
@@ -86,9 +94,7 @@ for r in "${refs[@]+"${refs[@]}"}"; do
   check "signature $r" cosign verify "${signer[@]}" --certificate-github-workflow-repository "$repo" "$r"
   [ "$sbom" = 0 ] || check "SBOM attestation (SPDX) $r" cosign verify-attestation --type spdxjson "${signer[@]}" --certificate-github-workflow-repository "$repo" "$r"
   if [ "$prov" = 1 ]; then
-    gh_args=(attestation verify "oci://$r" --repo "$repo" --signer-workflow "$repo/$WORKFLOW")
-    [ -z "$tag" ] || gh_args+=(--source-ref "refs/tags/$tag")
-    check "build provenance $r" gh "${gh_args[@]}"
+    check "build provenance $r" gh attestation verify "oci://$r" --repo "$repo" "${gh_identity[@]}"
   fi
 done
 
@@ -106,6 +112,13 @@ if [ -n "$sums" ]; then
     echo "  ok   checksums of the files listed in $sums"; passed=$((passed + 1))
   else
     echo "  FAIL checksums of the files listed in $sums (a file is missing or changed)"; failed=$((failed + 1))
+  fi
+  if [ "$prov" = 1 ]; then
+    while read -r _ name; do
+      name=${name#\*}
+      [ -n "$name" ] || continue
+      check "build provenance $dir/$name" gh attestation verify "$dir/$name" --repo "$repo" "${gh_identity[@]}"
+    done < "$sums"
   fi
 fi
 

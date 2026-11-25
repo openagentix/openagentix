@@ -30,14 +30,16 @@ Option A.
 
 1. **Signatures.** Each image digest and the OCI chart digest is signed with `cosign sign --yes` in the job that pushed it. The signer identity is the release workflow run for a tag:
    - certificate identity `https://github.com/openagentix/openagentix/.github/workflows/release.yml@refs/tags/vX.Y.Z`;
-   - OIDC issuer `https://token.actions.githubusercontent.com`.
+   - OIDC issuer `https://token.actions.githubusercontent.com`;
+   - workflow trigger `push`.
    This identity is the public contract. Changing the workflow path, the repository or the tag pattern breaks every user's policy, so it needs a new ADR.
-2. **SBOM.** syft makes an SPDX JSON SBOM of each pushed image (by digest). It is attached with `cosign attest --type spdxjson` and published as the release asset `sbom-<name>-<version>.spdx.json`. The chart has no SBOM: it holds templates and no third-party code.
+2. **SBOM.** syft makes an SPDX JSON SBOM of each pushed image (by digest). It is attached with `cosign attest --type spdxjson` and published as the release asset `sbom-<name>-<version>.spdx.json`. syft cannot see the npm packages of the console's web app inside its Go binary, so a second release file, `sbom-console-web-<version>.spdx.json`, is made from `console/pnpm-lock.yaml` (the whole lockfile, build tools included). The chart has no SBOM: it holds templates and no third-party code.
 3. **Provenance.** `actions/attest-build-provenance` makes a SLSA v1 provenance statement for each image and the chart (stored with GitHub and pushed to the registry), and for each release asset.
 4. **Release files.** `SHA256SUMS` lists the chart package, the SBOMs and the image digest list. It is signed with `cosign sign-blob` into `SHA256SUMS.sigstore.json`.
-5. **Gate.** Before the release is created, the release job runs `hack/verify-release.sh` on every image, the chart and `SHA256SUMS`. If one check fails, no release is created (images already pushed stay, as today).
-6. **Least privilege.** `id-token: write` and `attestations: write` only in the three jobs that sign (`images`, `chart`, `assets`). The release job gets `packages: read` and `attestations: read` for the gate. All actions are pinned by commit SHA. syft is downloaded by `hack/ci/install-tools.sh` and checked by SHA-256.
-7. **Dry run.** A manual run signs nothing. It still makes the SBOMs from the locally built images and `SHA256SUMS`, and prints what would be signed and the exact verify commands.
+5. **Gate.** Before the release is created, the release job runs `hack/verify-release.sh` on every image, the chart, `SHA256SUMS` and the provenance of every file it lists. If one check fails, no release is created (images already pushed stay, as today).
+6. **Clean, pinned build.** The release images are built with `no-cache: true` and no layer cache, because ordinary CI runs can write the cache. buildx is pinned by version, the BuildKit image and the Dockerfile frontend (`BUILDKIT_SYNTAX`, which replaces the floating `# syntax=docker/dockerfile:1` line) by digest.
+7. **Least privilege.** `id-token: write` and `attestations: write` only in the three jobs that sign (`images`, `chart`, `assets`). The release job gets `packages: read` and `attestations: read` for the gate. All actions are pinned by commit SHA. syft is downloaded by `hack/ci/install-tools.sh` and checked by SHA-256.
+8. **Dry run.** A manual run signs nothing. It still makes the SBOMs from the locally built images and `SHA256SUMS`, and prints what would be signed and the exact verify commands.
 
 The guide for users is `docs/diary/guide/verify-release.md`.
 
@@ -45,7 +47,7 @@ The guide for users is `docs/diary/guide/verify-release.md`.
 
 - Users can check, before install, that an image or the chart came from this repository's release workflow for a given tag, and see what is inside an image.
 - Admission policies (Kyverno, Sigstore policy-controller) can be written against the identity above. The project does not ship one yet.
-- Security impact: the jobs that sign can get a signing certificate for the release workflow identity. Anyone who can push a `v*` tag on `main` or change `release.yml` on `main` can make a release that verifies, so the trust rests on branch protection and on who may push tags. Nothing secret is added; the only token is still `GITHUB_TOKEN`. Signatures and SBOMs are public (the Rekor log, the registry), and they hold no secret: package names, versions and the workflow identity.
+- Security impact: the jobs that sign can get a signing certificate for the release workflow identity. Anyone who may push a `v*` tag, on any commit, gets a run of that commit's `release.yml` and a certificate with this identity. The check that the tag is on `main` is in the same workflow file, so it does not protect against a changed one. The control is a repository tag ruleset for `refs/tags/v*`: only maintainers may create, and update, delete and force-push are blocked. The repository owner sets it; this pull request does not change repository settings. A protected `release` environment with required reviewers, used by the signing jobs, is a later hardening. Nothing secret is added; the only token is still `GITHUB_TOKEN`. Signatures and SBOMs are public (the Rekor log, the registry), and they hold no secret: package names, versions and the workflow identity.
 - Compatibility: no change for users who do not verify. The image digests do not change (no image index).
 - Tests: `hack/ci/verify-release-test.sh` (fake cosign and gh) in `make test-shell` and the `shell` job; `actionlint`. Proof needed before this counts as done: one real tag run, then the commands of the guide run against its output.
 
@@ -54,6 +56,9 @@ The guide for users is `docs/diary/guide/verify-release.md`.
 - *Unverified*: no tag has run the signing steps. cosign v3 writes the new Sigstore bundle format through the OCI referrers API or its fallback tag; whether ghcr.io serves it to every verifier is untested here.
 - *Unverified*: `gh attestation verify oci://...` for an OCI Helm chart.
 - New ghcr.io packages may be private at first. The gate logs in read only, so it works, but users cannot pull or verify until a maintainer makes the packages public.
-- The git tag is not signed. A signed tag (`git tag -s`) or a tag ruleset is a separate step.
+- The tag ruleset described above is not in place yet. Until it is, the trust boundary is "anyone with write access".
+- Still floating in the signed build: the `golang:1.25` and `distroless/static:nonroot` images of most Dockerfiles are pinned by tag only (the console's by digest). Pull request #83 pins them by digest. This must be fixed before the first real tag.
+- *Unverified*: `BUILDKIT_SYNTAX` overriding the `# syntax=` line was read in the BuildKit documentation, not run here.
+- The git tag is not signed. A signed tag (`git tag -s`) is a separate step.
 - The SBOM lists what syft finds. It is not a licence review; `THIRD-PARTY.md` stays the licence record.
 - SLSA build level 3 (an isolated builder, for example the SLSA GitHub generator) is not reached and not planned for 0.3.

@@ -31,9 +31,11 @@ ID_RE='^https://github\.com/openagentix/openagentix/\.github/workflows/release\.
 # one image, pinned tag: signature, SBOM attestation, provenance, exact identity
 run --tag v1.2.3 "$IMG"
 t "image with tag: exit 0" "$rc" 0
-t "cosign verify called once with the exact identity" "$(calls "cosign verify --certificate-identity $ID_TAG $ISSUER --certificate-github-workflow-repository openagentix/openagentix $IMG")" 1
-t "SBOM attestation checked as spdxjson" "$(calls "cosign verify-attestation --type spdxjson --certificate-identity $ID_TAG $ISSUER")" 1
-t "provenance checked with gh for the oci reference" "$(calls "gh attestation verify oci://$IMG --repo openagentix/openagentix --signer-workflow openagentix/openagentix/.github/workflows/release.yml --source-ref refs/tags/v1.2.3")" 1
+TRIG="--certificate-github-workflow-trigger push"
+t "cosign verify called once with the exact identity and the push trigger" "$(calls "cosign verify --certificate-identity $ID_TAG $ISSUER $TRIG --certificate-github-workflow-repository openagentix/openagentix $IMG")" 1
+t "SBOM attestation checked as spdxjson" "$(calls "cosign verify-attestation --type spdxjson --certificate-identity $ID_TAG $ISSUER $TRIG")" 1
+t "provenance: gh with the exact identity and the tag ref" "$(calls "gh attestation verify oci://$IMG --repo openagentix/openagentix --cert-identity $ID_TAG --source-ref refs/tags/v1.2.3")" 1
+t "provenance: no --signer-workflow (gh refuses it with --cert-identity)" "$(calls 'signer-workflow')" 0
 t "summary says all checks passed" "$(printf '%s\n' "$out" | grep -c '^all 3 checks passed')" 1
 
 # no tag: identity regexp for any release tag of the workflow, no --source-ref
@@ -42,10 +44,11 @@ t "no tag: exit 0" "$rc" 0
 t "no tag: identity regexp" "$(grep -cF -- "cosign verify --certificate-identity-regexp $ID_RE" "$FAKE_LOG")" 1
 t "no tag: no exact identity" "$(calls 'certificate-identity https')" 0
 t "no tag: no source-ref" "$(calls 'source-ref')" 0
+t "no tag: gh uses the same identity regexp" "$(grep -cF -- "gh attestation verify oci://$IMG --repo openagentix/openagentix --cert-identity-regex $ID_RE" "$FAKE_LOG")" 1
 
 # another repository (a fork that releases): identity and repo follow, dots escaped in the regexp
 run --repo some-org/open.agentix "$IMG"
-t "repo flag: regexp escapes the dot (signature and SBOM)" "$(grep -cF 'some-org/open\.agentix/\.github' "$FAKE_LOG")" 2
+t "repo flag: regexp escapes the dot (signature, SBOM, provenance)" "$(grep -cF 'some-org/open\.agentix/\.github' "$FAKE_LOG")" 3
 t "repo flag: gh gets the repo" "$(calls 'gh attestation verify .* --repo some-org/open.agentix ')" 1
 
 # the chart has no SBOM: --no-sbom skips that check only
@@ -94,8 +97,14 @@ mkdir -p "$D/assets"; printf 'one\n' > "$D/assets/a.spdx.json"; printf 'two\n' >
 : > "$D/assets/SHA256SUMS.sigstore.json"
 run --tag v1.2.3 --checksums "$D/assets/SHA256SUMS"
 t "checksums: exit 0" "$rc" 0
-t "checksums: verify-blob with the bundle" "$(calls "cosign verify-blob --bundle $D/assets/SHA256SUMS.sigstore.json --certificate-identity $ID_TAG $ISSUER $D/assets/SHA256SUMS")" 1
+t "checksums: verify-blob with the bundle" "$(calls "cosign verify-blob --bundle $D/assets/SHA256SUMS.sigstore.json --certificate-identity $ID_TAG $ISSUER $TRIG $D/assets/SHA256SUMS")" 1
 t "checksums: listed files ok" "$(printf '%s\n' "$out" | grep -c '^  ok   checksums of the files listed in')" 1
+t "checksums: provenance of each listed file" "$(calls "gh attestation verify $D/assets/[ab]\.[a-z.]* --repo openagentix/openagentix --cert-identity $ID_TAG --source-ref refs/tags/v1.2.3")" 2
+t "checksums: 2 + 2 checks" "$(printf '%s\n' "$out" | grep -c '^all 4 checks passed')" 1
+FAKE_FAIL="b.tgz" run --tag v1.2.3 --checksums "$D/assets/SHA256SUMS"
+t "checksums: a file without provenance fails" "$rc" 1
+run --tag v1.2.3 --no-provenance --checksums "$D/assets/SHA256SUMS"
+t "checksums, no-provenance: gh not called" "$(calls '^gh ')" 0
 printf 'changed\n' > "$D/assets/b.tgz"
 run --tag v1.2.3 --checksums "$D/assets/SHA256SUMS"
 t "checksums: a changed file fails" "$rc" 1
@@ -114,6 +123,13 @@ t "no cosign: says so" "$(printf '%s\n' "$out" | grep -c 'cosign is not installe
 # the workflow and the docs use the same identity and workflow path as the script
 t "workflow file the identity names exists" "$(test -f .github/workflows/release.yml && echo yes)" yes
 t "guide names the same identity regexp" "$(grep -qF -- "$ID_RE" docs/diary/guide/verify-release.md 2>/dev/null && echo yes)" yes
-t "workflow signs in the jobs the guide names" "$(grep -c 'cosign sign --yes' .github/workflows/release.yml)" 2
+W=.github/workflows/release.yml
+t "workflow signs in the jobs the guide names" "$(grep -c 'cosign sign --yes' "$W")" 2
+t "workflow gate checks provenance of the release files" "$(grep -c -- '--no-provenance' "$W")" 0
+t "release images: no build cache" "$(grep -c 'cache-from\|cache-to' "$W")" 0
+t "release images: no-cache" "$(grep -c 'no-cache: true' "$W")" 1
+t "buildx version pinned" "$(grep -cE '^ +version: v[0-9]+\.[0-9]+\.[0-9]+$' "$W")" 1
+t "BuildKit image pinned by digest" "$(grep -cE 'image=moby/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}' "$W")" 1
+t "Dockerfile frontend pinned by digest" "$(grep -cE 'BUILDKIT_SYNTAX=docker/dockerfile:[0-9.]+@sha256:[0-9a-f]{64}' "$W")" 1
 
 if [ "$F" = 0 ]; then echo "verify-release tests passed"; else echo "verify-release tests FAILED"; exit 1; fi

@@ -113,6 +113,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # the tools in the signed build path are pinned: buildx by version, BuildKit by digest
+          version: v0.39.0
+          driver-opts: image=moby/buildkit:v0.35.0@sha256:aa632b921ef07411d2cb77292cd34213d4f7b384001d6fceef1e1f25bf9752bb
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         if: env.PUBLISH == 'true'
         with:
@@ -138,7 +142,10 @@ jobs:
           # a dry run loads the image into the runner's Docker, so the SBOM step scans the real build
           load: ${{ env.PUBLISH != 'true' }}
           tags: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ needs.verify.outputs.version }}
-          build-args: VERSION=${{ needs.verify.outputs.version }}
+          # BUILDKIT_SYNTAX replaces the floating `# syntax=docker/dockerfile:1` line of the Dockerfiles with a digest
+          build-args: |
+            VERSION=${{ needs.verify.outputs.version }}
+            BUILDKIT_SYNTAX=docker/dockerfile:1.29.0@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.verify.outputs.version }}
@@ -148,7 +155,8 @@ jobs:
           # steps below and attached to that digest, not put in an image index by buildx.
           provenance: false
           sbom: false
-          cache-from: type=gha,scope=image-${{ matrix.name }}
+          # A signed image is built clean: no layer cache, because ordinary CI runs can write the cache.
+          no-cache: true
       - name: SBOM (SPDX JSON, syft)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -161,6 +169,15 @@ jobs:
           "$HOME/.local/bin/syft" scan "$src" --quiet -o "spdx-json=$out"
           jq -e '.spdxVersion and (.packages | length > 0)' "$out" > /dev/null || { echo "::error::empty SBOM for $NAME"; exit 1; }
           echo "SBOM for $NAME from $src: $(jq '.packages | length' "$out") packages, $(jq -r .spdxVersion "$out")"
+      - name: SBOM of the console web app (npm packages from the lockfile; syft cannot see them in the Go binary)
+        if: matrix.name == 'console'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          out="sbom/sbom-console-web-$VERSION.spdx.json"
+          "$HOME/.local/bin/syft" scan file:console/pnpm-lock.yaml --quiet -o "spdx-json=$out"
+          jq -e '.packages | length > 0' "$out" > /dev/null || { echo "::error::empty SBOM for the console lockfile"; exit 1; }
+          echo "SBOM of console/pnpm-lock.yaml: $(jq '.packages | length' "$out") packages (a release file, not attached to the image)"
       - name: sign the image and attach the SBOM (keyless cosign)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -331,7 +348,8 @@ jobs:
           MATRIX: ${{ needs.verify.outputs.image_matrix }}
         run: |
           want=$(echo "$MATRIX" | jq '.include | length')
-          [ "$(find assets -name 'sbom-*.spdx.json' | wc -l)" -eq "$want" ] || { echo "::error::SBOM count does not match the image matrix"; exit 1; }
+          # one SBOM per image, plus the console web app's lockfile SBOM
+          [ "$(find assets -name 'sbom-*.spdx.json' ! -name 'sbom-console-web-*' | wc -l)" -eq "$want" ] || { echo "::error::SBOM count does not match the image matrix"; exit 1; }
           [ -f "assets/openagentix-$VERSION.tgz" ] || { echo "::error::no chart package"; exit 1; }
           cat collected/*.txt | sort > "assets/image-digests-$VERSION.txt"
           (cd assets && sha256sum -- * > SHA256SUMS)
@@ -406,7 +424,7 @@ jobs:
             --registry "$REGISTRY" --chart "$CHART_REPO/openagentix" > body.md
           { echo; echo "Signatures, SBOMs and provenance: [how to verify a release](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/diary/guide/verify-release.md)."; } >> body.md
           { echo "### Release body for $TAG"; [ "$PUBLISH" = true ] || echo "(dry run: digests are zeros, nothing was pushed)"; echo; cat body.md; } >> "$GITHUB_STEP_SUMMARY"
-      - name: gate - every image and the chart are signed and attested, and SHA256SUMS is signed
+      - name: gate - every image and the chart are signed and attested, SHA256SUMS is signed, every release file is attested
         # A release without a signature, an SBOM or provenance stops here, before the release exists.
         # A dry run prints the commands instead (hack/verify-release.sh --dry-run).
         env:
@@ -421,7 +439,7 @@ jobs:
           {
             hack/verify-release.sh "${mode[@]}" --tag "$TAG" "${refs[@]}" || rc=1
             hack/verify-release.sh "${mode[@]}" --tag "$TAG" --no-sbom "$chart" || rc=1
-            hack/verify-release.sh "${mode[@]}" --tag "$TAG" --no-provenance --checksums assets/SHA256SUMS || rc=1
+            hack/verify-release.sh "${mode[@]}" --tag "$TAG" --checksums assets/SHA256SUMS || rc=1
           } > verify.txt 2>&1
           cat verify.txt
           { echo "### Verification"; echo; echo '```'; cat verify.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
