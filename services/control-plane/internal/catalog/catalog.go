@@ -96,6 +96,7 @@ type ContainerSettings struct {
 	GateNamespace      string            `json:"gateNamespace"`   // the A2A gate's namespace: the only caller allowed in
 	GatePodSelector    map[string]string `json:"gatePodSelector"` // the A2A gate's pods
 	DNSNamespace       string            `json:"dnsNamespace"`    // default kube-system
+	ImagePullPolicy    string            `json:"imagePullPolicy"` // Always (default) or IfNotPresent; the quick start image exists only on the node
 	WorkloadPort       int               `json:"-"`               // the Service port, fixed: the gate builds http://<name>.<ns>:8080
 }
 

@@ -216,10 +216,29 @@ func (h *handler) workloadTarget(ns, name, route string) *target {
 	return t
 }
 
+var workloadResponseHeaders = map[string]bool{
+	"Content-Type": true, "Content-Length": true, "Cache-Control": true, "Date": true, "X-Accel-Buffering": true,
+}
+
 // modifyResponse rewrites the agent card of a listed agent; every other response passes through untouched.
 func (h *handler) modifyResponse(resp *http.Response) error {
 	t, _ := resp.Request.Context().Value(keyTarget).(*target)
-	if t == nil || !t.card || resp.StatusCode != http.StatusOK {
+	if t == nil {
+		return nil
+	}
+	// a redirect would send the caller to an address the agent chose
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return errors.New("container agent answered with a redirect")
+	}
+	// the answer of foreign code keeps only the headers a client needs; everything else (cookies, cross-origin
+	// grants, policies, links) is dropped, and the type may not be sniffed
+	for k := range resp.Header {
+		if !workloadResponseHeaders[http.CanonicalHeaderKey(k)] {
+			delete(resp.Header, k)
+		}
+	}
+	resp.Header.Set("X-Content-Type-Options", "nosniff")
+	if !t.card || resp.StatusCode != http.StatusOK {
 		return nil
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxCardBytes+1))

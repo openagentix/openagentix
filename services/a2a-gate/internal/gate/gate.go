@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +51,13 @@ type Options struct {
 	// the request is proxied, so a long upload or a long stream is not cut by it.
 	SniffTimeout time.Duration
 	Transport    http.RoundTripper
+	// WorkloadHeaderTimeout is how long a container agent may take to start its answer (default 300 s), streaming
+	// calls included. Once the response headers are in, the body is not timed.
+	WorkloadHeaderTimeout time.Duration
+	// WorkloadMaxInFlight caps the requests one container agent handles at once (default 32); the next call for
+	// that agent gets 503, for every caller. All container agents together also share one pool of half of
+	// MaxInFlight (at least 1), so they can never take the slots the built-in agents need.
+	WorkloadMaxInFlight int
 
 	// Bring your own A2A agent (routes.go). All off while RoutesFile is empty.
 	RoutesFile        string          // the controller-written list of container agents
@@ -66,6 +74,8 @@ const (
 	defaultMaxBody     = 8 << 20
 	defaultMaxInFlight = 128
 	defaultSniffWait   = 10 * time.Second
+	defaultWorkHeader  = 300 * time.Second
+	defaultWorkInFlite = 32
 	maxAuditUserBytes  = 128
 )
 
@@ -84,6 +94,10 @@ type handler struct {
 	proxy  *httputil.ReverseProxy
 	slots  chan struct{}
 	routes atomic.Pointer[RouteSet]
+
+	workPool   chan struct{} // all container agents together: half of MaxInFlight
+	agentMu    sync.Mutex
+	agentSlots map[string]chan struct{} // per container agent, created on first use
 }
 
 // New builds the gate handler.
@@ -104,20 +118,29 @@ func New(o Options) (http.Handler, error) {
 	if o.SniffTimeout <= 0 {
 		o.SniffTimeout = defaultSniffWait
 	}
+	if o.WorkloadHeaderTimeout <= 0 {
+		o.WorkloadHeaderTimeout = defaultWorkHeader
+	}
+	if o.WorkloadMaxInFlight <= 0 {
+		o.WorkloadMaxInFlight = defaultWorkInFlite
+	}
+	if o.Transport == nil {
+		o.Transport = http.DefaultTransport
+	}
 	if o.Audit == nil {
 		o.Audit = slog.New(slog.DiscardHandler)
 	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	h := &handler{o: o, slots: make(chan struct{}, o.MaxInFlight)}
+	h := &handler{o: o, slots: make(chan struct{}, o.MaxInFlight), workPool: make(chan struct{}, max(1, o.MaxInFlight/2))}
 	if err := h.initRoutes(); err != nil {
 		return nil, err
 	}
 	h.proxy = &httputil.ReverseProxy{
 		Rewrite:        h.rewrite(up),
 		FlushInterval:  -1, // SSE: write every chunk through at once
-		Transport:      o.Transport,
+		Transport:      headerTimeoutTransport{base: o.Transport, d: o.WorkloadHeaderTimeout},
 		ModifyResponse: h.modifyResponse,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if rec, ok := w.(*recorder); ok {
@@ -141,9 +164,14 @@ func (h *handler) rewrite(up *url.URL) func(*httputil.ProxyRequest) {
 			// a listed agent: scheme, host and path come from the fixed template and the route, never from the request
 			pr.SetURL(&url.URL{Scheme: "http", Host: t.host})
 			pr.Out.URL.Path, pr.Out.URL.RawPath = t.path, ""
-			if t.card {
-				pr.Out.Header.Del("Accept-Encoding") // the card is parsed, so it must not arrive compressed
+			// foreign code gets an allowlist of request headers, not the caller's whole set
+			keep := http.Header{}
+			for _, n := range workloadRequestHeaders {
+				if v := pr.In.Header.Values(n); len(v) > 0 {
+					keep[http.CanonicalHeaderKey(n)] = append([]string(nil), v...)
+				}
 			}
+			pr.Out.Header = keep
 		} else {
 			pr.SetURL(up)
 		}
@@ -360,8 +388,86 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 	if t := h.workloadTarget(ns, name, route); t != nil {
 		ctx = context.WithValue(ctx, keyTarget, t)
 	}
+	if _, ok := ctx.Value(keyTarget).(*target); ok {
+		// container agents have a pool of their own (half of the shared slots) and each has a cap inside it: one
+		// slow agent answers 503 alone, and the built-in agents keep their slots
+		slot := h.agentSlot(ns, name)
+		select {
+		case h.workPool <- struct{}{}:
+			defer func() { <-h.workPool }()
+		default:
+			a.reason = "workload_busy"
+			w.Header().Set("Retry-After", "1")
+			deny(w, http.StatusServiceUnavailable, "service unavailable")
+			return
+		}
+		select {
+		case slot <- struct{}{}:
+			defer func() { <-slot }()
+		default:
+			a.reason = "agent_busy"
+			w.Header().Set("Retry-After", "1")
+			deny(w, http.StatusServiceUnavailable, "service unavailable")
+			return
+		}
+	}
 	h.proxy.ServeHTTP(w, r.WithContext(ctx))
 }
+
+func (h *handler) agentSlot(ns, name string) chan struct{} {
+	h.agentMu.Lock()
+	defer h.agentMu.Unlock()
+	if h.agentSlots == nil {
+		h.agentSlots = map[string]chan struct{}{}
+	}
+	k := ns + "/" + name
+	c, ok := h.agentSlots[k]
+	if !ok {
+		c = make(chan struct{}, h.o.WorkloadMaxInFlight)
+		h.agentSlots[k] = c
+	}
+	return c
+}
+
+// request headers a container agent may receive. Credentials, cookies, forwarding and browser headers never do. X-User-Id
+// is set by the gate itself after this list is applied.
+var workloadRequestHeaders = []string{"Content-Type", "Accept", "A2A-Version", "A2A-Extensions", "Traceparent", "Tracestate"}
+
+// headerTimeoutTransport ends a request to a container agent that has not started its response in time. Once the
+// response headers are in, the timer is gone: a slow body is not cut. Built-in agents are not timed here.
+type headerTimeoutTransport struct {
+	base http.RoundTripper
+	d    time.Duration
+}
+
+func (t headerTimeoutTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	tg, _ := r.Context().Value(keyTarget).(*target)
+	if tg == nil {
+		return t.base.RoundTrip(r)
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	timer := time.AfterFunc(t.d, cancel)
+	resp, err := t.base.RoundTrip(r.WithContext(ctx))
+	if !timer.Stop() && err == nil {
+		// the timer fired just as the headers came: the body would be cut, so treat it as a timeout
+		_ = resp.Body.Close()
+		cancel()
+		return nil, context.DeadlineExceeded
+	}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = cancelOnClose{resp.Body, cancel}
+	return resp, nil
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error { err := c.ReadCloser.Close(); c.cancel(); return err }
 
 func bearer(r *http.Request) (string, bool) {
 	v := r.Header.Values("Authorization")

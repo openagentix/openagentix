@@ -6,6 +6,7 @@
 controlPlane:
   containerAgents:
     enabled: true
+    imagePullPolicy: IfNotPresent   # the sample image exists only on the kind node: there is no registry to pull from
   policy:
     allowedRuntimes: [builtin, container]
     runtimes:

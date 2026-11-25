@@ -175,6 +175,19 @@ func TestContainerGuard(t *testing.T) {
 		dep("deny Deployment CPU limit above the maximum", func(s, p, c m) { c["resources"].(m)["limits"].(m)["cpu"] = "8" }),
 		dep("deny Deployment memory limit above the maximum", func(s, p, c m) { c["resources"].(m)["limits"].(m)["memory"] = "64Gi" }),
 		dep("deny Deployment exec probe", func(s, p, c m) { c["livenessProbe"] = m{"exec": m{"command": []any{"sh"}}} }),
+		dep("deny Deployment pull policy IfNotPresent (the render says Always)", func(s, p, c m) { c["imagePullPolicy"] = "IfNotPresent" }),
+		dep("deny Deployment pull policy Never", func(s, p, c m) { c["imagePullPolicy"] = "Never" }),
+		dep("deny Deployment without a pull policy", func(s, p, c m) { delete(c, "imagePullPolicy") }),
+		dep("deny Deployment other scheduler", func(s, p, c m) { p["schedulerName"] = "evil-scheduler" }),
+		dep("deny Deployment other termination message path", func(s, p, c m) { c["terminationMessagePath"] = "/tmp/x" }),
+		dep("deny Deployment other termination message policy", func(s, p, c m) { c["terminationMessagePolicy"] = "FallbackToLogsOnError" }),
+		dep("deny Deployment long termination grace period", func(s, p, c m) { p["terminationGracePeriodSeconds"] = int64(86400) }),
+		dep("deny Deployment Recreate strategy", func(s, p, c m) { s["strategy"] = m{"type": "Recreate"} }),
+		dep("deny Deployment rollout of everything at once", func(s, p, c m) {
+			s["strategy"] = m{"type": "RollingUpdate", "rollingUpdate": m{"maxUnavailable": "100%", "maxSurge": "100%"}}
+		}),
+		dep("deny Deployment HTTPS probe", func(s, p, c m) { c["readinessProbe"].(m)["httpGet"].(m)["scheme"] = "HTTPS" }),
+		dep("deny Deployment probe with a long timeout", func(s, p, c m) { c["livenessProbe"].(m)["timeoutSeconds"] = int64(60) }),
 		dep("deny Deployment two replicas", func(s, p, c m) { s["replicas"] = int64(2) }),
 		dep("deny Deployment selecting other pods", func(s, p, c m) { s["selector"] = m{"matchLabels": m{"app": "kagent"}} }),
 		dep("deny Deployment extra volume mount", func(s, p, c m) {
@@ -189,6 +202,9 @@ func TestContainerGuard(t *testing.T) {
 	cases = append(cases,
 		svc("deny Service LoadBalancer", func(s m) { s["type"] = "LoadBalancer" }),
 		svc("deny Service NodePort", func(s m) { s["type"] = "NodePort" }),
+		svc("deny headless Service", func(s m) { s["clusterIP"] = "None"; s["clusterIPs"] = []any{"None"} }),
+		svc("deny Service with session affinity", func(s m) { s["sessionAffinity"] = "ClientIP" }),
+		svc("deny Service with local traffic policy", func(s m) { s["internalTrafficPolicy"] = "Local" }),
 		svc("deny Service externalIPs", func(s m) { s["externalIPs"] = []any{"1.2.3.4"} }),
 		svc("deny Service selecting other pods", func(s m) { s["selector"] = m{"app": "kagent"} }),
 		svc("deny Service on another port", func(s m) { s["ports"].([]any)[0].(m)["port"] = int64(443) }),
@@ -262,6 +278,24 @@ func TestContainerGuard(t *testing.T) {
 	}
 }
 
+// With controlPlane.containerAgents.imagePullPolicy=IfNotPresent (the quick start) the guard pins that value, not Always.
+func TestContainerGuardPullPolicyFollowsTheChart(t *testing.T) {
+	r := render(t, append([]string{"controlPlane.containerAgents.imagePullPolicy=IfNotPresent"}, containerSets...)...)
+	e, err := newEngine(r.Policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs := containerObjects(t, r)
+	ok := mut("allow IfNotPresent when the chart says so", "Deployment", objs, func(x m) {
+		x["spec"].(m)["template"].(m)["spec"].(m)["containers"].([]any)[0].(m)["imagePullPolicy"] = "IfNotPresent"
+	})
+	ok.allow = allow
+	bad := mut("deny Always when the chart says IfNotPresent", "Deployment", objs, func(x m) {
+		x["spec"].(m)["template"].(m)["spec"].(m)["containers"].([]any)[0].(m)["imagePullPolicy"] = "Always"
+	})
+	runCases(t, e, []expectation{ok, bad})
+}
+
 func setEnv(c m, name, v string) {
 	for _, e := range c["env"].([]any) {
 		if e.(m)["name"] == name {
@@ -288,7 +322,10 @@ func server2(o m) m {
 		pod := sp["template"].(m)["spec"].(m)
 		pod["restartPolicy"], pod["dnsPolicy"], pod["schedulerName"], pod["terminationGracePeriodSeconds"] = "Always", "ClusterFirst", "default-scheduler", int64(30)
 		c := pod["containers"].([]any)[0].(m)
-		c["imagePullPolicy"], c["terminationMessagePath"], c["terminationMessagePolicy"] = "IfNotPresent", "/dev/termination-log", "File"
+		if c["imagePullPolicy"] == nil {
+			c["imagePullPolicy"] = "IfNotPresent"
+		}
+		c["terminationMessagePath"], c["terminationMessagePolicy"] = "/dev/termination-log", "File"
 		sp["template"].(m)["metadata"].(m)["creationTimestamp"] = nil
 	case "Service":
 		sp := n["spec"].(m)

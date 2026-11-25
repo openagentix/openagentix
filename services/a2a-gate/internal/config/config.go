@@ -29,6 +29,10 @@ type Config struct {
 	WorkloadNamespace string // A2A_GATE_WORKLOAD_NAMESPACE, a DNS label
 	WorkloadPort      int    // A2A_GATE_WORKLOAD_PORT, default 8080
 	PublicURL         string // A2A_GATE_PUBLIC_URL, the address clients use for the gate
+	// A2A_GATE_WORKLOAD_HEADER_TIMEOUT_SECONDS: how long a container agent may take to start its answer (default 300)
+	WorkloadHeaderTimeoutSeconds int
+	// A2A_GATE_WORKLOAD_MAX_INFLIGHT: requests one container agent handles at once (default 32)
+	WorkloadMaxInFlight int
 }
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
@@ -53,6 +57,9 @@ func Load(getenv func(string) string) (Config, error) {
 		RoutesFile:        getenv("A2A_GATE_ROUTES_FILE"),
 		WorkloadNamespace: getenv("A2A_GATE_WORKLOAD_NAMESPACE"),
 		WorkloadPort:      8080,
+
+		WorkloadHeaderTimeoutSeconds: 300,
+		WorkloadMaxInFlight:          32,
 	}
 	u, err := url.Parse(c.Upstream)
 	if c.Upstream == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -95,6 +102,20 @@ func Load(getenv func(string) string) (Config, error) {
 				return c, errors.New("A2A_GATE_WORKLOAD_PORT must be 1..65535")
 			}
 			c.WorkloadPort = n
+		}
+		if v := getenv("A2A_GATE_WORKLOAD_HEADER_TIMEOUT_SECONDS"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 86400 {
+				return c, errors.New("A2A_GATE_WORKLOAD_HEADER_TIMEOUT_SECONDS must be 1..86400")
+			}
+			c.WorkloadHeaderTimeoutSeconds = n
+		}
+		if v := getenv("A2A_GATE_WORKLOAD_MAX_INFLIGHT"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 10000 {
+				return c, errors.New("A2A_GATE_WORKLOAD_MAX_INFLIGHT must be 1..10000")
+			}
+			c.WorkloadMaxInFlight = n
 		}
 		pu, err := url.Parse(getenv("A2A_GATE_PUBLIC_URL"))
 		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || pu.User != nil ||

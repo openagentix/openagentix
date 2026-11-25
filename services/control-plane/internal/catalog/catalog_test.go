@@ -131,7 +131,7 @@ func TestContainerRuntimeInTheCatalog(t *testing.T) {
 		t.Fatal("RuntimeAvailable")
 	}
 	k := c.Runtime.Container
-	if k == nil || k.Namespace != "openagentix-agents" || k.DNSNamespace != "kube-system" || k.GatewayPort != 8080 || k.WorkloadPort != 8080 {
+	if k == nil || k.Namespace != "openagentix-agents" || k.DNSNamespace != "kube-system" || k.GatewayPort != 8080 || k.WorkloadPort != 8080 || k.ImagePullPolicy != "Always" {
 		t.Fatalf("defaults: %+v", k)
 	}
 	if c.RuntimeAdapter("container") != "container" || c.RuntimeAdapter("builtin") != "kagent" || c.RuntimeAdapter("x") != "" {
@@ -155,6 +155,7 @@ func TestContainerRuntimeCatalogRefusals(t *testing.T) {
 		"no gateway namespace":  {`"gatewayNamespace": "agentgateway-system"`, `"gatewayNamespace": ""`, "runtime.container.gatewayNamespace"},
 		"no gate namespace":     {`"gateNamespace": "openagentix-gateway"`, `"gateNamespace": ""`, "runtime.container.gateNamespace"},
 		"no gate selector":      {`"gatePodSelector": {"app": "a2a-gate"}`, `"gatePodSelector": {}`, "runtime.container.gatePodSelector"},
+		"bad pull policy":       {`"namespace": "openagentix-agents"`, `"namespace": "openagentix-agents", "imagePullPolicy": "Never"`, "imagePullPolicy"},
 		"bad port":              {`"gatewayPort": 8080`, `"gatewayPort": 70000`, "gatewayPort"},
 		"unknown runtime type":  {`"container": "container"}`, `"container": "container", "sandbox": "x"}`, "adapters.runtimes"},
 		"builtin must agree":    {`"builtin": "kagent"`, `"builtin": "other"`, "adapters.runtimes.builtin"},

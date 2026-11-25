@@ -477,7 +477,7 @@ the users from the render and fails if one is missing. */ -}}
 {{- $ca := .Values.controlPlane.containerAgents -}}
 {{- $gp := int $ca.gatewayPodPort | default (int .Values.gateway.port) -}}
 {{- $_ := set $cat.adapters "runtimes" (dict "builtin" "kagent" "container" "container") -}}
-{{- $_ := set $cat.runtime "container" (dict "namespace" $ca.namespace "runtimeClassName" $ca.runtimeClassName "gatewayNamespace" .Values.gateway.namespace "gatewayPodSelector" (dict "gateway.networking.k8s.io/gateway-name" .Values.gateway.name) "gatewayPort" $gp "gateNamespace" .Values.governance.a2a.namespace "gatePodSelector" (dict "app" "a2a-gate") "dnsNamespace" "kube-system") -}}
+{{- $_ := set $cat.runtime "container" (dict "namespace" $ca.namespace "runtimeClassName" $ca.runtimeClassName "imagePullPolicy" ($ca.imagePullPolicy | default "Always") "gatewayNamespace" .Values.gateway.namespace "gatewayPodSelector" (dict "gateway.networking.k8s.io/gateway-name" .Values.gateway.name) "gatewayPort" $gp "gateNamespace" .Values.governance.a2a.namespace "gatePodSelector" (dict "app" "a2a-gate") "dnsNamespace" "kube-system") -}}
 {{- end -}}
 {{- $cat | toPrettyJson -}}
 {{- end -}}

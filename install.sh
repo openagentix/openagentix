@@ -734,7 +734,7 @@ if [ "$QS" = 1 ]; then
     || { echo "WARN: the quickstart agent is not Ready yet: $K get agentdefinition quickstart -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition quickstart -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
   if [ "$QS_BYO" = 1 ]; then
     log "sample container agent (bring your own agent)"
-    BYO_REF=$(hack/kind-image-digest.sh "$CLUSTER" "$BYO_REPO") || die "no digest for the sample image: see the line above"
+    BYO_REF=$(hack/kind-image-digest.sh "$CLUSTER" "$BYO_REPO" "${BYO_IMAGE##*:}") || die "no digest for the sample image: see the line above"
     echo "image $BYO_REF"
     yq --arg i "$BYO_REF" '.spec.runtime.container.image=$i' examples/agents/echo-a2a/agent.yaml > "$QS_TMP/byo.json"
     $K apply -f "$QS_TMP/byo.json" >/dev/null || die "could not create the echo-go AgentDefinition"
