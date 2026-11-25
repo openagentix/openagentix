@@ -123,7 +123,7 @@ If the project joins a foundation, ownership of the name and other assets moves 
 - The changelog is updated before a release is made. A release is a git tag `vX.Y.Z` made by a maintainer.
 - Only tested changes are released. Tests must pass (`make test`), and anything proven on a cluster has its limits written down.
 - Security fixes may be released as a patch at any time.
-- Release signing and an SBOM are planned for release 0.3. They are not done yet.
+- Release images and the chart are signed with keyless cosign, each image has an SPDX SBOM, and every artefact has build provenance ([ADR 0018](docs/decisions/0018-release-signing-and-sbom.md), [how to verify](docs/diary/guide/verify-release.md)). This has not run on a real tag yet. The git tag itself is not signed yet.
 
 ## Communication
 

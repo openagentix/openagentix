@@ -63,5 +63,6 @@ Follow the style of the existing records:
 | [0013](0013-focus-and-runtime-neutrality.md) | One focus, bring your own agent, adopted identity | Accepted | 2026-11-25 |
 | [0014](0014-quick-start-profile.md) | A quick start profile that needs no paid key and no chat token | Accepted | 2026-11-25 |
 | [0015](0015-bring-your-own-agent.md) | Bring your own agent: run a user's A2A container under platform control | Accepted | 2026-11-25 |
+| [0018](0018-release-signing-and-sbom.md) | How release artefacts are signed, described and verified | Proposed | 2026-11-25 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.

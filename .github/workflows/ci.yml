@@ -134,6 +134,7 @@ jobs:
           hack/ci/dco-test.sh
           hack/ci/image-tag-test.sh
           hack/ci/release-notes-test.sh
+          hack/ci/verify-release-test.sh
           hack/ci/kind-image-digest-test.sh
           components/quickstart/tests/run.sh
       - name: reference docs tests
