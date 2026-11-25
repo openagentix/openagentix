@@ -93,6 +93,7 @@ line() { /usr/bin/grep -n "$1" "$INS" | head -1 | cut -d: -f1; }
 eq "image builds start before the cluster step"           "$([ "$(line '^start_builds$')" -lt "$(line '^log "cluster ')" ] && echo yes || echo no)" yes
 eq "the build results are collected before the chart"     "$([ "$(line '^finish_builds   #')" -lt "$(line '^helm upgrade --install')" ] && echo yes || echo no)" yes
 eq "the end summary names the console only when the chart renders it" "$(/usr/bin/grep -B2 'Open the console:' "$INS" | /usr/bin/grep -c 'if \[ -n "\$CN_DEP" \]')" 1
+eq "install.sh waits for its own RemoteMCPServers, not for kagent's built-in ones" "$(/usr/bin/grep -c 'wait remotemcpserver --all' "$INS")/$(/usr/bin/grep -c 'select(.kind=="RemoteMCPServer")' "$INS")" 0/1
 eq "the independent prerequisites overlap (PREREQS_PARALLEL)" "$(/usr/bin/grep -c 'PREREQS_PARALLEL' "$INS" | awk '{print ($1>0)?"yes":"no"}')" yes
 
 echo "# kagent's own PostgreSQL is ready only when its final server is up"

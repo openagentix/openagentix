@@ -766,7 +766,11 @@ log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"
 for a in $(jq -r 'select(.kind=="Agent")|.metadata.name' <<<"$RENDERED"); do
   $K wait "agent/$a" -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" || echo "WARN: agent $a not Ready yet: $K get agent $a -n $KAGENT_NS -o yaml"
 done
-$K wait remotemcpserver --all -n $KAGENT_NS --for=condition=Accepted --timeout=120s >/dev/null 2>&1 || echo "WARN: a RemoteMCPServer is not Accepted yet (vMCP may still be starting): $K get remotemcpserver -n $KAGENT_NS"
+# Only the RemoteMCPServers this chart renders (the vMCPs): kagent's own built-in ones (kagent-api, kagent-tool-server) are not ours to wait for,
+# and when one of them cannot connect, `wait --all` used to hold the install for the whole 120 s (seen in CI, issue #29).
+for rm in $(jq -r 'select(.kind=="RemoteMCPServer")|.metadata.name' <<<"$RENDERED"); do
+  $K wait "remotemcpserver/$rm" -n $KAGENT_NS --for=condition=Accepted --timeout=120s >/dev/null 2>&1 || echo "WARN: RemoteMCPServer $rm is not Accepted yet (vMCP may still be starting): $K get remotemcpserver $rm -n $KAGENT_NS"
+done
 
 if [ -n "$CH_CM" ]; then
   log "waiting for the Kourier bindings"
