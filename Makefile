@@ -49,6 +49,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	components/quickstart/tests/run.sh
 	hack/dashboard/tests/run.sh
 	hack/ci/image-tag-test.sh
+	hack/ci/release-notes-test.sh
 	hack/ci/kind-image-digest-test.sh
 	hack/ci/cluster-test.sh
 	hack/docs/tests/run.sh

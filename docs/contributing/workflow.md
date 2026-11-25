@@ -88,8 +88,25 @@ The goal is to end this exception. See "Growing the maintainer group" in [GOVERN
 2. Write the release section in `CHANGELOG.md` first: version, date, what was added, changed, fixed, upgrade notes, security. The changelog is updated before the release is made.
 3. Run `make test` (and the cluster checks that the release claims). Anything proven on a cluster has its limits written down.
 4. Choose the version by [semantic versioning](https://semver.org/). While the version is 0.x, a minor release can change interfaces and the upgrade notes say how.
-5. Tag `vX.Y.Z` from `main` (the tag is signed once release signing exists) and create the GitHub release from the changelog section.
-6. Close the milestone and the tracking issue. Open the next tracking issue if there is none.
+5. Tag `vX.Y.Z` from `main` (the tag is signed once release signing exists) and push the tag. The tag push starts the release workflow (below); you do not create the GitHub release by hand.
+6. Watch the `release` run. When it is green, check the release page and pull one image by digest.
+7. Close the milestone and the tracking issue. Open the next tracking issue if there is none.
+
+### What the release workflow does
+
+`.github/workflows/release.yml` runs on a tag that looks like `vX.Y.Z` (or `vX.Y.Z-rc.1`). It uses only the `GITHUB_TOKEN`.
+
+1. **verify.** `hack/release-notes.sh` checks that the tag is a semantic version and that `CHANGELOG.md` has a non-empty `## [X.Y.Z]` section for it. It fails if not, so write the section before you tag. It also checks that the tagged commit is on `main`.
+2. **checks.** The same jobs as a pull request (`ci.yml`, called as a reusable workflow).
+3. **images.** Each service image is built and pushed to `ghcr.io/openagentix/<name>` with the tag `X.Y.Z`, and its digest is recorded. The images are the Dockerfiles that `hack/ci/dockerfiles.sh` finds, except the samples under `examples/`. linux/amd64 only.
+4. **chart.** `helm package` sets `version` and `appVersion` from the tag, then the chart is pushed to `oci://ghcr.io/openagentix/charts/openagentix`.
+5. **release.** The GitHub release is created for the tag. Its body is the changelog section, then a list of the image references by digest and the chart reference. A tag with a `-` in it (such as `-rc.1`) is marked as a pre-release.
+
+If a job fails, nothing later runs. Fix the cause. Do not move or force-push a tag: if images were already pushed, make a new patch version. A tag whose release failed before the last step can be removed by a maintainer with the delete-tag permission and made again, only if no image was pushed.
+
+**Dry run.** In the Actions tab, run `release` by hand ("Run workflow") on any branch and give a version that has a changelog section. A manual run builds every image and the chart and prints the release body in the job summary, but it never logs in to the registry, pushes, or creates a release. Do this before the first tag of a release.
+
+**What is not here yet.** SBOMs and signatures are issue #7; the image job has a marked place for them. There is no arm64 image. The chart's default image values still point at `openagentix/<name>:dev`, so install from the chart with the image values set until the chart defaults follow the release (see [what works](../diary/what-works.md): the workflow is unproven until a real tag runs).
 
 ## Security fixes
 
