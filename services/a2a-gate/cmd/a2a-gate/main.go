@@ -82,6 +82,7 @@ func run(ctx context.Context, getenv func(string) string, d deps) error {
 		AuditUserID: cfg.AuditUserID, Salt: salt, SniffBytes: cfg.SniffBytes, MaxBody: cfg.MaxBody, MaxInFlight: cfg.MaxInFlight,
 		RoutesFile: cfg.RoutesFile, WorkloadNamespace: cfg.WorkloadNamespace, WorkloadPort: cfg.WorkloadPort,
 		PublicURL: cfg.PublicURL, Ctx: ctx, Log: d.Log,
+		WorkloadHeaderTimeout: time.Duration(cfg.WorkloadHeaderTimeoutSeconds) * time.Second, WorkloadMaxInFlight: cfg.WorkloadMaxInFlight,
 	})
 	if err != nil {
 		return err

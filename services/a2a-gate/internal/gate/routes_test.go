@@ -86,7 +86,7 @@ func TestParseRoutesHostileEntries(t *testing.T) {
 // ---- gate behaviour -------------------------------------------------------------------------------------------
 
 const routedRules = `{"callers":[
- {"name":"bridge","serviceAccount":{"namespace":"gw","name":"bridge"},"agents":["kagent/assistant","kagent/echo-go","kagent/a.evil.com"],"userId":{"fixed":"bridge:u1"}},
+ {"name":"bridge","serviceAccount":{"namespace":"gw","name":"bridge"},"agents":["kagent/assistant","kagent/echo-go","kagent/echo-2","kagent/echo-3","kagent/a.evil.com"],"userId":{"fixed":"bridge:u1"}},
  {"name":"schedule-x","serviceAccount":{"namespace":"sch","name":"schedule-x"},"agents":["kagent/assistant"],"userId":{"exact":"schedule:x"},"methods":["SendMessage"]}
 ]}`
 

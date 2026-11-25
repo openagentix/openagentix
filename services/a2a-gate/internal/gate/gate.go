@@ -51,11 +51,12 @@ type Options struct {
 	// the request is proxied, so a long upload or a long stream is not cut by it.
 	SniffTimeout time.Duration
 	Transport    http.RoundTripper
-	// WorkloadHeaderTimeout is how long a container agent may take to start its response (default 60 s). Streaming
-	// calls are exempt: their body is the long part.
+	// WorkloadHeaderTimeout is how long a container agent may take to start its answer (default 300 s), streaming
+	// calls included. Once the response headers are in, the body is not timed.
 	WorkloadHeaderTimeout time.Duration
-	// WorkloadMaxInFlight caps the requests one container agent handles at once (default 32); the next one gets 503
-	// and the shared MaxInFlight slots stay free for the other agents.
+	// WorkloadMaxInFlight caps the requests one container agent handles at once (default 32); the next call for
+	// that agent gets 503, for every caller. All container agents together also share one pool of half of
+	// MaxInFlight (at least 1), so they can never take the slots the built-in agents need.
 	WorkloadMaxInFlight int
 
 	// Bring your own A2A agent (routes.go). All off while RoutesFile is empty.
@@ -73,7 +74,7 @@ const (
 	defaultMaxBody     = 8 << 20
 	defaultMaxInFlight = 128
 	defaultSniffWait   = 10 * time.Second
-	defaultWorkHeader  = 60 * time.Second
+	defaultWorkHeader  = 300 * time.Second
 	defaultWorkInFlite = 32
 	maxAuditUserBytes  = 128
 )
@@ -94,6 +95,7 @@ type handler struct {
 	slots  chan struct{}
 	routes atomic.Pointer[RouteSet]
 
+	workPool   chan struct{} // all container agents together: half of MaxInFlight
 	agentMu    sync.Mutex
 	agentSlots map[string]chan struct{} // per container agent, created on first use
 }
@@ -131,7 +133,7 @@ func New(o Options) (http.Handler, error) {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
-	h := &handler{o: o, slots: make(chan struct{}, o.MaxInFlight)}
+	h := &handler{o: o, slots: make(chan struct{}, o.MaxInFlight), workPool: make(chan struct{}, max(1, o.MaxInFlight/2))}
 	if err := h.initRoutes(); err != nil {
 		return nil, err
 	}
@@ -343,7 +345,6 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 		a.userID = id
 	}
 
-	streaming := false
 	// 4. the body. Only its start is read (SniffBytes, within SniffTimeout), to learn the JSON-RPC method and the
 	// contextId; the rest streams through untouched. On the JSON-RPC route the whole body must fit in that start:
 	// the method is then checked on exactly the bytes the agent will read, duplicate keys included.
@@ -378,7 +379,6 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 			a.contextID = contextIDFromText(head)
 		}
 		a.rpc = auditMethod(method)
-		streaming = method == "SendStreamingMessage"
 		if !caller.AllowsMethod(method) {
 			refuse(http.StatusForbidden, "method", "forbidden")
 			return
@@ -388,10 +388,19 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 	if t := h.workloadTarget(ns, name, route); t != nil {
 		ctx = context.WithValue(ctx, keyTarget, t)
 	}
-	if t, ok := ctx.Value(keyTarget).(*target); ok {
-		t.stream = streaming
-		// one container agent cannot use up the shared slots: it has its own, and a full agent answers 503 alone
+	if _, ok := ctx.Value(keyTarget).(*target); ok {
+		// container agents have a pool of their own (half of the shared slots) and each has a cap inside it: one
+		// slow agent answers 503 alone, and the built-in agents keep their slots
 		slot := h.agentSlot(ns, name)
+		select {
+		case h.workPool <- struct{}{}:
+			defer func() { <-h.workPool }()
+		default:
+			a.reason = "workload_busy"
+			w.Header().Set("Retry-After", "1")
+			deny(w, http.StatusServiceUnavailable, "service unavailable")
+			return
+		}
 		select {
 		case slot <- struct{}{}:
 			defer func() { <-slot }()
@@ -422,10 +431,10 @@ func (h *handler) agentSlot(ns, name string) chan struct{} {
 
 // request headers a container agent may receive. Credentials, cookies, forwarding and browser headers never do. X-User-Id
 // is set by the gate itself after this list is applied.
-var workloadRequestHeaders = []string{"Content-Type", "Accept", "A2A-Version", "A2A-Extensions", "Traceparent"}
+var workloadRequestHeaders = []string{"Content-Type", "Accept", "A2A-Version", "A2A-Extensions", "Traceparent", "Tracestate"}
 
 // headerTimeoutTransport ends a request to a container agent that has not started its response in time. Once the
-// response headers are in, the timer is gone: a slow body is not cut. Streaming calls and built-in agents are not timed.
+// response headers are in, the timer is gone: a slow body is not cut. Built-in agents are not timed here.
 type headerTimeoutTransport struct {
 	base http.RoundTripper
 	d    time.Duration
@@ -433,7 +442,7 @@ type headerTimeoutTransport struct {
 
 func (t headerTimeoutTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	tg, _ := r.Context().Value(keyTarget).(*target)
-	if tg == nil || tg.stream {
+	if tg == nil {
 		return t.base.RoundTrip(r)
 	}
 	ctx, cancel := context.WithCancel(r.Context())

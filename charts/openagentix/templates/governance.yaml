@@ -98,6 +98,8 @@ spec:
             - {name: A2A_GATE_ROUTES_FILE, value: /etc/a2a-gate/routes/routes.json}
             - {name: A2A_GATE_WORKLOAD_NAMESPACE, value: {{ .Values.controlPlane.containerAgents.namespace | quote }}}
             - {name: A2A_GATE_PUBLIC_URL, value: {{ .Values.controlPlane.containerAgents.publicUrl | default (include "oa.a2aGateUrl" .) | quote }}}
+            - {name: A2A_GATE_WORKLOAD_HEADER_TIMEOUT_SECONDS, value: {{ .Values.controlPlane.containerAgents.responseTimeoutSeconds | default 300 | quote }}}
+            - {name: A2A_GATE_WORKLOAD_MAX_INFLIGHT, value: {{ .Values.controlPlane.containerAgents.maxInFlightPerAgent | default 32 | quote }}}
             {{- end }}
           volumeMounts:
             - {name: rules, mountPath: /etc/a2a-gate/rules, readOnly: true}

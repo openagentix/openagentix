@@ -110,7 +110,7 @@ These values are not part of the policy file. They sit next to it in `controlPla
 | `controlPlane.minInterval` | `""` |
 | `controlPlane.minRecreateInterval` | `""` |
 | `controlPlane.apiServerPorts` | `[443,6443]` |
-| `controlPlane.containerAgents` | `{"enabled":false,"namespace":"openagentix-workloads","runtimeClassName":"","publicUrl":"","gatewayPodPort":0,"imagePullPolicy":"Always"}` |
+| `controlPlane.containerAgents` | `{"enabled":false,"namespace":"openagentix-workloads","runtimeClassName":"","publicUrl":"","gatewayPodPort":0,"imagePullPolicy":"Always","responseTimeoutSeconds":300,"maxInFlightPerAgent":32}` |
 | `controlPlane.memoryDefaultTtlDays` | `15` |
 <!-- generated:end cp-defaults -->
 
