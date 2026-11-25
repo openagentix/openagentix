@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -76,22 +77,7 @@ func TestGoldenAndTheObjectsTheGuardIsFedWith(t *testing.T) {
 		if err := os.WriteFile(goldenPath, []byte(pretty(objects(ms))), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		// what the guard sees: the adapter's objects with what the core stamps on them (labels, the UID annotation)
-		var stamped []any
-		for _, m := range ms {
-			o := deepCopy(m.Object)
-			md := kube.Meta(o)
-			l, _ := md["labels"].(map[string]any)
-			l[api.LabelManagedBy], l[api.LabelDefinition], l[api.LabelDefinitionNamespace] = api.ManagedByValue, "echo-go", "kagent"
-			an, _ := md["annotations"].(map[string]any)
-			if an == nil {
-				an = map[string]any{}
-			}
-			an[api.AnnotationDefinitionUID] = "0a1b2c3d-1111-4222-8333-444444444444"
-			md["annotations"] = an
-			stamped = append(stamped, o)
-		}
-		if err := os.WriteFile(objectsPath, []byte(pretty(map[string]any{"apiVersion": "v1", "kind": "List", "items": stamped})), 0o644); err != nil {
+		if err := os.WriteFile(objectsPath, []byte(pretty(map[string]any{"apiVersion": "v1", "kind": "List", "items": stamp(ms)})), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,6 +88,25 @@ func TestGoldenAndTheObjectsTheGuardIsFedWith(t *testing.T) {
 	if got := pretty(objects(ms)); got != string(want) {
 		t.Fatalf("golden differs; run with -update and review the diff:\n%s", got)
 	}
+}
+
+// stamp is what the guard sees: the adapter's objects with what the core stamps on them (labels, the UID annotation).
+func stamp(ms []kube.Manifest) []any {
+	var stamped []any
+	for _, m := range ms {
+		o := deepCopy(m.Object)
+		md := kube.Meta(o)
+		l, _ := md["labels"].(map[string]any)
+		l[api.LabelManagedBy], l[api.LabelDefinition], l[api.LabelDefinitionNamespace] = api.ManagedByValue, "echo-go", "kagent"
+		an, _ := md["annotations"].(map[string]any)
+		if an == nil {
+			an = map[string]any{}
+		}
+		an[api.AnnotationDefinitionUID] = "0a1b2c3d-1111-4222-8333-444444444444"
+		md["annotations"] = an
+		stamped = append(stamped, o)
+	}
+	return stamped
 }
 
 func deepCopy(o kube.Object) kube.Object {
@@ -363,6 +368,117 @@ func deploy(gen, observed float64, avail float64, conds ...map[string]any) kube.
 
 func cond(t, s, reason, msg string) map[string]any {
 	return map[string]any{"type": t, "status": s, "reason": reason, "message": msg}
+}
+
+// toolsPlan is samplePlan with the tool profile lookup (ADR 0019).
+func toolsPlan() plan.Plan {
+	p := samplePlan()
+	p.ToolAccess = &plan.ToolAccess{Profile: "lookup", URL: "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp",
+		Audience: "openagentix-vmcp-lookup-workload", Namespace: "mcp-tools",
+		PodSelector: map[string]string{"app": "virtualmcpserver", "toolhive-name": "tools-lookup-workload"}, Port: 4483}
+	return p
+}
+
+const (
+	goldenToolsPath  = "../../../testdata/golden-container-tools.json"
+	objectsToolsPath = "../../../testdata/container-objects-tools.json"
+)
+
+func TestGoldenWithAToolProfile(t *testing.T) {
+	ms := render(t, toolsPlan(), cat())
+	if *update {
+		if err := os.WriteFile(goldenToolsPath, []byte(pretty(objects(ms))), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(objectsToolsPath, []byte(pretty(map[string]any{"apiVersion": "v1", "kind": "List", "items": stamp(ms)})), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldenToolsPath)
+	if err != nil {
+		t.Fatalf("%v (run: go test ./internal/adapters/container -update)", err)
+	}
+	if got := pretty(objects(ms)); got != string(want) {
+		t.Fatalf("golden differs; run with -update and review the diff:\n%s", got)
+	}
+}
+
+// With a profile the pod gets the URL, a token file the kubelet writes (no Secret), its profile label, and one more egress rule;
+// nothing else changes. Without a profile nothing of this appears (TestGoldenAndTheObjectsTheGuardIsFedWith).
+func TestToolAccess(t *testing.T) {
+	ms := render(t, toolsPlan(), cat())
+	d := byKind(ms, "Deployment")
+	pod := dig(t, d, "spec", "template", "spec").(map[string]any)
+	if pod["automountServiceAccountToken"] != false {
+		t.Fatal("the pod still gets no token the Kubernetes API accepts")
+	}
+	if l := dig(t, d, "spec", "template", "metadata", "labels").(map[string]any); len(l) != 2 || l["openagentix.io/agent"] != "echo-go" || l["openagentix.io/tool-profile"] != "lookup" {
+		t.Fatalf("pod labels: %v", l)
+	}
+	if sel := dig(t, d, "spec", "selector", "matchLabels").(map[string]any); len(sel) != 1 {
+		t.Fatalf("the selector stays the agent label only: %v", sel)
+	}
+	c := pod["containers"].([]any)[0].(map[string]any)
+	env := map[string]any{}
+	var names []string
+	for _, e := range c["env"].([]any) {
+		e := e.(map[string]any)
+		names = append(names, e["name"].(string))
+		env[e["name"].(string)] = e["value"]
+	}
+	if strings.Join(names, ",") != "OPENAI_API_KEY,OPENAI_BASE_URL,OPENAGENTIX_MODEL,OPENAGENTIX_MCP_URL,OPENAGENTIX_MCP_TOKEN_FILE,A_FLAG,LOG_LEVEL" {
+		t.Fatalf("env order: %v", names)
+	}
+	if env["OPENAGENTIX_MCP_URL"] != "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp" || env["OPENAGENTIX_MCP_TOKEN_FILE"] != "/var/run/secrets/openagentix/mcp/token" {
+		t.Fatalf("%v", env)
+	}
+	vols := pod["volumes"].([]any)
+	if len(vols) != 2 || vols[0].(map[string]any)["name"] != "tmp" {
+		t.Fatalf("%v", vols)
+	}
+	tok := vols[1].(map[string]any)
+	srcs := dig(t, tok, "projected", "sources").([]any)
+	if tok["name"] != "mcp-token" || len(srcs) != 1 || len(tok) != 2 {
+		t.Fatalf("%v", tok)
+	}
+	sat := dig(t, srcs[0], "serviceAccountToken").(map[string]any)
+	if len(srcs[0].(map[string]any)) != 1 || sat["audience"] != "openagentix-vmcp-lookup-workload" || sat["expirationSeconds"] != float64(3600) || sat["path"] != "token" || len(sat) != 3 {
+		t.Fatalf("one ServiceAccount token, the profile's audience, one hour: %v", sat)
+	}
+	mounts := c["volumeMounts"].([]any)
+	if len(mounts) != 2 || mounts[1].(map[string]any)["name"] != "mcp-token" || mounts[1].(map[string]any)["mountPath"] != "/var/run/secrets/openagentix/mcp" || mounts[1].(map[string]any)["readOnly"] != true {
+		t.Fatalf("%v", mounts)
+	}
+	eg := dig(t, byKind(ms, "NetworkPolicy"), "spec", "egress").([]any)
+	if len(eg) != 3 {
+		t.Fatalf("DNS, the gateway and the profile's tool server: %v", eg)
+	}
+	to := eg[2].(map[string]any)["to"].([]any)
+	if len(to) != 1 || dig(t, to[0], "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name") != "mcp-tools" ||
+		dig(t, to[0], "podSelector", "matchLabels", "toolhive-name") != "tools-lookup-workload" || eg[2].(map[string]any)["ports"].([]any)[0].(map[string]any)["port"] != float64(4483) {
+		t.Fatalf("%v", eg[2])
+	}
+	// the other objects are those of an agent without tools
+	plain := render(t, samplePlan(), cat())
+	for _, k := range []string{"Service", "ServiceAccount"} {
+		if pretty(byKind(ms, k)) != pretty(byKind(plain, k)) {
+			t.Errorf("%s changed with a tool profile", k)
+		}
+	}
+	b, _ := json.Marshal(objects(ms))
+	if strings.Contains(string(b), "secretName") || strings.Contains(string(b), `"secret"`) {
+		t.Fatal("the token comes from the kubelet, not from a Secret")
+	}
+}
+
+func TestNoKeyOutsideTheDocumentedSetWithTools(t *testing.T) {
+	podSpec := []string{"serviceAccountName", "automountServiceAccountToken", "enableServiceLinks", "securityContext", "containers", "volumes"}
+	d := byKind(render(t, toolsPlan(), cat()), "Deployment")
+	for k := range dig(t, d, "spec", "template", "spec").(map[string]any) {
+		if !slices.Contains(podSpec, k) {
+			t.Errorf("pod spec.%s", k)
+		}
+	}
 }
 
 func TestReadinessFromTheDeploymentStatusOnly(t *testing.T) {

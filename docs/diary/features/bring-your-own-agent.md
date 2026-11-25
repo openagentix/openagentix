@@ -31,7 +31,7 @@ flowchart LR
 
 ## What is refused
 
-`instructions`, `instructionsFrom`, `tools`, `toolProfile`, `egress.allow`, `memory`, `knowledge`, `notify`, `skills`; images without a digest or outside the allowed registries; the runtime itself when `allowedRuntimes` does not list it (the default is `[builtin]`).
+`instructions`, `instructionsFrom`, `tools`, a `toolProfile` the operator has not opened to container agents (see below), `egress.allow`, `memory`, `knowledge`, `notify`, `skills`; images without a digest or outside the allowed registries; the runtime itself when `allowedRuntimes` does not list it (the default is `[builtin]`).
 
 ## Isolation, plainly
 
@@ -51,6 +51,27 @@ What was run: 20 unit tests with a fake model, a contract test that sends a mess
 
 Not shown: the image build and a run on a cluster (see the README of the sample), whether LangGraph, Google ADK or CrewAI serve A2A 1.0 themselves.
 
+## Tools through a tool profile (slice 3)
+
+ADR 0019. The operator opens a profile to container agents by name: `controlPlane.containerAgents.toolProfiles: [lookup]`. The chart then renders a second tool server for that profile, `tools-lookup-workload`, with the same tools. It accepts only a Kubernetes ServiceAccount token with the audience `openagentix-vmcp-lookup-workload`, and its policy admits only tokens that the kubelet made for a pod of the workload namespace.
+
+```mermaid
+flowchart LR
+  K[kubelet] -->|projected token, 1 h, own audience| P[Agent pod, label tool-profile=lookup]
+  P -->|OPENAGENTIX_MCP_URL + Bearer token| V[tools-lookup-workload]
+  V -->|same filter as profile lookup| B[Tool backends]
+```
+
+A definition with `toolProfile: lookup` gets, in its pod: `OPENAGENTIX_MCP_URL`, `OPENAGENTIX_MCP_TOKEN_FILE` (the kubelet writes and replaces the token; there is no Secret and the controller reads nothing), the label `openagentix.io/tool-profile: lookup`, and one more egress rule to that server. The agent gets every tool of the profile. `tools` stays refused, so make a narrower profile if you need fewer tools. The admission guard pins the label, the token (audience, path, at most one hour, read-only), the two variables and the egress rule to an opened profile.
+
+Two admission policies cover the workload namespace for every user except the controller and the cluster's own controllers, a cluster admin included: no pod or pod template there may carry the tool-profile label or a projected ServiceAccount token, and only the kubelet may request a token there.
+
+Limits, plainly: any pod in the cluster can ask for a token with this audience for its own ServiceAccount, so the namespace rule in the server's policy is what keeps other namespaces out. A token is not revoked when the agent is removed; it stays valid until it expires (at most one hour). Where NetworkPolicy is not enforced, a token that leaves the pod can be used from elsewhere until then; the network rule is a second layer only where the cluster enforces NetworkPolicy. All agents on one profile look the same to the server. One more pod per opened profile.
+
+Try it in the quick start (`QUICKSTART_BYO=1`): the profile `lookup` is open and the sample has `toolProfile: lookup`. `hack/ask.sh echo-go /tools` answers `tools: osv_query_vulnerability`. This was shown on kind in the `e2e` job; on k3s the tool server could not fetch the cluster's signing keys. Details in [What works](../what-works.md).
+
+What was run: see the row in [What works](../what-works.md).
+
 ## Not done yet
 
-Tools through a tool profile (slice 3), the conformance checker (slice 2), an egress allowlist (slice 5), enrolling a workload you run yourself, private registries.
+An egress allowlist (slice 5), enrolling a workload you run yourself, private registries.

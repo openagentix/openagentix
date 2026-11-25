@@ -15,7 +15,7 @@ type fakeTools struct{ c *catalog.Catalog }
 
 func (f fakeTools) Profile(n string) (catalog.ToolProfile, bool) {
 	p, ok := f.c.Tools.Toolhive.Profile(n)
-	return catalog.ToolProfile{Name: p.Name, Backend: p.ToolServer, Tools: p.Tools}, ok
+	return catalog.ToolProfile{Name: p.Name, Backend: p.ToolServer, Tools: p.Tools, Workload: p.Workload}, ok
 }
 func (f fakeTools) Profiles() []string {
 	var n []string

@@ -30,8 +30,12 @@ var gvr = map[string][2]string{
 }
 
 func containerObjects(t *testing.T, r *rendered) map[string]m {
+	return containerObjectsFrom(t, r, "services/control-plane/testdata/container-objects.json")
+}
+
+func containerObjectsFrom(t *testing.T, r *rendered, path string) map[string]m {
 	var list m
-	readJSON(t, "services/control-plane/testdata/container-objects.json", &list)
+	readJSON(t, path, &list)
 	ck := r.docsCatalogContainer(t)
 	out := map[string]m{}
 	for _, it := range list["items"].([]any) {
@@ -327,6 +331,11 @@ func server2(o m) m {
 		}
 		c["terminationMessagePath"], c["terminationMessagePolicy"] = "/dev/termination-log", "File"
 		sp["template"].(m)["metadata"].(m)["creationTimestamp"] = nil
+		for _, v := range pod["volumes"].([]any) { // a projected volume gets its default mode (0644)
+			if pr, ok := v.(m)["projected"].(m); ok {
+				pr["defaultMode"] = int64(420)
+			}
+		}
 	case "Service":
 		sp := n["spec"].(m)
 		sp["clusterIP"], sp["clusterIPs"], sp["ipFamilies"] = "10.0.0.1", []any{"10.0.0.1"}, []any{"IPv4"}

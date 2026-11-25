@@ -67,6 +67,26 @@ spec:
             matchLabels: {{- toYaml $n.controllerPodLabels | nindent 14 }}
         {{- end }}
 {{- end }}
+{{- range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}
+---
+# Tool profile {{ $w.name }} for container agents (ADR 0019): only pods of the workload namespace that carry the profile's label reach its
+# workload vMCP. The controller sets the label; the admission guard pins it to a listed profile.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openagentix-vmcp-ingress-{{ $w.name }}-workload
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app: virtualmcpserver, toolhive-name: {{ $w.server | quote }}}
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{protocol: TCP, port: {{ $w.port }}}]
+      from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $.Values.controlPlane.containerAgents.namespace }}}}
+          podSelector: {matchLabels: {openagentix.io/tool-profile: {{ $w.name | quote }}}}
+{{- end }}
 {{- if and (include "oa.obsOn" .) .Values.observability.bundled.enabled }}
 ---
 # The bundled VictoriaMetrics scrapes the vMCP's Prometheus port (ToolHive diagnostics, 9464). Nothing else is added.

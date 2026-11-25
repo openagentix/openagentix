@@ -131,6 +131,63 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   GWLOG=$($K logs -n agentgateway-system -l gateway.networking.k8s.io/gateway-name=model-gateway --tail=400 2>/dev/null | grep -c 'kagent.echo-go' || true)
   echo "      gateway log lines that mention kagent.echo-go: ${GWLOG:-0}"
   [ "${GWLOG:-0}" -gt 0 ] && ok "the gateway log shows the request under the gateway user kagent.echo-go" || echo "      (note: the gateway log does not name the user at this log level; the key entry above is the proof of identity)"
+  echo "# 6a. tools through the profile lookup (ADR 0019)"
+  check "the pod carries the profile label" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.metadata.labels.openagentix\.io/tool-profile}' 2>/dev/null)" lookup
+  check "the pod gets the tool URL" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.spec.containers[0].env[?(@.name=="OPENAGENTIX_MCP_URL")].value}' 2>/dev/null)" "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp"
+  check "the token is a projected ServiceAccount token with the profile's audience" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.spec.volumes[?(@.name=="mcp-token")].projected.sources[0].serviceAccountToken.audience}' 2>/dev/null)" openagentix-vmcp-lookup-workload
+  $K wait virtualmcpserver/tools-lookup-workload -n mcp-tools --for=jsonpath='{.status.phase}'=Ready --timeout=180s >/dev/null 2>&1 \
+    && ok "the workload tool server is Ready" || bad "the workload tool server is not Ready" "$($K get virtualmcpserver tools-lookup-workload -n mcp-tools -o jsonpath='{.status}' 2>&1 | cut -c1-400)"
+  T0=$(date +%s); TOOLS=""
+  while :; do
+    TOOLS=$(hack/ask.sh echo-go "/tools" 2>&1); RC=$?
+    [ "$RC" = 0 ] && grep -q 'osv_query_vulnerability' <<<"$TOOLS" && break
+    [ $(( $(date +%s) - T0 )) -ge "${SMOKE_TOOLS_WAIT:-180}" ] && break
+    sleep 5
+  done
+  echo "      /tools answered after $(( $(date +%s) - T0 )) s: $(printf '%s' "$TOOLS" | tr '\n' ' ' | cut -c1-300)"
+  grep -q 'tools: osv_query_vulnerability' <<<"$TOOLS" && ok "echo-go listed the profile's one tool through the workload tool server (its own token, its own network rule)" \
+    || { bad "echo-go could not list the profile's tools" "$(printf '%s' "$TOOLS" | cut -c1-300)"
+         $K logs -n mcp-tools -l toolhive-name=tools-lookup-workload --tail=400 2>&1 | grep -v '"AUDIT"\|cache sync' | tail -20 | cut -c1-400 | sed 's/^/      workload vMCP log: /'
+         $K logs -n "$WNS" -l openagentix.io/agent=echo-go --tail=10 2>&1 | cut -c1-300 | sed 's/^/      echo-go log: /'; }
+  # The identity, from outside: the port-forward goes around network policy on purpose, so only the token decides here.
+  VPF=$((20000 + RANDOM % 20000)); $K port-forward -n mcp-tools svc/vmcp-tools-lookup-workload "$VPF:4483" >/dev/null 2>&1 & VPID=$!; sleep 3
+  # The positive control of this flow is the /tools answer above: the agent ran the same initialize, initialized and tools/list with its
+  # own pod-bound token. A token for a ServiceAccount of the workload namespace cannot be made from outside (admission refuses it).
+  OUT=$($K create token echo-go -n "$WNS" --audience openagentix-vmcp-lookup-workload --duration 10m 2>&1 >/dev/null); RC=$?
+  if [ "$RC" != 0 ] && grep -q 'only the kubelet may request a ServiceAccount token' <<<"$OUT"; then ok "a token for the agent's ServiceAccount cannot be requested from outside, not even by the cluster admin"
+  else bad "a token for the agent's ServiceAccount could be requested from outside" "exit $RC: $(printf '%s' "$OUT" | cut -c1-200)"; fi
+  mcp_list() { # mcp_list <token>: "<initialize status>|<session id>|<tools/list status>|<tools/list body>"
+    local h st sid ls body
+    h=$(mktemp)
+    st=$(curl -sS -D "$h" -o "$h.body" -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null)
+    sid=$(tr -d '\r' < "$h" | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
+    case "$st" in 401|403) body="initialize: $(tr '\n' ' ' < "$h.body" | cut -c1-700)";; esac   # the server's reason (no token in it)
+    rm -f "$h" "$h.body"
+    if [ -n "$sid" ]; then
+      curl -sS -o /dev/null --max-time 10 -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+        -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null
+      body=$(curl -sS -w '\n%{http_code}' --max-time 10 -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -X POST \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "http://127.0.0.1:$VPF/mcp" 2>/dev/null)
+      ls=$(tail -n1 <<<"$body"); body=$(sed '$d' <<<"$body" | tr '\n' ' ' | cut -c1-400)
+    fi
+    printf '%s|%s|%s|%s' "$st" "$sid" "${ls:-}" "${body:-}"
+  }
+  denied() { # denied <desc> <mcp_list output>: an explicit refusal, or a list without the profile's tool
+    local st sid ls body; IFS='|' read -r st sid ls body <<<"$2"
+    echo "      $1: initialize HTTP $st, session ${sid:+set}${sid:-EMPTY}, tools/list HTTP ${ls:--}: $(printf '%s' "$body" | cut -c1-700)"
+    case "$st" in 401|403) ok "$1: refused at initialize (HTTP $st)"; return;; esac
+    if [ -z "$sid" ]; then bad "$1: no session id, so the check cannot judge" "initialize HTTP $st"; return; fi
+    case "$ls" in 401|403) ok "$1: tools/list refused (HTTP $ls)"; return;; esac
+    if grep -q 'osv_query_vulnerability' <<<"$body"; then bad "$1: the profile's tool was listed" "$body"
+    elif grep -q '"error"' <<<"$body" || grep -Eq '"tools": ?\[\]' <<<"$body"; then ok "$1: tools/list gave an authorization error or an empty list"
+    else bad "$1: no explicit refusal" "$body"; fi
+  }
+  TK=$($K create token quickstart-ask -n openagentix-system --audience openagentix-vmcp-lookup-workload --duration 10m 2>/dev/null)
+  denied "a ServiceAccount of another namespace with the profile's audience" "$(mcp_list "$TK")"
+  TK=$($K create token quickstart-ask -n openagentix-system --audience openagentix-vmcp-lookup --duration 10m 2>/dev/null)
+  denied "a token with another audience" "$(mcp_list "$TK")"
+  kill $VPID 2>/dev/null; unset TK
   echo "# 6b. a container agent that policy must refuse"
   GOODREF=$($K get agentdefinition echo-go -n "$NS" -o jsonpath='{.spec.runtime.container.image}')
   DIGEST=${GOODREF#*@}
@@ -148,6 +205,7 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   refuse_def byo-bad-registry "not under a registry prefix" "docker.io/evil/agent@$DIGEST"
   refuse_def byo-bad-tag "must be pinned by digest" "registry.local/oa/echo-a2a:latest"
   refuse_def byo-bad-tools "tools cannot be listed" "$GOODREF" '{"tools":["osv_query_vulnerability"]}'
+  refuse_def byo-bad-profile "is not defined" "$GOODREF" '{"toolProfile":"nope"}'
 fi
 
 echo; echo "smoke: passed=$pass failed=$fail"

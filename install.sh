@@ -806,7 +806,8 @@ if [ "$QS" = 1 ]; then
     log "sample container agent (bring your own agent)"
     BYO_REF=$(hack/kind-image-digest.sh "$CLUSTER" "$BYO_REPO" "${BYO_IMAGE##*:}") || die "no digest for the sample image: see the line above"
     echo "image $BYO_REF"
-    yq --arg i "$BYO_REF" '.spec.runtime.container.image=$i' examples/agents/echo-a2a/agent.yaml > "$QS_TMP/byo.json"
+    # the quick start opens the profile lookup to container agents (components/quickstart/byo-values.yaml, ADR 0019)
+    yq --arg i "$BYO_REF" '.spec.runtime.container.image=$i | .spec.toolProfile="lookup"' examples/agents/echo-a2a/agent.yaml > "$QS_TMP/byo.json"
     $K apply -f "$QS_TMP/byo.json" >/dev/null || die "could not create the echo-go AgentDefinition"
     $K wait agentdefinition/echo-go -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
       || { echo "WARN: the echo-go agent is not Ready yet: $K get agentdefinition echo-go -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition echo-go -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }

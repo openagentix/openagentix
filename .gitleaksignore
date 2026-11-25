@@ -13,3 +13,7 @@ services/control-plane/testdata/golden-container.json:generic-api-key:36
 76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/internal/adapters/container/container_test.go:generic-api-key:40
 76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/testdata/container-objects.json:generic-api-key:50
 76465acd723702b6106b99ee16c68c5aa6b9ff6b:services/control-plane/testdata/golden-container.json:generic-api-key:36
+services/control-plane/testdata/container-objects-tools.json:generic-api-key:50
+services/control-plane/testdata/golden-container-tools.json:generic-api-key:36
+905ef73e86d04d132f04b344b28211c518e4c4b3:services/control-plane/testdata/container-objects-tools.json:generic-api-key:50
+905ef73e86d04d132f04b344b28211c518e4c4b3:services/control-plane/testdata/golden-container-tools.json:generic-api-key:36

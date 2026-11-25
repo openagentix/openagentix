@@ -28,6 +28,7 @@ type fakeContainerRuntime struct {
 	mu      sync.Mutex
 	onReady func() // called from Readiness
 	ready   plan.Readiness
+	last    plan.Plan // the last plan Desired was given
 }
 
 func (f *fakeContainerRuntime) Name() string { return "fakec" }
@@ -52,6 +53,9 @@ func (f *fakeContainerRuntime) Readiness(context.Context, plan.Plan) (plan.Readi
 	return f.ready, nil
 }
 func (f *fakeContainerRuntime) Desired(p plan.Plan) ([]kube.Manifest, error) {
+	f.mu.Lock()
+	f.last = p
+	f.mu.Unlock()
 	mk := func(api, kind, name string) kube.Object {
 		return kube.Object{"apiVersion": api, "kind": kind, "metadata": kube.Object{"name": name, "namespace": workloadNS}, "spec": kube.Object{"image": p.Container.Image, "key": p.KeySecret}}
 	}
@@ -201,6 +205,35 @@ func TestContainerAgentIsWrittenToTheWorkloadNamespaceWithoutOwnerReferences(t *
 	e.pass(t)
 	if got := len(e.srv.Matching("PATCH", "/deployments/")); got != n+1 { // server-side apply is idempotent; no new object, no Secret request
 		t.Logf("applies: %d -> %d", n, got)
+	}
+}
+
+// ADR 0019: a container agent on a profile the operator opened gets the profile's workload access in its plan; on a profile that is
+// not open it is refused and nothing is written.
+func TestContainerAgentWithAToolProfile(t *testing.T) {
+	e, fc, _ := containerEnv(t)
+	e.cat.Tools.Toolhive.Profiles[0].Workload = &catalog.WorkloadAccess{URL: "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp",
+		Audience: "openagentix-vmcp-lookup-workload", Namespace: "mcp-tools", PodSelector: map[string]string{"toolhive-name": "tools-lookup-workload"}, Port: 4483}
+	e.seedContainer("echo", func(s map[string]any) { s["toolProfile"] = "lookup" })
+	e.pass(t)
+	wantCond(t, e.status("echo"), "Ready", "True", "Ready")
+	fc.mu.Lock()
+	ta := fc.last.ToolAccess
+	fc.mu.Unlock()
+	if ta == nil || ta.Profile != "lookup" || ta.Audience != "openagentix-vmcp-lookup-workload" {
+		t.Fatalf("%+v", ta)
+	}
+
+	e2, _, _ := containerEnv(t) // the same profile, not open to container agents
+	e2.seedContainer("echo", func(s map[string]any) { s["toolProfile"] = "lookup" })
+	e2.pass(t)
+	st := e2.status("echo")
+	wantCond(t, st, "Accepted", "False", "PolicyViolation")
+	if !strings.Contains(strings.Join(st.Violations, " "), `toolProfile "lookup" is not open to container agents`) {
+		t.Fatalf("%v", st.Violations)
+	}
+	if _, ok := e2.srv.Get("deployments", workloadNS, "echo"); ok {
+		t.Fatal("nothing is written for a refused definition")
 	}
 }
 

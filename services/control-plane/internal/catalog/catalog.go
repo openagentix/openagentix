@@ -109,6 +109,50 @@ type ToolhiveProfile struct {
 	ToolServer string   `json:"toolServer"` // name of the tool-server object an agent with this profile uses
 	CodeMode   bool     `json:"codeMode"`
 	Tools      []string `json:"tools"` // agent-side names the profile offers, the code-mode tool included when codeMode
+	// Workload is set only for a profile the operator opened to container agents (ADR 0019): the second tool server of the
+	// profile, which accepts a Kubernetes ServiceAccount token of the workload namespace.
+	Workload *WorkloadAccess `json:"workload,omitempty"`
+}
+
+// WorkloadAccess is how a container agent reaches the tools of a profile (ADR 0019): the URL it calls, the audience of the
+// token the kubelet projects into its pod, and the pods and port its NetworkPolicy may reach.
+type WorkloadAccess struct {
+	URL         string            `json:"url"`
+	Audience    string            `json:"audience"`
+	Namespace   string            `json:"namespace"`
+	PodSelector map[string]string `json:"podSelector"`
+	Port        int               `json:"port"`
+}
+
+var audienceRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+
+// validate checks one workload entry. It must point into the tools namespace: anything else would let the catalog open a path
+// from foreign code to some other service.
+func (w *WorkloadAccess) validate(prefix, toolsNS string) []error {
+	var errs []error
+	if u, err := url.Parse(w.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		errs = append(errs, fmt.Errorf("%s.url must be an http or https URL with a host and no user", prefix))
+	} else if h := u.Hostname(); toolsNS == "" || !(strings.HasSuffix(h, "."+toolsNS+".svc.cluster.local") || strings.HasSuffix(h, "."+toolsNS+".svc")) {
+		errs = append(errs, fmt.Errorf("%s.url must name a Service of the tools namespace (<name>.%s.svc[.cluster.local])", prefix, toolsNS))
+	}
+	if !audienceRE.MatchString(w.Audience) {
+		errs = append(errs, fmt.Errorf("%s.audience must be lower case letters, digits, dots and dashes", prefix))
+	}
+	if w.Namespace == "" || w.Namespace != toolsNS {
+		errs = append(errs, fmt.Errorf("%s.namespace must be the tools namespace %q", prefix, toolsNS))
+	}
+	if len(w.PodSelector) == 0 {
+		errs = append(errs, fmt.Errorf("%s.podSelector must name at least one label", prefix))
+	}
+	for k, v := range w.PodSelector {
+		if k == "" || v == "" {
+			errs = append(errs, fmt.Errorf("%s.podSelector must not have an empty key or value", prefix))
+		}
+	}
+	if w.Port < 1 || w.Port > 65535 {
+		errs = append(errs, fmt.Errorf("%s.port must be 1..65535", prefix))
+	}
+	return errs
 }
 
 // ToolhiveSettings is the tools adapter's own section of the catalog (tools.toolhive).
@@ -158,6 +202,8 @@ type ToolProfile struct {
 	Name    string
 	Backend string
 	Tools   []string
+	// Workload is how a container agent reaches this profile; nil when the operator has not opened it to container agents.
+	Workload *WorkloadAccess
 }
 
 // ToolResolver turns a profile name into what it offers. It is what the Tools adapter provides.
@@ -242,6 +288,9 @@ func (c *Catalog) validate() error {
 				}
 				if p.CodeMode != slices.Contains(p.Tools, t.CodeModeTool) {
 					errs = append(errs, fmt.Errorf("tools.toolhive.profiles[%d] (%s): %s must be in tools exactly when codeMode is true", i, p.Name, t.CodeModeTool))
+				}
+				if p.Workload != nil {
+					errs = append(errs, p.Workload.validate(fmt.Sprintf("tools.toolhive.profiles[%d] (%s): workload", i, p.Name), c.Namespaces.Tools)...)
 				}
 			}
 		}

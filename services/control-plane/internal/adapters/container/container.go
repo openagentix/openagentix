@@ -24,6 +24,12 @@ const (
 	keyDataKey = "OPENAI_API_KEY"
 	cardPath   = "/.well-known/agent-card.json"
 	runAsID    = 65532
+	// ToolProfileLabel is on the pod of an agent with a tool profile (ADR 0019): the tool server's network policy admits only pods
+	// that carry it with the server's profile.
+	ToolProfileLabel = "openagentix.io/tool-profile"
+	tokenDir         = "/var/run/secrets/openagentix/mcp"
+	tokenFile        = "token"
+	tokenSeconds     = 3600 // the guard allows 600..3600; the kubelet replaces the token at about 80 % of its life
 )
 
 var (
@@ -124,6 +130,10 @@ func (a *Adapter) Desired(p plan.Plan) ([]kube.Manifest, error) {
 		m{"name": "OPENAI_BASE_URL", "value": p.GatewayBaseURL},
 		m{"name": "OPENAGENTIX_MODEL", "value": p.Model},
 	}
+	ta := p.ToolAccess
+	if ta != nil {
+		env = append(env, m{"name": "OPENAGENTIX_MCP_URL", "value": ta.URL}, m{"name": "OPENAGENTIX_MCP_TOKEN_FILE", "value": tokenDir + "/" + tokenFile})
+	}
 	for _, e := range c.Env { // the plan sorted them by name
 		env = append(env, m{"name": e.Name, "value": e.Value})
 	}
@@ -163,6 +173,17 @@ func (a *Adapter) Desired(p plan.Plan) ([]kube.Manifest, error) {
 	if p.KeyFingerprint != "" {
 		tmpl["metadata"].(m)["annotations"] = m{keys.AnnotationFingerprint: p.KeyFingerprint}
 	}
+	if ta != nil {
+		// The kubelet writes a token for the pod's own ServiceAccount with the profile's audience and replaces it before it expires.
+		// No Secret is involved and automountServiceAccountToken stays false: the Kubernetes API does not accept this audience.
+		tmpl["metadata"].(m)["labels"].(m)[ToolProfileLabel] = ta.Profile
+		ps := tmpl["spec"].(m)
+		ps["volumes"] = append(ps["volumes"].([]any), m{"name": "mcp-token", "projected": m{"sources": []any{
+			m{"serviceAccountToken": m{"audience": ta.Audience, "expirationSeconds": tokenSeconds, "path": tokenFile}},
+		}}})
+		ctr := ps["containers"].([]any)[0].(m)
+		ctr["volumeMounts"] = append(ctr["volumeMounts"].([]any), m{"name": "mcp-token", "mountPath": tokenDir, "readOnly": true})
+	}
 	if k.RuntimeClassName != "" {
 		tmpl["spec"].(m)["runtimeClassName"] = k.RuntimeClassName
 	}
@@ -197,6 +218,11 @@ func (a *Adapter) Desired(p plan.Plan) ([]kube.Manifest, error) {
 				"ports": []any{m{"protocol": "TCP", "port": gwPort}}},
 		},
 	}}
+	if ta != nil {
+		npSpec := np["spec"].(m)
+		npSpec["egress"] = append(npSpec["egress"].([]any), m{"to": []any{m{"namespaceSelector": nsSel(ta.Namespace), "podSelector": m{"matchLabels": sel(ta.PodSelector)}}},
+			"ports": []any{m{"protocol": "TCP", "port": ta.Port}}})
+	}
 	ns := k.Namespace
 	return []kube.Manifest{
 		{Resource: serviceAccounts, Object: sa, Namespace: ns},

@@ -155,4 +155,4 @@ In a cluster, an agent that never becomes Ready usually fails the first row, the
 
 ## Limits to know before you build
 
-A container agent is less isolated than a built-in agent: it shares the node kernel, runs as one process for all conversations, and has one identity. Network limits hold only on a cluster whose network plugin enforces NetworkPolicy. Tools through a tool profile are not available yet, and per-agent egress allowlists are not available yet. The full list is in ADR 0015 and in [What works](../what-works.md).
+A container agent is less isolated than a built-in agent: it shares the node kernel, runs as one process for all conversations, and has one identity. Network limits hold only on a cluster whose network plugin enforces NetworkPolicy. Tools come only through a tool profile the operator opened to container agents (`controlPlane.containerAgents.toolProfiles`, ADR 0019): the agent reads `OPENAGENTIX_MCP_URL` and a token from `OPENAGENTIX_MCP_TOKEN_FILE`, read again for every call. Per-agent egress allowlists are not available yet. The full list is in ADR 0015 and in [What works](../what-works.md).

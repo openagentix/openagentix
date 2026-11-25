@@ -107,13 +107,19 @@ func TestRuntimeRefusals(t *testing.T) {
 		"instructionsFrom": {spec(func(s *api.Spec) {
 			s.InstructionsFrom = &api.InstructionsFrom{ConfigMap: &api.ConfigMapKeyRef{Name: "a", Key: "b"}}
 		}), "instructionsFrom does not apply to a container agent"},
-		"tools":       {spec(func(s *api.Spec) { s.Tools = []string{"x"} }), "a container agent gets every tool of its profile; make a narrower profile"},
-		"toolProfile": {spec(func(s *api.Spec) { s.ToolProfile = "lookup" }), "toolProfile is not available yet for container agents"},
-		"egress":      {spec(func(s *api.Spec) { s.Egress.Allow = []string{"https://api.osv.dev"} }), "egress.allow is not available yet for container agents"},
-		"memory":      {spec(func(s *api.Spec) { s.Memory.Enabled = true }), "memory is not available for container agents"},
-		"knowledge":   {spec(func(s *api.Spec) { s.Knowledge.Enabled = true }), "knowledge is not available for container agents"},
-		"notify":      {spec(func(s *api.Spec) { s.Notify.Enabled = true }), "notify is not available for container agents"},
-		"skills":      {spec(func(s *api.Spec) { s.Skills = []api.Skill{{Name: "openagentix-canary"}} }), "skills are not available for container agents"},
+		"tools": {spec(func(s *api.Spec) { s.Tools = []string{"x"} }), "a container agent gets every tool of its profile; make a narrower profile"},
+		"toolProfile not open to container agents": {spec(func(s *api.Spec) { s.ToolProfile = "lookup" }), `toolProfile "lookup" is not open to container agents`},
+		"toolProfile unknown":                      {spec(func(s *api.Spec) { s.ToolProfile = "nope" }), `toolProfile "nope" is not defined (defined: lookup)`},
+		"toolProfile not allowed": {func(a *api.AgentDefinition, c *catalog.Catalog, p *catalog.Policy) {
+			a.Spec.ToolProfile = "lookup"
+			openLookup(c)
+			p.AllowedProfiles = nil
+		}, `toolProfile "lookup" is not allowed by the platform policy`},
+		"egress":    {spec(func(s *api.Spec) { s.Egress.Allow = []string{"https://api.osv.dev"} }), "egress.allow is not available yet for container agents"},
+		"memory":    {spec(func(s *api.Spec) { s.Memory.Enabled = true }), "memory is not available for container agents"},
+		"knowledge": {spec(func(s *api.Spec) { s.Knowledge.Enabled = true }), "knowledge is not available for container agents"},
+		"notify":    {spec(func(s *api.Spec) { s.Notify.Enabled = true }), "notify is not available for container agents"},
+		"skills":    {spec(func(s *api.Spec) { s.Skills = []api.Skill{{Name: "openagentix-canary"}} }), "skills are not available for container agents"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := runC(t, c.mutate)
@@ -121,6 +127,31 @@ func TestRuntimeRefusals(t *testing.T) {
 				t.Fatalf("want a violation containing %q, got %v", c.want, v)
 			}
 		})
+	}
+}
+
+// openLookup opens the profile lookup to container agents, as the chart does for a name in controlPlane.containerAgents.toolProfiles.
+func openLookup(c *catalog.Catalog) {
+	c.Tools.Toolhive.Profiles[0].Workload = &catalog.WorkloadAccess{URL: "http://vmcp-tools-lookup-workload.mcp-tools.svc.cluster.local:4483/mcp",
+		Audience: "openagentix-vmcp-lookup-workload", Namespace: "mcp-tools", PodSelector: map[string]string{"toolhive-name": "tools-lookup-workload"}, Port: 4483}
+}
+
+// ADR 0019: a container agent may name a profile the operator opened to container agents, and then gets all of its tools.
+func TestContainerAgentWithAnOpenProfileIsAccepted(t *testing.T) {
+	v := runC(t, func(d *api.AgentDefinition, c *catalog.Catalog, p *catalog.Policy) {
+		d.Spec.ToolProfile = "lookup"
+		openLookup(c)
+	})
+	if len(v) != 0 {
+		t.Fatalf("%v", v)
+	}
+	// still no tool list below the profile
+	v = runC(t, func(d *api.AgentDefinition, c *catalog.Catalog, p *catalog.Policy) {
+		d.Spec.ToolProfile, d.Spec.Tools = "lookup", []string{"osv_query_vulnerability"}
+		openLookup(c)
+	})
+	if !has(v, "a container agent gets every tool of its profile") {
+		t.Fatalf("%v", v)
 	}
 }
 

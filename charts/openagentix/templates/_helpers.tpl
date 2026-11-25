@@ -411,6 +411,35 @@ reach a vMCP or an unauthenticated backend proxy around the profile. */}}
 {{- .Values.controlPlane.containerAgents.namespace -}}
 {{- end -}}
 
+{{/* Tools for container agents (ADR 0019): the profiles opened to them, as a JSON list of {name, server, audience, url, port}. [] unless container
+agents are on and controlPlane.containerAgents.toolProfiles lists a profile. Fails the render for a malformed list. Safe to include from several templates. */}}
+{{- define "oa.caToolProfiles" -}}
+{{- $out := list -}}
+{{- if include "oa.caOn" . -}}
+{{- $ca := .Values.controlPlane.containerAgents -}}
+{{- $l := $ca.toolProfiles | default list -}}
+{{- if not (kindIs "slice" $l) }}{{ fail "controlPlane.containerAgents.toolProfiles must be a list of mcp.profiles names" }}{{ end -}}
+{{- if $l -}}
+{{- if not .Values.mcp.enabled }}{{ fail "controlPlane.containerAgents.toolProfiles needs mcp.enabled=true: the profiles live on the tool gateway" }}{{ end -}}
+{{- $_ := include "oa.profilesCheck" . -}}
+{{- $m := .Values.mcp -}}
+{{- $sat := $ca.serviceAccountTokens | default dict -}}
+{{- range $f := list "issuer" "jwksUrl" -}}
+{{- if not (regexMatch "^https://[a-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$" (toString (get $sat $f))) }}{{ fail (printf "controlPlane.containerAgents.serviceAccountTokens.%s must be an https URL without user, query or fragment" $f) }}{{ end -}}
+{{- end -}}
+{{- if ne (len $l) (len (uniq $l)) }}{{ fail "controlPlane.containerAgents.toolProfiles lists a profile twice" }}{{ end -}}
+{{- $names := list -}}{{- range $p := ($m.profiles | default list) }}{{ $names = append $names $p.name }}{{ end -}}
+{{- range $x := $l -}}
+{{- if not (and (kindIs "string" $x) (has $x $names)) }}{{ fail (printf "controlPlane.containerAgents.toolProfiles lists %q, which is not in mcp.profiles (%s)" (toString $x) (join ", " $names)) }}{{ end -}}
+{{- $srv := printf "%s-%s-workload" $m.virtual.name $x -}}
+{{- range $n := $names }}{{ if eq (printf "%s-%s" $m.virtual.name $n) $srv }}{{ fail (printf "the workload tool server %q of profile %q collides with the server of profile %q: rename that profile" $srv $x $n) }}{{ end }}{{ end -}}
+{{- $out = append $out (dict "name" $x "server" $srv "audience" (printf "%s-%s-workload" $m.virtual.incomingAuth.oidc.audience $x) "url" (printf "http://vmcp-%s.%s.svc.cluster.local:%d/mcp" $srv $m.namespace (int $m.virtual.port)) "port" (int $m.virtual.port)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $out | toJson -}}
+{{- end -}}
+
 {{/* Namespace of the controller: controlPlane.namespace, else the release namespace. */}}
 {{- define "oa.cpNamespace" -}}
 {{- default .Release.Namespace .Values.controlPlane.namespace -}}
@@ -425,8 +454,11 @@ adapter's own section (runtime.kagent, tools.toolhive). It holds no secret: name
 {{- $profiles := list -}}
 {{- if and .Values.mcp.enabled $k.remoteMCPServer.enabled -}}
 {{- $_ := include "oa.profilesCheck" . -}}
+{{- $wl := dict -}}{{- range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}{{ $_ := set $wl $w.name $w }}{{ end -}}
 {{- range $p := (.Values.mcp.profiles | default list) -}}
-{{- $profiles = append $profiles (dict "name" $p.name "toolServer" (printf "%s-%s" $k.remoteMCPServer.name $p.name) "codeMode" (eq (toString (default false $p.codeMode)) "true") "tools" (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray)) -}}
+{{- $e := dict "name" $p.name "toolServer" (printf "%s-%s" $k.remoteMCPServer.name $p.name) "codeMode" (eq (toString (default false $p.codeMode)) "true") "tools" (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) -}}
+{{- with (get $wl $p.name) }}{{ $_ := set $e "workload" (dict "url" .url "audience" .audience "namespace" $.Values.mcp.namespace "podSelector" (dict "app" "virtualmcpserver" "toolhive-name" .server) "port" (int .port)) }}{{ end -}}
+{{- $profiles = append $profiles $e -}}
 {{- end -}}
 {{- end -}}
 {{- $knOn := and .Values.knowledge.enabled .Values.mcp.enabled -}}
