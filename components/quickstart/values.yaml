@@ -1,0 +1,58 @@
+# Quick start profile (ADR 0014): the smallest set that shows what the project is for, a governed agent.
+#   PROFILE=quickstart ./install.sh        (or ./install.sh --quickstart)
+# ON:  runtime (kagent + Agent Substrate, installed by install.sh), model gateway with a virtual key and a token budget, tool gateway with ONE
+#      small tool server (osv) and ONE tool profile (lookup), the control plane, the console and the A2A gate. One AgentDefinition (agent.yaml) is
+#      applied by install.sh at the end, so the visitor sees the builder path.
+# OFF: Telegram bridge, Kourier channels, schedules, notify, observability bundle, knowledge base and graph (and their embedding servers), memory.
+# The model behind `quickstart-model` is chosen by install.sh (components/quickstart/model.sh): your provider key when one is in the
+# environment, a local Ollama when you ask for it, else the built-in stub. This file lists the stub; install.sh replaces `gateway.models` for the other paths.
+bridge:
+  enabled: false
+
+knowledge: {enabled: false}
+memory: {}
+
+agents: []                           # no chart agent: the agent is an AgentDefinition made by the control plane
+
+gateway:
+  stubModel:
+    enabled: true                    # the stub path; install.sh turns it off when a real model is configured
+  models:
+    - name: quickstart-model
+      provider: OpenAI
+      baseURL: http://stub-model.agentgateway-system.svc.cluster.local:8080/v1
+
+mcp:
+  servers:
+    - name: osv
+      image: ghcr.io/stackloklabs/osv-mcp/server:0.2.1
+      port: 8080
+  virtual:
+    codeMode:
+      enabled: false
+  profiles:
+    - name: lookup
+      codeMode: false
+      tools:
+        osv: [query_vulnerability]
+
+governance:
+  a2a:
+    enabled: true
+    callers:
+      # What `hack/ask.sh` uses: its ServiceAccount token is checked by the gate (TokenReview); it may ask only the quick start agent.
+      - name: quickstart-ask
+        serviceAccount: {namespace: openagentix-system, name: quickstart-ask}
+        agents: ["kagent/quickstart"]
+        userId: {exact: "quickstart:ask"}
+
+controlPlane:
+  enabled: true
+  policy:
+    maxAgents: 3
+    allowedModels: [quickstart-model]
+    allowedProfiles: [lookup]
+    allowKnowledge: false
+
+console:
+  enabled: true

@@ -1950,6 +1950,38 @@ cnfail "a bad API server port fails"                   --set 'console.apiServerP
 cnfail "an empty token Secret name fails"              --set console.tokenSecret.name=
 cnfail "an empty token Secret key fails"               --set console.tokenSecret.key=
 cnfail "a token Secret key with a slash fails"         --set console.tokenSecret.key=a/b
+echo "# stub model (ADR 0014): off by default, nothing renders"
+D=$(docs)
+eq "no stub-model Deployment by default"               "$(count "$D" '.metadata.name=="stub-model"')" 0
+D=$(docs --set gateway.stubModel.enabled=true)
+SM='.metadata.name=="stub-model"'
+eq "stub-model: Deployment, Service, NetworkPolicy"    "$(count "$D" "$SM")" 3
+eq "stub-model lives in the gateway namespace"         "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.metadata.namespace')" agentgateway-system
+eq "stub-model image"                                  "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image')" openagentix/stub-model:dev
+eq "stub-model runs non-root, read-only, no caps"      "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec|[.securityContext.runAsNonRoot,.containers[0].securityContext.readOnlyRootFilesystem,.containers[0].securityContext.allowPrivilegeEscalation,.containers[0].securityContext.capabilities.drop[0],.automountServiceAccountToken]|join(",")')" "true,true,false,ALL,false"
+eq "stub-model has limits and a probe"                 "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0]|(.resources.limits.memory!=null) and (.readinessProbe.httpGet.path=="/healthz")')" true
+eq "stub-model: only the gateway proxy may call it"    "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|[.spec.policyTypes[0],(.spec.ingress|length),.spec.ingress[0].from[0].podSelector.matchLabels["gateway.networking.k8s.io/gateway-name"],.spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]]|join(",")')" "Ingress,1,model-gateway,agentgateway-system"
+eq "stub-model: egress closed"                         "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|.spec.policyTypes|index("Egress")!=null')" true
+eq "stub-model NetworkPolicy has no egress rule"       "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|(.spec.egress//[])|length')" 0
+eq "stub-model sourceHash annotates the pod"           "$(q "$(docs --set gateway.stubModel.enabled=true --set-string gateway.stubModel.sourceHash=abc)" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.metadata.annotations["openagentix.io/source-hash"]')" abc
+eq "stub-model off when the gateway is off"            "$(count "$(docs --set gateway.stubModel.enabled=true --set gateway.enabled=false)" "$SM")" 0
+
+echo "# quick start profile (components/quickstart/values.yaml)"
+QS="$CHART/../../components/quickstart/values.yaml"
+D=$(docs -f "$QS")
+eq "profile renders"                                   "$(q "$D" 'length>0')" true
+eq "profile: stub-model rendered"                      "$(count "$D" "$SM and .kind==\"Deployment\"")" 1
+eq "profile: no Telegram bridge"                       "$(count "$D" '.kind=="Deployment" and .metadata.name=="telegram-bridge"')" 0
+eq "profile: no chart agents"                          "$(count "$D" '.kind=="Agent"')" 0
+eq "profile: no knowledge base"                        "$(count "$D" '.metadata.name=="kb" or .metadata.name=="kb-embeddings"')" 0
+eq "profile: no notify, no memory embeddings"          "$(count "$D" '.metadata.name=="notify" or .metadata.name=="memory-embeddings"')" 0
+eq "profile: no schedules, no Kourier objects"         "$(count "$D" '.kind=="CronJob" or (.apiVersion|startswith("agentkourier"))')" 0
+eq "profile: control plane, console and gate on"       "$(count "$D" '.kind=="Deployment" and (.metadata.name|IN("openagentix-control-plane","openagentix-console","a2a-gate"))')" 3
+eq "profile: one tool server and one profile vMCP"     "$(count "$D" '.kind=="MCPServer"')/$(count "$D" '.kind=="VirtualMCPServer" and (.metadata.annotations["openagentix.io/tool-profile"]//"")!=""')" 1/1
+eq "profile: the model alias goes through the gateway" "$(q "$D" '.[]|select(.kind=="AgentgatewayModel")|.metadata.name')" quickstart-model
+eq "profile: the gate has the ask rule"                "$(q "$D" '.[]|select(.kind=="ConfigMap" and (.data["rules.json"]//"")!="")|.data["rules.json"]|fromjson|.callers[]|select(.name=="quickstart-ask")|.agents[0]')" kagent/quickstart
+eq "profile: the policy admits the alias and profile"  "$(q "$D" '[.[]|select(.kind=="ConfigMap")|.data["policy.json"]//empty|fromjson|(.allowedModels[0],.allowedProfiles[0])]|join(",")')" quickstart-model,lookup
+
 echo "# secrets hygiene"
 D=$(docs --set bridge.token=SENTINEL-TOKEN-123 --set gateway.apiKey=SENTINEL-TOKEN-123)
 eq "chart renders no Secret objects"                   "$(count "$D" '.kind=="Secret"')" 0

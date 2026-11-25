@@ -199,6 +199,17 @@ gateway:
   #       eviction: {consecutiveFailures: 1, duration: 30s}
   #   - name: auto
   #     failover: [gemini, claude-haiku]
+  # A scripted stand-in for a model, for trying the platform without a provider key (ADR 0014, README "Try it in 10 minutes"). It is NOT
+  # a language model. OFF: nothing renders. ON: a Deployment, a Service and a NetworkPolicy (only the gateway's proxy pods may call it; it may
+  # call nothing) in `gateway.namespace`; add a gateway.models entry with provider OpenAI and
+  # baseURL http://stub-model.<gateway.namespace>.svc.cluster.local:8080/v1 (components/quickstart/values.yaml does). install.sh builds and loads the image.
+  stubModel:
+    enabled: false
+    image: {repository: openagentix/stub-model, tag: dev, pullPolicy: IfNotPresent}   # built from services/stub-model and loaded into kind by install.sh
+    sourceHash: ""                # install.sh sets it to a hash of services/stub-model (the tag stays "dev")
+    resources:
+      requests: {cpu: 5m, memory: 8Mi}
+      limits: {cpu: 100m, memory: 32Mi}
   policy:
     name: model-gateway-policy    # the ONE AgentgatewayPolicy (docs warn that several can overwrite each other)
     apiKeyLabel: agentgateway.dev/apikey   # ConfigMaps with this label hold virtual-key hashes (install.sh)

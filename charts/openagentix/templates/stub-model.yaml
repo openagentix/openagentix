@@ -1,0 +1,82 @@
+{{- if and .Values.gateway.enabled .Values.gateway.stubModel.enabled }}
+{{- $g := .Values.gateway }}
+{{- $s := $g.stubModel }}
+# Stub model (ADR 0014): a scripted OpenAI-compatible server, for trying the platform without a model provider key. It is NOT a
+# language model. A `gateway.models` entry points at it (baseURL http://stub-model.<gateway namespace>.svc.cluster.local:8080/v1), so
+# virtual keys, budgets and metrics work as with a real provider. Only the gateway's proxy pods may call it, and it may call nothing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: stub-model
+  namespace: {{ $g.namespace }}
+  labels:
+    app: stub-model
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  selector: {app: stub-model}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stub-model
+  namespace: {{ $g.namespace }}
+  labels:
+    app: stub-model
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: stub-model}
+  template:
+    metadata:
+      labels:
+        app: stub-model
+        {{- include "oa.labels" . | nindent 8 }}
+      {{- if $s.sourceHash }}
+      annotations:
+        openagentix.io/source-hash: {{ $s.sourceHash | quote }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: stub-model
+          image: {{ printf "%s:%s" $s.image.repository $s.image.tag | quote }}
+          imagePullPolicy: {{ $s.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          resources: {{- toYaml $s.resources | nindent 12 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: stub-model
+  namespace: {{ $g.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app: stub-model}
+  policyTypes: [Ingress, Egress]
+  egress: []
+  ingress:
+    - ports: [{protocol: TCP, port: 8080}]
+      from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $g.namespace }}}}
+          podSelector: {matchLabels: {gateway.networking.k8s.io/gateway-name: {{ $g.name }}}}
+{{- end }}
