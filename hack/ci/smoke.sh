@@ -88,7 +88,22 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
   POD=$($K get pod -n "$WNS" -l openagentix.io/agent=echo-go -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   check "the pod runs as user 65532, non-root" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.spec.securityContext.runAsUser}:{.spec.securityContext.runAsNonRoot}' 2>/dev/null)" 65532:true
   check "the pod has a read-only root filesystem and no service account token" "$($K get pod -n "$WNS" "$POD" -o jsonpath='{.spec.containers[0].securityContext.readOnlyRootFilesystem}:{.spec.automountServiceAccountToken}' 2>/dev/null)" true:false
-  ANS=$(hack/ask.sh echo-go "Say hello" 2>&1); RC=$?
+  # The gate learns a new agent from a route list file that the kubelet syncs into its pod from a ConfigMap (up to about two minutes after the
+  # controller wrote it), so the agent can be Ready a little before the gate routes to it. Ask again until it answers; print how long it took.
+  T0=$(date +%s); TRIES=0
+  while :; do
+    TRIES=$((TRIES+1)); ANS=$(hack/ask.sh echo-go "Say hello" 2>&1); RC=$?
+    [ "$RC" = 0 ] && break
+    [ $(( $(date +%s) - T0 )) -ge "${SMOKE_ROUTE_WAIT:-240}" ] && break
+    sleep 5
+  done
+  echo "      echo-go answered after $(( $(date +%s) - T0 )) s and $TRIES attempt(s) (exit $RC) after it was Ready"
+  if [ "$RC" != 0 ]; then
+    echo "      route list in the cluster:  $($K get configmap a2a-gate-routes -n openagentix-gateway -o jsonpath='{.data.routes\.json}' 2>&1 | cut -c1-300)"
+    GP=$($K get pod -n openagentix-gateway -l app=a2a-gate -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    echo "      route list inside the gate pod ($GP): $($K exec -n openagentix-gateway "$GP" -- cat /etc/a2a-gate/routes/routes.json 2>&1 | cut -c1-300)"
+    $K logs -n openagentix-gateway "$GP" --tail=30 2>&1 | cut -c1-300 | sed 's/^/      gate: /'
+  fi
   echo "      answer: $(printf '%s' "$ANS" | tr '\n' ' ' | cut -c1-300)"
   check "echo-go answered through the gate (exit 0)" "$RC" 0
   if [ "$STUB" = 1 ]; then
