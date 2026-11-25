@@ -19,7 +19,7 @@ git clone https://github.com/openagentix/openagentix && cd openagentix
 PROFILE=quickstart ./install.sh
 ```
 
-The install ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. In CI on a hosted runner, with nothing cached, it took 366 to 394 seconds. A laptop was not timed.
+The install ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. In CI on a hosted runner, with nothing cached, it took 366 to 394 seconds. A laptop was not timed. Where the time goes, by phase, is in [how the quick start is measured](../features/quick-start.md).
 
 ## Ask the agent
 
@@ -48,6 +48,10 @@ kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080
 ```
 
 Then open `http://127.0.0.1:8080`. The sign-in token is in the Secret `openagentix-system/console-token`; the installer prints the command to read it.
+
+## Walk through what it does
+
+`hack/demo.sh` creates an agent, asks it, shows its gateway key and budget, reads the audit line, makes a call that is denied and checks the console. See the [demo walkthrough](./demo.md).
 
 ## Other clusters
 

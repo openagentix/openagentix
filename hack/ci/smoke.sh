@@ -23,6 +23,7 @@ echo "# 2. a question through the gate, answered with a tool call"
 ANS=$(hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)" 2>&1); RC=$?
 echo "      answer: $(printf '%s' "$ANS" | tr '\n' ' ' | cut -c1-300)"
 check "the gate returned an answer (exit 0)" "$RC" 0
+[ "$RC" != 0 ] || echo "TIMING first_answer_epoch=$(date +%s)"   # read by hack/ci/phases.sh (time to first working agent)
 if [ "$STUB" = 1 ]; then
   grep -q 'stub model' <<<"$ANS" && ok "the answer says it comes from the stub" || bad "the answer does not say it is the stub"
   grep -q 'osv_query_vulnerability' <<<"$ANS" && ok "the agent used the tool osv_query_vulnerability through the tool profile" || bad "no tool call in the answer"

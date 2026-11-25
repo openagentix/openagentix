@@ -51,6 +51,7 @@ jobs:
           set -o pipefail
           start=$(date +%s)
           ./install.sh 2>&1 | tee install.log
+          echo "install_start=$start" >> "$GITHUB_OUTPUT"
           echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
       - name: smoke test
         id: smoke
@@ -66,6 +67,15 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/netpol-test.sh 2>&1 | tee netpol.log
+      - name: phases (time to first working agent, issue #35)
+        if: always()
+        env:
+          INSTALL_START: ${{ steps.install.outputs.install_start }}
+        run: |
+          if [ -n "${INSTALL_START:-}" ] && [ -f install.log ]; then
+            hack/ci/phases.sh --install-log install.log --smoke-log smoke.log --install-start "$INSTALL_START" --json phases.json --title "Time to first working agent on k3s (phases)" > phases.md || true
+            cat phases.md phases.json 2>/dev/null || true
+          fi
       - name: job summary
         if: always()
         env:
@@ -73,6 +83,7 @@ jobs:
           SMOKE_S: ${{ steps.smoke.outputs.smoke_seconds }}
         run: |
           {
+            if [ -f phases.md ]; then cat phases.md; echo '```json'; cat phases.json; echo '```'; echo; fi
             echo "## Quick start on k3s (k3d), keyless (stub model)"
             echo
             echo "- k3s: $(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}' 2>/dev/null || echo n/a)"
