@@ -94,6 +94,9 @@ export interface Agent {
     project?: string;
     skills: string[];
     egressCount: number;
+    /** status.effectiveTools and status.effectiveEgress: what the controller gave the agent. Empty for a chart agent. */
+    effectiveTools: string[];
+    effectiveEgress: string[];
     state: State;
     stateReason: string;
     deleting: boolean;
@@ -184,6 +187,8 @@ export interface PlatformPolicy {
     memory: { allowed: boolean; maxTtlDays: number; requireExpiry: boolean };
     egress: { allowedOrigins: string[]; inClusterDestinations?: string[] };
     reservedNames: string[];
+    /** The operator's stop switch: every definition is treated as suspended. */
+    suspendAll: boolean;
 }
 
 export interface Platform {

@@ -4,7 +4,8 @@
     import { page } from '$app/state';
     import { trapFocus } from '$lib/actions';
     import { ctx } from '$lib/context.svelte';
-    import { activeId, breadcrumb, GO_KEYS, isTypingTarget, NAV, SETTINGS, type NavItem } from '$lib/nav';
+    import { activeId, breadcrumb, GO_KEYS, isTypingTarget, MARKS, NAV, SETTINGS, type NavItem } from '$lib/nav';
+    import { contextLine } from '$lib/views';
     import { shortcutPref, sidebarPref, theme } from '$lib/theme.svelte';
     import GoTo from './GoTo.svelte';
     import Icon from './Icon.svelte';
@@ -23,6 +24,7 @@
     const current = $derived(activeId(path));
     const crumb = $derived(breadcrumb(path));
     const session = $derived(ctx.session);
+    const ctxLine = $derived(contextLine(session));
 
     function toggleCollapse() {
         collapsed = !collapsed;
@@ -98,9 +100,7 @@
             </div>
             <div class="word"><span>Open</span><b>Agentix</b></div>
         </div>
-        <div class="ctx" title="Cluster context and agent namespace">
-            {session?.context || session?.namespace || ''}
-        </div>
+        {#if ctxLine}<div class="ctx" title="Cluster context and agent namespace: {ctxLine}">{ctxLine}</div>{/if}
         {#each NAV as g (g.label ?? 'top')}
             {#if g.label}<div class="grp">{g.label}</div>{/if}
             <div class="nav">
@@ -116,7 +116,12 @@
                         title={collapsed ? i.label : undefined}
                     >
                         <Icon name={i.icon} /><span>{i.label}</span>
-                        {#if i.locked}<Icon name="i-lock" class="lock" size={12} />{/if}
+                        {#if i.mark}<span
+                                class="mk mk-{i.mark}"
+                                title={MARKS[i.mark].label}
+                                role="img"
+                                aria-label={MARKS[i.mark].label}><Icon name={MARKS[i.mark].icon} size={12} /></span
+                            >{/if}
                     </a>
                     {#if i.sub && isCurrent(i)}
                         <div class="sub">
@@ -210,8 +215,11 @@
         </main>
         <footer class="foot">
             <span><strong>OpenAgentix console</strong> {session?.version ?? ''}</span>
-            <span
-                ><Icon name="i-lock" size={12} class="align-[-2px]" /> marks pages that are not available yet in this release</span
+            <span class="legend"
+                ><Icon name={MARKS.readonly.icon} size={12} class="align-[-2px]" /> {MARKS.readonly.legend}</span
+            >
+            <span class="legend"
+                ><Icon name={MARKS.nodata.icon} size={12} class="align-[-2px]" /> {MARKS.nodata.legend}</span
             >
         </footer>
     </div>
