@@ -81,6 +81,21 @@ OUT=$(inst PROFILE=quickstart MODEL_PROVIDER=anthropic); eq "quickstart with MOD
 OUT=$(inst PROFILE=nope); eq "an unknown profile is refused"      "$(/usr/bin/grep -c "unknown PROFILE 'nope'" <<<"$OUT")" 1
 OUT=$(inst PROFILE=quickstart); eq "quickstart with no model env passes the preflight (stops only at the missing cluster)" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
 
+echo "# the minimal profile and the install order (issue #29)"
+OUT=$(inst PROFILE=minimal); eq "PROFILE=minimal passes the preflight (stops only at the missing cluster)" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
+OUT=$(inst PROFILE=minimal QUICKSTART_BYO=1); eq "PROFILE=minimal accepts QUICKSTART_BYO=1" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
+OUT=$(inst PROFILE=minimal MODEL_PROVIDER=anthropic); eq "PROFILE=minimal uses the same model choice (anthropic without a key stops)" "$(/usr/bin/grep -c 'needs ANTHROPIC_API_KEY' <<<"$OUT")" 1
+OUT=$(inst PROFILE=minimal SKIP_SKILL=1); eq "PROFILE=minimal needs no skill: SKIP_SKILL=1 is harmless" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
+MINR=$(render -f "$ROOT/components/quickstart/values.yaml" -f "$ROOT/components/quickstart/minimal-values.yaml")
+eq "minimal with the stub: no key, no token"              "$(spf "$MINR" true)" ""
+INS="$ROOT/install.sh"
+line() { /usr/bin/grep -n "$1" "$INS" | head -1 | cut -d: -f1; }
+eq "image builds start before the cluster step"           "$([ "$(line '^start_builds$')" -lt "$(line '^log "cluster ')" ] && echo yes || echo no)" yes
+eq "the build results are collected before the chart"     "$([ "$(line '^finish_builds   #')" -lt "$(line '^helm upgrade --install')" ] && echo yes || echo no)" yes
+eq "the end summary names the console only when the chart renders it" "$(/usr/bin/grep -B2 'Open the console:' "$INS" | /usr/bin/grep -c 'if \[ -n "\$CN_DEP" \]')" 1
+eq "install.sh waits for its own RemoteMCPServers, not for kagent's built-in ones" "$(/usr/bin/grep -c 'wait remotemcpserver --all' "$INS")/$(/usr/bin/grep -c 'select(.kind=="RemoteMCPServer")' "$INS")" 0/1
+eq "the independent prerequisites overlap (PREREQS_PARALLEL)" "$(/usr/bin/grep -c 'PREREQS_PARALLEL' "$INS" | awk '{print ($1>0)?"yes":"no"}')" yes
+
 echo "# kagent's own PostgreSQL is ready only when its final server is up"
 RUNTIME="$(cd "$HERE/../runtime" && pwd)"
 eq "readiness probe uses TCP (the first-boot temporary server has no TCP port)" "$(/usr/bin/grep -cE 'readinessProbe:.*pg_isready.*-h, 127\.0\.0\.1' "$RUNTIME/manifests/kagent-postgres.yaml")" 1

@@ -110,6 +110,8 @@ You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefar
 ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh      # or ./install.sh --quickstart
 ```
 
+`PROFILE=minimal ./install.sh` (or `--minimal`) is the same without the console and the bundled observability: the gate, the gateway key and budget, the audit lines, the tool profile and the stub model stay. In CI it was not clearly faster than the quick start (the builds now run beside the other steps), but it uses about 100 to 220 MB less memory ([measurements](docs/diary/features/quick-start.md)).
+
 Model, chosen for you in this order: a key in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`), or any OpenAI-compatible endpoint (`MODEL_BASE_URL`, `MODEL_NAME`, and `MODEL_API_KEY` if it needs one); a local Ollama when you ask (`MODEL_PROVIDER=ollama MODEL_NAME=llama3.2`, optionally `OLLAMA_HOST`; Ollama must listen on all interfaces, and the cluster reaches the host at `host.docker.internal` on Docker Desktop or at the kind network gateway on Linux, which the installer looks up; this path is not tested yet); otherwise the stub. `MODEL_NAME` overrides the model name sent upstream. The installer's last lines say which model is active.
 
 No key yet? You can still try the platform's controls in 10 minutes: run `PROFILE=quickstart ./install.sh` with nothing set. A built-in **stub model** answers. It is a scripted stand-in, not a language model: it calls a tool for a vulnerability question and reports what the tool returned, and every answer says it is the stub. Use it to see the tool profile, the gate, the budget, the console and the refusals, not for answers. To switch later, run the same command with a key or endpoint above.

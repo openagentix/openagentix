@@ -105,6 +105,38 @@ Reading it: on a hosted runner with nothing cached, a first working agent takes 
 
 Limits. This is a hosted `ubuntu-24.04` runner (4 vCPU, 16 GB), a cold image cache every time, and the stub model, so no model call and no key. `git clone` and the tool installs are not in the numbers (the clock starts at `./install.sh`). A laptop was not timed, nor a warm re-install, nor a slow network. The runs spread by about 50 s, so read the numbers as a range. They are not a promise for your machine. The two rows of the second table are one run each.
 
+## A faster install (issue #29)
+
+Where the time went. The install log of an earlier run (run 45666154694, kind, the quick start with the sample container agent) gives these steps, in seconds from the start of `./install.sh`: kind, Substrate, kagent and their PostgreSQL ready at 153; agentgateway and ToolHive at 214; kagent telemetry settings (a second Helm upgrade) at 232; five image builds, three at a time, 233 to 329 (96 s); `helm upgrade` 13 s; the tool profile vMCP 85 s; the agent 51 s; the sample container agent 12 s. Almost all of it ran one step after the other, although the image builds and the three prerequisite installs do not depend on each other.
+
+Three changes, for every profile:
+
+- `install.sh` starts the image builds in the background before the cluster exists (a build needs Docker, not the cluster) and waits for them just before the chart is installed. `BUILD_JOBS` still sets how many build at once.
+- agentgateway and ToolHive are installed while kagent and Substrate are installed (`PREREQS_PARALLEL=0` goes back to one after the other). Each background install gets its own copy of the kubeconfig and its own log, which is printed when it ends.
+- The wait at the end now covers only the RemoteMCPServers that the chart renders. It used to cover all of them, including kagent's built-in `kagent-api`, and in one CI run that held the install for the full 120 s.
+
+One new profile: `PROFILE=minimal ./install.sh` (or `./install.sh --minimal`) is the quick start without the console and without the bundled observability (`components/quickstart/minimal-values.yaml`). The gate and its audit lines, the model gateway with its virtual key and token budget, the tool profile and the stub model stay, because they are the governed agent. The tool layer cannot go: the quick start agent calls a tool through a tool profile, and the smoke test checks that. No skill is needed. The stub model sits behind the gateway and gets a virtual key like any other model. `hack/ci/smoke.sh` takes `SMOKE_CONSOLE=0` and `hack/demo.sh` takes `DEMO_CONSOLE=0` for a profile without a console.
+
+What was measured. The `e2e` job now runs both profiles in one matrix, on the same kind of runner as before. "First answer" is the phases table value (seconds from the start of `./install.sh`). The `quickstart` rows include the sample container agent (`QUICKSTART_BYO=1`), the `minimal` rows do not.
+
+| Run (commit with all three changes) | quickstart first answer | minimal first answer |
+|---|---|---|
+| 45671938772 | 306 s | 316 s |
+| 45673237057 | 301 s | 312 s |
+| 45674477495 | 320 s | 277 s |
+
+| Before the change | first answer |
+|---|---|
+| quickstart on kind, five runs listed above | 362, 385, 392, 397, 410 s |
+
+| Runner memory in use after install, smoke test and demo (`free -m`, "used") | quickstart | minimal |
+|---|---|---|
+| the three runs above | 3435, 3381, 3422 MB | 3276, 3220, 3214 MB |
+
+Reading it. The quick start went from 362 to 410 s to 301 to 320 s (three runs after, five before). The gain comes from overlapping the steps: the builds, which took 96 s in a row, now finish while the prerequisites install, and the install waits only 3 to 10 s for them. The minimal profile did not show a gain in time that these runs can tell apart from the spread (277 to 316 s against 301 to 320 s). With the builds hidden behind the prerequisites, dropping the console image no longer shortens the critical path. What the minimal profile does give is no console and no metrics or tracing store, and about 100 to 220 MB less memory in use on the runner. What is left on the critical path in the minimal runs: the runtime and the other prerequisites (about 160 to 200 s until all of them are done), the tool profile vMCP (about 55 to 60 s) and the first start of the agent (about 40 to 50 s).
+
+Limits. Three runs per profile, one runner type, a cold cache, the stub model, no clone time. The runs spread by about 20 to 40 s, so a difference of 10 s between the two profiles means nothing. The runs before the change are the ones listed above, from other days and other commits. An earlier run, before the end wait was fixed, spent 120 s in the end wait (run 45670114474, quickstart: 432 s), because kagent's built-in `kagent-api` server logged connection errors in that job; that wait is fixed. The `kagent-api` errors appeared again in the quickstart jobs (the controller log in the job's diagnostics step) and were not seen in the controller log of the earlier run 45666154694. They are not explained yet. The first run of `minimal` failed after the install with an unbound variable in the closing summary of `install.sh`, which is fixed and has a test. Memory is the runner total, not the node, so it also holds the runner's own processes.
+
 ## What is not covered
 
 - The Ollama path is built from the documented host addresses and has not been run.
