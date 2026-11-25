@@ -67,6 +67,9 @@
         <symbol id="i-lock" viewBox="0 0 16 16"
             ><rect x="3.5" y="7" width="9" height="6.5" rx="1.2" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></symbol
         >
+        <symbol id="i-nodata" viewBox="0 0 16 16"
+            ><circle cx="8" cy="8" r="5.5" stroke-dasharray="2 2.2" /><path d="M8 8h.01" /></symbol
+        >
         <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></symbol>
         <symbol id="i-theme" viewBox="0 0 16 16"
             ><circle cx="8" cy="8" r="5.8" /><path d="M8 2.2v11.6A5.8 5.8 0 0 0 8 2.2z" fill="currentColor" /></symbol

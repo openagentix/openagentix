@@ -45,8 +45,11 @@ cannot name the `.svelte.ts` modules without their extension; move when that is 
 
 ## Design rules (short)
 
-- **Nothing invented.** Pages for kinds that do not exist yet are honest "not available yet" pages (`src/lib/planned.ts`): what the page
-  will show, why it is not available, where the thing is configured today. No numbers, no sample data.
+- **Nothing invented.** Overview, Models, Tools, Skills, Memory and Governance show what `GET /api/v1/platform` and `GET /api/v1/agents`
+  already return, read-only (`src/lib/views.ts` derives everything; no spend, counts from a job, or call numbers). Pages with no data
+  source (Knowledge, Channels and triggers, Schedules, Traces, Costs, Playground) are honest "not available yet" pages
+  (`src/lib/planned.ts`): what the page will show, why it is not available, where the thing is configured today. No sample data.
+- **Two sidebar markers.** A lock: real data, read-only in this release. A dotted circle: no data source yet (`MARKS` in `src/lib/nav.ts`).
 - **Refusals are predicted, not discovered.** The builder asks `POST /api/v1/agents/validate` while you type and shows a _prediction_;
   the controller's `status.violations` are shown word for word after save and are the authority.
 - **The status contract** (ADR 0012): the UI reads `conditions` (Accepted and Ready are the contract), `observedGeneration`,

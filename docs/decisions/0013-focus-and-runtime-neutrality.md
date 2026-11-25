@@ -24,16 +24,25 @@ These stay as issues in the Backlog milestone and come back when users or contri
 - The organisation skill registry.
 - The model router service (rules and a learned router). Static routing and fallback stay.
 - New knowledge-graph work beyond maintenance.
-- Slack and Teams channels, the AX adapter.
+- The Microsoft Teams channel (it needs a new connector), the AX adapter.
 - Fleet, air-gap, tenancy beyond one namespace.
 - Products on top (software factory, agentic delivery) until runs and approvals exist.
+
+## Channels
+
+Changed on 2026-11-25 by the project owner: Telegram is useful for a demo and for one person, but most organisations use Slack or Microsoft Teams. So:
+
+- The quick start has no chat channel at all. A first message goes through the console or a command.
+- **Slack is the first channel for organisations.** The Slack path through Agent Kourier exists in the chart but has never been run against a real workspace; proving it moves to release 0.4.
+- Telegram stays as an optional bridge for demos and personal use.
+- Microsoft Teams is wanted and is not built: it needs its own connector and stays in the Backlog until Slack is proven.
 
 ## Release plan
 
 | Release | Content |
 |---|---|
 | 0.3 | Control plane and console proven on a cluster. Bring your own A2A agent. A quick start that needs no paid model key and no chat token. A small, fast install profile. Install tested on kind and k3s in CI, then a managed cloud, with OpenShift-compatible manifests. `AgentAccess`, `Schedule`. |
-| 0.4 | `AgentRun`, `ApprovalRequest`, identity per agent and token exchange (adopted), `CredentialGrant`, event sink, console login with OpenID Connect. Runtime conformance suite. |
+| 0.4 | Slack channel proven on a real workspace. `AgentRun`, `ApprovalRequest`, identity per agent and token exchange (adopted), `CredentialGrant`, event sink, console login with OpenID Connect. Runtime conformance suite. |
 | 0.5 | `Workspace`, long steps, budgets per run, queueing, delegation. |
 | Later | The postponed list, by demand. |
 

@@ -1,6 +1,5 @@
 <script lang="ts">
-    import PlannedPage from '$lib/components/PlannedPage.svelte';
-    import { PLANNED } from '$lib/planned';
+    import OverviewPage from '$lib/components/OverviewPage.svelte';
 </script>
 
-<PlannedPage content={PLANNED['overview']!} />
+<OverviewPage />

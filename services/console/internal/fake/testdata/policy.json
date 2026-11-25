@@ -1,12 +1,31 @@
 {
   "maxAgents": 5,
-  "allowedModels": ["claude-haiku"],
+  "allowedModels": [
+    "claude-haiku"
+  ],
   "requireToolProfile": true,
-  "allowedProfiles": ["lookup"],
+  "allowedProfiles": [
+    "lookup"
+  ],
   "allowKnowledge": true,
   "allowNotify": true,
-  "allowedSkills": ["openagentix-canary"],
-  "memory": {"allowed": true, "maxTtlDays": 30, "requireExpiry": true},
-  "egress": {"allowedOrigins": ["https://api.osv.dev", "https://*.example.org"]},
-  "reservedNames": []
+  "allowedSkills": [
+    "openagentix-canary"
+  ],
+  "memory": {
+    "allowed": true,
+    "maxTtlDays": 30,
+    "requireExpiry": true
+  },
+  "egress": {
+    "allowedOrigins": [
+      "https://api.osv.dev",
+      "https://*.example.org"
+    ],
+    "inClusterDestinations": [
+      "registry.ci.svc:5000"
+    ]
+  },
+  "reservedNames": [],
+  "suspendAll": false
 }

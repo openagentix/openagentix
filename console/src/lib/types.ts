@@ -94,6 +94,9 @@ export interface Agent {
     project?: string;
     skills: string[];
     egressCount: number;
+    /** status.effectiveTools and status.effectiveEgress: what the controller gave the agent. Empty for a chart agent. */
+    effectiveTools: string[];
+    effectiveEgress: string[];
     state: State;
     stateReason: string;
     deleting: boolean;
@@ -184,10 +187,26 @@ export interface PlatformPolicy {
     memory: { allowed: boolean; maxTtlDays: number; requireExpiry: boolean };
     egress: { allowedOrigins: string[]; inClusterDestinations?: string[] };
     reservedNames: string[];
+    /** The operator's stop switch: every definition is treated as suspended. */
+    suspendAll: boolean;
+}
+
+/** Already formatted headline numbers of the metrics row (the metrics route is a later pull request; absent today). */
+export interface MetricsHeadline {
+    spendToday: string;
+    spendNote: string;
+    tokensToday: string;
+    tokensNote: string;
+    turns24h: string;
+    turnsNote: string;
 }
 
 export interface Platform {
     demo: boolean;
+    /** Present only when the console API can read a metrics store. */
+    metrics?: { available: boolean };
+    /** Present only when the console API can read a trace store. */
+    traces?: { available: boolean };
     adapters: { runtime: string; modelGateway: string; tools: string };
     namespaces: { agents: string; gateway: string; tools: string };
     gatewayBaseUrl: string;

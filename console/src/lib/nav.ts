@@ -3,7 +3,8 @@ export interface NavItem {
     label: string;
     href: string;
     icon: string;
-    locked?: boolean;
+    /** `readonly`: the page shows real data and cannot edit it in this release. `nodata`: the page has no data source yet. */
+    mark?: 'readonly' | 'nodata';
     sub?: { label: string; href: string }[];
 }
 export interface NavGroup {
@@ -11,7 +12,13 @@ export interface NavGroup {
     items: NavItem[];
 }
 
-/** The navigation of UI-SPEC section 4.2, in order. The lock marks a page that is read-only (or not available) in this release. */
+/** What the two sidebar markers look like and say (UI-SPEC section 4.2). */
+export const MARKS = {
+    readonly: { icon: 'i-lock', label: 'Read-only in this release', legend: 'read-only in this release' },
+    nodata: { icon: 'i-nodata', label: 'No data source yet', legend: 'no data source yet' },
+} as const;
+
+/** The navigation of UI-SPEC section 4.2, in order. The lock marks a page that shows real data and is read-only; the dotted circle marks a page with no data source yet. */
 export const NAV: NavGroup[] = [
     { label: null, items: [{ id: 'overview', label: 'Overview', href: '/', icon: 'i-overview' }] },
     {
@@ -27,17 +34,17 @@ export const NAV: NavGroup[] = [
                     { label: 'Playground', href: '/agents/playground' },
                 ],
             },
-            { id: 'skills', label: 'Skills', href: '/skills', icon: 'i-skill', locked: true },
+            { id: 'skills', label: 'Skills', href: '/skills', icon: 'i-skill', mark: 'readonly' },
         ],
     },
     {
         label: 'Connect',
         items: [
-            { id: 'models', label: 'Models', href: '/models', icon: 'i-model', locked: true },
-            { id: 'tools', label: 'Tools', href: '/tools', icon: 'i-tool', locked: true },
-            { id: 'knowledge', label: 'Knowledge', href: '/knowledge', icon: 'i-book', locked: true },
-            { id: 'channels', label: 'Channels and triggers', href: '/channels', icon: 'i-channel', locked: true },
-            { id: 'schedules', label: 'Schedules', href: '/schedules', icon: 'i-clock', locked: true },
+            { id: 'models', label: 'Models', href: '/models', icon: 'i-model', mark: 'readonly' },
+            { id: 'tools', label: 'Tools', href: '/tools', icon: 'i-tool', mark: 'readonly' },
+            { id: 'knowledge', label: 'Knowledge', href: '/knowledge', icon: 'i-book', mark: 'nodata' },
+            { id: 'channels', label: 'Channels and triggers', href: '/channels', icon: 'i-channel', mark: 'nodata' },
+            { id: 'schedules', label: 'Schedules', href: '/schedules', icon: 'i-clock', mark: 'nodata' },
         ],
     },
     {
@@ -45,12 +52,12 @@ export const NAV: NavGroup[] = [
         items: [
             { id: 'traces', label: 'Traces', href: '/traces', icon: 'i-trace' },
             { id: 'costs', label: 'Costs', href: '/costs', icon: 'i-coin' },
-            { id: 'memory', label: 'Memory', href: '/memory', icon: 'i-memory', locked: true },
+            { id: 'memory', label: 'Memory', href: '/memory', icon: 'i-memory', mark: 'readonly' },
         ],
     },
     {
         label: 'Govern',
-        items: [{ id: 'governance', label: 'Governance', href: '/governance', icon: 'i-shield', locked: true }],
+        items: [{ id: 'governance', label: 'Governance', href: '/governance', icon: 'i-shield', mark: 'readonly' }],
     },
 ];
 export const SETTINGS: NavItem = { id: 'settings', label: 'Settings', href: '/settings', icon: 'i-gear' };
