@@ -7,6 +7,7 @@ All notable changes to OpenAgentix are documented here. The format follows [Keep
 No default changed for users who leave the new `controlPlane` and `console` blocks off. The default chart render is the same as in 0.2.0.
 
 ### Fixed
+- Console traces: the recent-turns list used Jaeger's v1 search (`/api/traces`), which Jaeger v2 does not serve, so `GET /api/v1/traces` always answered "not available" against the bundled Jaeger. It now searches with `/api/v3/traces` (OTLP JSON) and treats Jaeger's 404 "No traces found" as an empty list.
 - Installer: every image it builds is now tagged `dev-<hash of its source>` and the tag is passed to the chart (`hack/image-tag.sh`). Before, all images used the tag `dev`; `kind load` keeps an existing tag on the node and the pods use `IfNotPresent`, so a rebuilt image never replaced the one running. A changed source now always gives a new image reference. Affects the bridge, a2a-call, kb, notify, a2a-gate, stub-model, control plane and console images. `SKIP_*_IMAGE` still leaves the chart's `dev` tag.
 
 ### Added
