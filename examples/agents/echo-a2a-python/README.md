@@ -17,7 +17,7 @@ Reasons for this choice:
   the card, `SendMessage`, an unknown method (`-32601`) and a streaming call (`-32004`, not claimed). The SDK reads a
   request without that header as version 0.3, so a client must send it. The gate and `hack/ask.sh` do.
 - It is small. The agent is one file of about 170 lines, and the install is the SDK with its `http-server` extra plus
-  `uvicorn`. That is 32 packages, all pinned with hashes.
+  `uvicorn`. Every package is pinned with its hashes (a few have one pin per Python version).
 - It does not tie the sample to one model framework. A LangGraph, Google ADK or CrewAI agent only has to put its own call in
   `OpenAIChatModel.complete` (or replace it) and keep the server part. I did not check whether those frameworks serve A2A 1.0
   themselves; ADR 0015 lists that as open. The sample does not claim they do.
@@ -141,8 +141,8 @@ spec:
 
 ```sh
 # the packages (needs uv; any pip-compile that writes hashes works)
-uv pip compile --generate-hashes --universal --python-version 3.13 requirements.in -o requirements.txt
-uv pip compile --generate-hashes --universal --python-version 3.13 requirements-dev.in -o requirements-dev.txt
+uv pip compile --generate-hashes --universal --python-version 3.10 requirements.in -o requirements.txt
+uv pip compile --generate-hashes --universal --python-version 3.10 requirements-dev.in -o requirements-dev.txt
 # the base image: the index digest of the tag
 TOK=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull" | jq -r .token)
 curl -sI -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.oci.image.index.v1+json" \
