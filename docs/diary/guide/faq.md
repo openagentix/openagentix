@@ -8,7 +8,7 @@ description: Short, honest answers to the questions platform engineers ask first
 
 ## Do I need a specific agent framework?
 
-Today, yes, in one sense. Agents run on kagent with Agent Substrate. You do not write framework code: you describe the agent (model, instructions, tool profile, tools) in an `AgentDefinition` or in the chart values, and the platform builds it. Bringing an agent built with another framework, as a container that speaks A2A, is planned for release 0.3 ([ADR 0013](https://openagentix.github.io/openagentix/decisions/focus-and-runtime-neutrality)).
+Today, yes, in one sense. Agents run on kagent with Agent Substrate. You do not write framework code: you describe the agent (model, instructions, tool profile, tools) in an `AgentDefinition` or in the chart values, and the platform builds it. Bringing an agent built with another framework, as a container that speaks A2A, is planned for release 0.3 ([ADR 0013](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0013-focus-and-runtime-neutrality.md)).
 
 The callers do not need any framework. Anything that can send an A2A request over HTTP can call an agent through the A2A gate. `hack/ask.sh` is a short shell script that does it with `curl`.
 

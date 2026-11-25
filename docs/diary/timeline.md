@@ -140,7 +140,7 @@ The owner decided to stay on kagent 1.0.1, so the three weak points of ADR 0005 
 
 ## 2026-11-24: public repository and documentation site
 
-- The repository is public under Apache-2.0 at `https://github.com/openagentix/openagentix`. This diary is published at `https://openagentix.github.io/openagentix/` by the `docs` workflow on every push that touches `docs/` or `website/`.
+- The repository is public under Apache-2.0 at `https://github.com/openagentix/openagentix`. This diary is published as a website (the address is the "Docs site" link in the README) by the `docs` workflow on every push that touches `docs/` or `website/`.
 - Layout change before publishing: the kagent and Substrate bring-up moved to `components/runtime/`, the benchmark harness to `components/bench/compare/`. Exploratory spike code and the original product brief are not part of the public repository.
 - Memory saving stays automatic (owner decision). The save-on-request variant is documented in ADR 0005.
 - Not verified: a fresh install from an empty cluster after the layout change. Syntax checks, chart tests (625) and a re-run of the installer on the existing cluster passed.

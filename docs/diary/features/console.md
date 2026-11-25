@@ -17,7 +17,7 @@ It needs the control plane. It is off by default (`console.enabled`).
 Two parts, one image:
 
 - `services/console`: a small Go API. It has fixed routes, a bearer token and a strict Content-Security-Policy. It does not proxy requests to the cluster. It uses only the standard library.
-- `console/`: a SvelteKit single-page app, built into the Go binary. It has a shell, an agents registry, an agent builder whose options follow the platform policy, a YAML view, pause and delete. Other areas (models, tools, knowledge, schedules and so on) are pages that say "not available yet".
+- `console/`: a SvelteKit single-page app, built into the Go binary. It has a shell, an agents registry, an agent builder whose options follow the platform policy, a YAML view, pause and delete. Overview, Models, Tools, Skills, Memory and Governance show read-only data from the cluster. With the bundled observability on, Overview and Costs show spend and tokens per agent and Traces shows recent turns. Areas without a data source (Knowledge, Channels and triggers, Schedules, Playground) say "not available yet".
 
 The design contract is `docs/console/UI-SPEC.md`. The approved mockup is `docs/console/mockup.html`.
 
@@ -63,6 +63,52 @@ The API has these routes only: `GET /healthz`, `GET /api/v1/session`, `GET /api/
 - Every user acts as one operator identity, `console`. There are extension points for authentication, authorization and audit. They are not filled in yet.
 - The ServiceAccount can read what it shows and can write only `agentdefinitions`. `console.viewer: true` makes a read-only console.
 
+## Screenshots
+
+All from the console in demo mode, which holds fake data only. They are made by `console/scripts/capture-screenshots.mjs`.
+
+### Overview
+
+![Console Overview page](../../assets/console/overview-light.webp)
+![Console Overview page, dark theme](../../assets/console/overview-dark.webp)
+
+*Console in demo mode.*
+
+### Agents registry
+
+![Console Agents registry page](../../assets/console/agents-light.webp)
+![Console Agents registry page, dark theme](../../assets/console/agents-dark.webp)
+
+*Console in demo mode.*
+
+### Agent builder
+
+![Console Agent builder page](../../assets/console/builder-light.webp)
+![Console Agent builder page, dark theme](../../assets/console/builder-dark.webp)
+
+*Console in demo mode.*
+
+### Costs
+
+![Console Costs page](../../assets/console/costs-light.webp)
+![Console Costs page, dark theme](../../assets/console/costs-dark.webp)
+
+*Console in demo mode.*
+
+### Traces
+
+![Console Traces page](../../assets/console/traces-light.webp)
+![Console Traces page, dark theme](../../assets/console/traces-dark.webp)
+
+*Console in demo mode.*
+
+### Governance
+
+![Console Governance page](../../assets/console/governance-light.webp)
+![Console Governance page, dark theme](../../assets/console/governance-dark.webp)
+
+*Console in demo mode.*
+
 ## How to enable
 
 Add `components/console/demo-values.yaml` after `components/control-plane/demo-values.yaml` (see [Control plane](./control-plane.md)). The installer builds the image, loads it into kind and creates the token Secret `console-token` (48 random characters, only when absent, never printed).
@@ -90,7 +136,7 @@ The second review of the control plane ran after the console was built. Its cons
 
 - The browser UI was not driven against the real cluster. In the live run only the API was used. The UI was exercised in demo mode.
 - The Playground (a chat with the agent inside the console) does not exist yet.
-- Chart agents are read-only. Other areas show "not available yet".
+- Chart agents are read-only. Areas without a data source show "not available yet".
 - One shared operator identity. No login by user, no per-user audit yet.
 - Reachable only through a port-forward. Serving it over TLS behind an ingress is not done or tested.
 - One kind node, one namespace.

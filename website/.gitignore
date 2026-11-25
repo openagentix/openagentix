@@ -2,3 +2,6 @@ node_modules
 build
 .docusaurus
 .cache-loader
+static/CNAME
+static/robots.txt
+.generated
