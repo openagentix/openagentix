@@ -8,6 +8,11 @@ description: OpenAgentix is an open-source control plane for running AI agents o
 
 OpenAgentix is an open-source control plane for running AI agents on Kubernetes under the rules your platform team sets.
 
+![The OpenAgentix console, Overview page, in demo mode](../assets/console/overview-light.webp)
+![The OpenAgentix console, Overview page, in dark theme, in demo mode](../assets/console/overview-dark.webp)
+
+*Console in demo mode.*
+
 ## What you get
 
 - **No provider keys in agent pods, and cost per agent.** Each agent gets its own key for a model gateway, with a token budget. The gateway records tokens and cost per agent and refuses calls when the budget is used up.
@@ -15,6 +20,8 @@ OpenAgentix is an open-source control plane for running AI agents on Kubernetes 
 - **Known callers and a record.** A gate checks who calls an agent and which user they may speak for, and writes one audit line per request. Tool calls are audited too.
 - **Agents as Kubernetes resources.** A short `AgentDefinition` is checked against a platform policy. If it breaks a rule, it is refused with a reason and nothing is created. Keep it in Git and apply it like any manifest.
 - **One shared stack instead of one per team.** Runtime, gateways, telemetry and a web console come from one install. They are existing open-source projects behind adapters, on open standards (MCP, A2A, OpenTelemetry).
+
+Built with Agent Substrate, kagent, agentgateway, MCP and ToolHive, A2A, OpenTelemetry, VictoriaMetrics, Jaeger, Gateway API, PostgreSQL with pgvector and Agent Kourier: see [Built with](/guide/built-with).
 
 Read more: [Why OpenAgentix](/guide/why), [Concepts](/guide/concepts), [Use cases](/guide/use-cases), [FAQ](/guide/faq).
 

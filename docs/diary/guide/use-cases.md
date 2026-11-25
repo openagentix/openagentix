@@ -103,7 +103,7 @@ kubectl port-forward -n agent-kourier svc/agent-kourier-chat 8081:8081
 
 ## Planned
 
-These are not built. They are in the [roadmap](https://github.com/openagentix/openagentix/blob/main/docs/roadmap.md) and [ADR 0013](https://openagentix.github.io/openagentix/decisions/focus-and-runtime-neutrality).
+These are not built. They are in the [roadmap](https://github.com/openagentix/openagentix/blob/main/docs/roadmap.md) and [ADR 0013](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0013-focus-and-runtime-neutrality.md).
 
 - Bring your own agent: any container that speaks A2A, under the same policy, keys and profiles (release 0.3).
 - Install tested in CI on k3s, then a managed cloud, with OpenShift-compatible manifests (0.3).
