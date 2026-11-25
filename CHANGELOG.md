@@ -6,6 +6,9 @@ All notable changes to OpenAgentix are documented here. The format follows [Keep
 
 No default changed for users who leave the new `controlPlane` and `console` blocks off. The default chart render is the same as in 0.2.0.
 
+### Fixed
+- Installer: every image it builds is now tagged `dev-<hash of its source>` and the tag is passed to the chart (`hack/image-tag.sh`). Before, all images used the tag `dev`; `kind load` keeps an existing tag on the node and the pods use `IfNotPresent`, so a rebuilt image never replaced the one running. A changed source now always gives a new image reference. Affects the bridge, a2a-call, kb, notify, a2a-gate, stub-model, control plane and console images. `SKIP_*_IMAGE` still leaves the chart's `dev` tag.
+
 ### Added
 - Control plane (ADR 0007 slice 1, ADR 0012 contract), off by default (`controlPlane.enabled`). A new resource kind `AgentDefinition` (`openagentix.io/v1alpha1`, short name `oad`) and a controller in `services/control-plane` (Go, standard library only; a core plus adapters for the kagent runtime, the agentgateway keys and the ToolHive tool profiles). A definition becomes a runtime agent, a gateway key and a status with conditions, an endpoint and a revision. Platform catalog and policy ConfigMaps decide what a definition may use. Demo values: `components/control-plane/demo-values.yaml`, example `components/control-plane/researcher.yaml`.
 - Suspend and resume: `spec.suspend` stops the agent, removes the runtime agent and the gateway key entry, and sets `Ready=False` with reason `Suspended`. Resume restores the same key.

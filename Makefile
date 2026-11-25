@@ -48,6 +48,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	components/channels/tests/run.sh
 	components/quickstart/tests/run.sh
 	hack/dashboard/tests/run.sh
+	hack/ci/image-tag-test.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'
 
