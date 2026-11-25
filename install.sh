@@ -430,6 +430,11 @@ SET=()
 # Images are queued here and built in parallel by run_builds (BUILD_JOBS at a time, default 3; 1 = one after the other).
 BUILD_Q=()
 queue_build(){ BUILD_Q+=("$1|$2|${3:-}"); }   # image | context | optional Dockerfile
+# tag_image <image var> <chart value path> <source dir>...: retag the image with dev-<hash of its source> and hand the tag to the chart.
+# kind load keeps an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
+# shellcheck source=hack/image-tag.sh
+. hack/image-tag.sh
+tag_image(){ local v=$1 path=$2 t; shift 2; t=$(src_tag "$@"); printf -v "$v" '%s:%s' "${!v%:*}" "$t"; SET+=(--set-string "$path.image.tag=$t"); }
 run_builds(){
   [ ${#BUILD_Q[@]} -gt 0 ] || return 0
   local jobs=${BUILD_JOBS:-3} spec img ctx df running=0 pids=() imgs=() p fail=0   # no `wait -n`: macOS ships bash 3.2
@@ -446,6 +451,7 @@ run_builds(){
   kind load docker-image "${imgs[@]}" --name "$CLUSTER"
 }
 if [ "${SKIP_BRIDGE_IMAGE:-0}" != 1 ] && [[ "$BRIDGE_IMAGE" == openagentix/telegram-bridge:* ]]; then
+  tag_image BRIDGE_IMAGE bridge bridges/telegram
   log "bridge image $BRIDGE_IMAGE"
   queue_build "$BRIDGE_IMAGE" bridges/telegram
 fi
@@ -453,36 +459,43 @@ fi
 # build, no namespace, no pods), then keyed on the source hash like the bridge and the kb.
 A2A_CALL_IMAGE=$(jq -r 'select(.kind=="CronJob")|.spec.jobTemplate.spec.template.spec.containers[0].image' <<<"$RENDERED" | sort -u | head -1)
 if [ "${SKIP_A2A_CALL_IMAGE:-0}" != 1 ] && [[ "$A2A_CALL_IMAGE" == openagentix/a2a-call:* ]]; then
+  tag_image A2A_CALL_IMAGE scheduling tools/a2a-call
   log "a2a-call image $A2A_CALL_IMAGE (schedules)"
   queue_build "$A2A_CALL_IMAGE" tools/a2a-call
 fi
 KB_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${KB_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_KB_IMAGE:-0}" != 1 ] && [[ "$KB_IMAGE" == openagentix/kb:* ]]; then
+  tag_image KB_IMAGE knowledge.kb services/kb
   log "kb image $KB_IMAGE"
   queue_build "$KB_IMAGE" services/kb
 fi
 NOTIFY_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${NOTIFY_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_NOTIFY_IMAGE:-0}" != 1 ] && [[ "$NOTIFY_IMAGE" == openagentix/notify:* ]]; then
+  tag_image NOTIFY_IMAGE notify services/notify
   log "notify image $NOTIFY_IMAGE"
   queue_build "$NOTIFY_IMAGE" services/notify
 fi
 A2A_GATE_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${A2A_GATE_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_A2A_GATE_IMAGE:-0}" != 1 ] && [[ "$A2A_GATE_IMAGE" == openagentix/a2a-gate:* ]]; then
+  tag_image A2A_GATE_IMAGE governance.a2a services/a2a-gate
   log "a2a-gate image $A2A_GATE_IMAGE"
   queue_build "$A2A_GATE_IMAGE" services/a2a-gate
 fi
 STUB_IMAGE=$(jq -r 'select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image' <<<"$RENDERED")   # empty when gateway.stubModel.enabled=false
 if [ "${SKIP_STUB_MODEL_IMAGE:-0}" != 1 ] && [[ "$STUB_IMAGE" == openagentix/stub-model:* ]]; then
+  tag_image STUB_IMAGE gateway.stubModel services/stub-model
   log "stub-model image $STUB_IMAGE"
   queue_build "$STUB_IMAGE" services/stub-model
 fi
 CP_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CP_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_CONTROL_PLANE_IMAGE:-0}" != 1 ] && [[ "$CP_IMAGE" == openagentix/control-plane:* ]]; then
+  tag_image CP_IMAGE controlPlane services/control-plane
   log "control-plane image $CP_IMAGE"
   queue_build "$CP_IMAGE" services/control-plane
 fi
 CN_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${CN_DEP:-null}" 2>/dev/null || true)
 if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:* ]]; then
+  tag_image CN_IMAGE console services/console console
   log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
   queue_build "$CN_IMAGE" . services/console/Dockerfile
 fi
