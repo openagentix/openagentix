@@ -57,6 +57,15 @@ The values below are the defaults from `charts/openagentix/values.yaml`. They ar
 | `controlPlane.policy.memory.requireExpiry` | `true` |
 | `controlPlane.policy.egress.allowedOrigins` | `[]` |
 | `controlPlane.policy.egress.inClusterDestinations` | `[]` |
+| `controlPlane.policy.allowedRuntimes` | `["builtin"]` |
+| `controlPlane.policy.runtimes.container.images` | `[]` |
+| `controlPlane.policy.runtimes.container.defaultResources.requests.cpu` | `"100m"` |
+| `controlPlane.policy.runtimes.container.defaultResources.requests.memory` | `"256Mi"` |
+| `controlPlane.policy.runtimes.container.defaultResources.limits.cpu` | `"500m"` |
+| `controlPlane.policy.runtimes.container.defaultResources.limits.memory` | `"512Mi"` |
+| `controlPlane.policy.runtimes.container.maxResources.cpu` | `"1"` |
+| `controlPlane.policy.runtimes.container.maxResources.memory` | `"1Gi"` |
+| `controlPlane.policy.runtimes.container.maxAgents` | `3` |
 | `controlPlane.policy.reservedNames` | `[]` |
 | `controlPlane.policy.suspendAll` | `false` |
 <!-- generated:end policy-defaults -->
@@ -101,6 +110,7 @@ These values are not part of the policy file. They sit next to it in `controlPla
 | `controlPlane.minInterval` | `""` |
 | `controlPlane.minRecreateInterval` | `""` |
 | `controlPlane.apiServerPorts` | `[443,6443]` |
+| `controlPlane.containerAgents` | `{"enabled":false,"namespace":"openagentix-workloads","runtimeClassName":"","publicUrl":"","gatewayPodPort":0}` |
 | `controlPlane.memoryDefaultTtlDays` | `15` |
 <!-- generated:end cp-defaults -->
 

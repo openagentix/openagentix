@@ -116,6 +116,21 @@ The table is generated from the CRD. "Limits and checks" shows the schema limits
 | `spec.egress` | object | no |  |  |
 | `spec.egress.allow` | array of string | no | max 64 items | Origins (`https://host[:port]`) the sandbox may reach. Each must match the platform policy. |
 | `spec.suspend` | boolean | no |  | Stops the agent (Ready=False, reason Suspended). The runtime has no pause, so suspend is a STOP - the runtime agent is removed and running conversations end - and the agent's gateway key is cut (it opens nothing until resume). Resume is a fresh start with the same definition, key and revision, and at most once per two minutes. The definition stays accepted. The operator's policy (suspendAll) can stop every definition too. |
+| `spec.runtime` | object | no |  | How the agent is made. Absent means builtin (the platform builds it from the instructions). The operator's policy says which types a definition may use (allowedRuntimes, default only builtin). |
+| `spec.runtime.type` | string | no | one of `builtin`, `container` | builtin (default) or container (the platform runs your digest-pinned image, which speaks A2A, as the agent). |
+| `spec.runtime.container` | object | no |  | Set when type is container, and only then. |
+| `spec.runtime.container.image` | string | yes | max length 300 | Your agent's image, pinned by digest: registry/path@sha256:&lt;64 hex&gt;. It must be under a registry prefix the operator's policy lists. |
+| `spec.runtime.container.port` | integer | yes | min 1024; max 65535 | The port the container serves A2A on. |
+| `spec.runtime.container.env` | array of object | no | max 32 items | Plain environment variables. Never a secret; names the platform owns (OPENAGENTIX_, OPENAI_, OTEL_, KUBERNETES_) are refused. |
+| `spec.runtime.container.env[].name` | string | yes | min length 1; max length 63; pattern `^[A-Z_][A-Z0-9_]*$` |  |
+| `spec.runtime.container.env[].value` | string | yes | max length 4096 |  |
+| `spec.runtime.container.resources` | object | no |  | Optional. Requests default and limits are capped by the operator's policy. |
+| `spec.runtime.container.resources.requests` | object | no |  |  |
+| `spec.runtime.container.resources.requests.cpu` | string | no | max length 16 |  |
+| `spec.runtime.container.resources.requests.memory` | string | no | max length 16 |  |
+| `spec.runtime.container.resources.limits` | object | no |  |  |
+| `spec.runtime.container.resources.limits.cpu` | string | no | max length 16 |  |
+| `spec.runtime.container.resources.limits.memory` | string | no | max length 16 |  |
 <!-- generated:end ad-spec-fields -->
 
 Availability of each part of `spec`:
@@ -138,7 +153,7 @@ These rules are in the CRD. The API server checks them before the controller see
 |---|---|---|
 | `self.metadata.name.size() <= 40` | the object | name must be at most 40 characters |
 | `self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')` | the object | name must be a DNS label: lower case letters, digits and dashes, starting with a letter |
-| `has(self.instructions) != has(self.instructionsFrom)` | `spec` | set exactly one of instructions and instructionsFrom |
+| `(has(self.runtime) && has(self.runtime.type) && self.runtime.type == 'container') || has(self.instructions) != has(self.instructionsFrom)` | `spec` | set exactly one of instructions and instructionsFrom |
 <!-- generated:end ad-object-rules -->
 
 ### What the platform decides
@@ -176,43 +191,47 @@ The controller returns these sentences in `status.violations`, in this order of 
 | 2 | name %q must be a DNS label (lower case letters, digits and dashes, starting with a letter) |
 | 3 | name %q is reserved in namespace %q (chart agents and platform services own it) |
 | 4 | the platform policy allows at most %d agents in namespace %q and %d already exist |
-| 5 | label %s %q is not a valid label value (at most 63 characters: letters, digits, '-', '_' and '.', starting and ending with a letter or digit) |
-| 6 | label %s contains something shaped like a secret (%s); remove it |
-| 7 | description is %d characters; at most %d |
-| 8 | set exactly one of instructions and instructionsFrom |
-| 9 | instructionsFrom is not available yet; write the prompt in instructions |
-| 10 | instructions are required: set exactly one of instructions and instructionsFrom |
-| 11 | instructions are %d bytes; at most %d |
-| 12 | instructions contain something shaped like a secret (%s); remove it |
-| 13 | %s contains something shaped like a secret (%s); remove it |
-| 14 | model %q is not in the platform catalog (%s) |
-| 15 | model %q is not allowed by the platform policy |
-| 16 | toolProfile %q is not defined (defined: %s) |
-| 17 | toolProfile %q is not allowed by the platform policy |
-| 18 | %s adds tools, so it needs a toolProfile: the shared tool server filters on the client side only |
-| 19 | the definition lists tools but names no toolProfile: the shared tool server filters on the client side only |
-| 20 | the platform policy requires a toolProfile |
-| 21 | %s |
-| 22 | the definition lists tool %q twice |
-| 23 | %s is not allowed by the platform policy |
-| 24 | %s is not available on this platform |
-| 25 | knowledge.collections: selecting collections is not available yet; leave the list empty |
-| 26 | notify.destinations: selecting destinations is not available yet; leave the list empty |
-| 27 | memory is not allowed by the platform policy |
-| 28 | memory is not installed on this platform |
-| 29 | the memory expiry job is off, so the time limit would not be enforced; memory is refused until an operator turns it on |
-| 30 | memory.ttlDays must be at least 1 |
-| 31 | memory.ttlDays %d is above the platform maximum of %d |
-| 32 | skill %q is listed twice |
-| 33 | skill %q is not in the platform catalog |
-| 34 | skill %q is not allowed by the platform policy |
-| 35 | skill %q has no version %q in the platform catalog (it offers %q); leave version empty to take it |
-| 36 | egress.allow has %d origins; at most %d are allowed |
-| 37 | egress.allow entry %q is not an origin: use `https://host[:port]` or `http://host[:port]`, a lower case DNS name (a wildcard replaces exactly one leftmost label), no path, no query, no address |
-| 38 | egress.allow lists %q twice |
-| 39 | egress.allow entry %q is %s (it can never be listed) |
-| 40 | egress.allow entry %q names a cluster-internal or local host (an address, a name without a dot, .svc or .cluster.local, or a last label such as .internal, .local, .lan or .corp that only looks public); the policy cannot allow it unless the operator lists exactly host:port in egress.inClusterDestinations |
-| 41 | egress.allow entry %q is not matched by the platform policy |
+| 5 | runtime.type %q is not known (use builtin or container) |
+| 6 | runtime %s is not allowed by the platform policy |
+| 7 | runtime %s is not available on this platform |
+| 8 | runtime.container is set but runtime.type is builtin; set runtime.type to container or remove the block |
+| 9 | label %s %q is not a valid label value (at most 63 characters: letters, digits, '-', '_' and '.', starting and ending with a letter or digit) |
+| 10 | label %s contains something shaped like a secret (%s); remove it |
+| 11 | description is %d characters; at most %d |
+| 12 | set exactly one of instructions and instructionsFrom |
+| 13 | instructionsFrom is not available yet; write the prompt in instructions |
+| 14 | instructions are required: set exactly one of instructions and instructionsFrom |
+| 15 | instructions are %d bytes; at most %d |
+| 16 | instructions contain something shaped like a secret (%s); remove it |
+| 17 | %s contains something shaped like a secret (%s); remove it |
+| 18 | model %q is not in the platform catalog (%s) |
+| 19 | model %q is not allowed by the platform policy |
+| 20 | toolProfile %q is not defined (defined: %s) |
+| 21 | toolProfile %q is not allowed by the platform policy |
+| 22 | %s adds tools, so it needs a toolProfile: the shared tool server filters on the client side only |
+| 23 | the definition lists tools but names no toolProfile: the shared tool server filters on the client side only |
+| 24 | the platform policy requires a toolProfile |
+| 25 | %s |
+| 26 | the definition lists tool %q twice |
+| 27 | %s is not allowed by the platform policy |
+| 28 | %s is not available on this platform |
+| 29 | knowledge.collections: selecting collections is not available yet; leave the list empty |
+| 30 | notify.destinations: selecting destinations is not available yet; leave the list empty |
+| 31 | memory is not allowed by the platform policy |
+| 32 | memory is not installed on this platform |
+| 33 | the memory expiry job is off, so the time limit would not be enforced; memory is refused until an operator turns it on |
+| 34 | memory.ttlDays must be at least 1 |
+| 35 | memory.ttlDays %d is above the platform maximum of %d |
+| 36 | skill %q is listed twice |
+| 37 | skill %q is not in the platform catalog |
+| 38 | skill %q is not allowed by the platform policy |
+| 39 | skill %q has no version %q in the platform catalog (it offers %q); leave version empty to take it |
+| 40 | egress.allow has %d origins; at most %d are allowed |
+| 41 | egress.allow entry %q is not an origin: use `https://host[:port]` or `http://host[:port]`, a lower case DNS name (a wildcard replaces exactly one leftmost label), no path, no query, no address |
+| 42 | egress.allow lists %q twice |
+| 43 | egress.allow entry %q is %s (it can never be listed) |
+| 44 | egress.allow entry %q names a cluster-internal or local host (an address, a name without a dot, .svc or .cluster.local, or a last label such as .internal, .local, .lan or .corp that only looks public); the policy cannot allow it unless the operator lists exactly host:port in egress.inClusterDestinations |
+| 45 | egress.allow entry %q is not matched by the platform policy |
 <!-- generated:end ad-violations -->
 
 ## `status`
@@ -254,6 +273,7 @@ What a client may rely on:
 | `status.capabilities.maxStepSeconds` | integer | no |  | 0 is unknown |
 | `status.capabilities.cancelStopsLoop` | string | no | one of `yes`, `no`, `unknown` |  |
 | `status.capabilities.perRunIdentity` | string | no | one of `none`, `session`, `run`, `unknown` |  |
+| `status.capabilities.isolation` | string | no |  | How the agent is separated from others: sandbox-per-session, sandboxed-pod or container. Absent is unknown. |
 | `status.agentRef` | object | no |  | One generic reference to the runtime's object, for people who debug. |
 | `status.agentRef.apiVersion` | string | no |  |  |
 | `status.agentRef.kind` | string | no |  |  |
