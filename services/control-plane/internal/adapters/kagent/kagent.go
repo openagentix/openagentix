@@ -72,6 +72,8 @@ func (a *Adapter) Capabilities() api.Capabilities {
 	return api.Capabilities{
 		Approvals: api.Yes, DurableWaits: api.Yes, WorkspacePersistence: "snapshot",
 		MaxStepSeconds: 600, CancelStopsLoop: api.Unknown, PerRunIdentity: "session",
+		// every session runs in its own sandbox on Agent Substrate (gVisor)
+		Isolation: "sandbox-per-session",
 	}
 }
 
