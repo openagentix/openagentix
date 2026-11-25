@@ -83,7 +83,7 @@ Today the same rules are chart values, `governance.a2a.callers[]`. See the [A2A 
 
 ## `Schedule`
 
-Reserved. A schedule says which agent gets which message at which time. The controller will turn it into the CronJob and the access rule it needs. A schedule needs an `AgentAccess` rule and will fail with a clear condition if it has none. The chart values `schedules[]` keep working for at least one release after the kind exists (issue #4). No field list is decided yet. How delivery works today is in ADR 0002.
+Reserved. A schedule says which agent gets which message at which time. The controller will turn it into a CronJob. A schedule needs an `AgentAccess` rule, which the user creates, and will fail with a clear condition if it has none. The chart values `schedules[]` keep working for at least one release after the kind exists (issue #4). A field list is proposed in [ADR 0017](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0017-schedule.md) (status: Proposed, nothing built yet). How delivery works today is in ADR 0002.
 
 ## `Trigger`
 
