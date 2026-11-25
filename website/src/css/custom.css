@@ -1,0 +1,58 @@
+/* Colours come from the console design tokens (docs/console/UI-SPEC.md). */
+:root {
+  --ifm-color-primary: #0a6283;
+  --ifm-color-primary-dark: #095876;
+  --ifm-color-primary-darker: #095573;
+  --ifm-color-primary-darkest: #07465f;
+  --ifm-color-primary-light: #0b6c90;
+  --ifm-color-primary-lighter: #0c6f94;
+  --ifm-color-primary-lightest: #0e83ad;
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #ffffff;
+  --ifm-font-color-base: #121a22;
+  --ifm-color-emphasis-300: #dde2e7;
+  --ifm-navbar-background-color: #ffffff;
+  --ifm-code-font-size: 92%;
+  --docusaurus-highlighted-code-line-bg: rgba(10, 98, 131, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #5db8db;
+  --ifm-color-primary-dark: #45add5;
+  --ifm-color-primary-darker: #39a7d2;
+  --ifm-color-primary-darkest: #2a8bb1;
+  --ifm-color-primary-light: #75c3e1;
+  --ifm-color-primary-lighter: #81c8e4;
+  --ifm-color-primary-lightest: #a1d6ec;
+  --ifm-background-color: #0d1115;
+  --ifm-background-surface-color: #151b21;
+  --ifm-font-color-base: #e5eaef;
+  --ifm-color-emphasis-300: #252e37;
+  --ifm-navbar-background-color: #151b21;
+  --docusaurus-highlighted-code-line-bg: rgba(93, 184, 219, 0.15);
+}
+
+.footer--dark {
+  --ifm-footer-background-color: #121a22;
+}
+
+.navbar__title {
+  font-weight: 700;
+}
+
+table {
+  display: table;
+  width: 100%;
+}
+
+/* Screenshots come in a light and a dark version; show the one that matches the theme. */
+[data-theme='light'] img[src*='-dark'] {
+  display: none;
+}
+[data-theme='dark'] img[src*='-light'] {
+  display: none;
+}
+img[src*='console'] {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+}
