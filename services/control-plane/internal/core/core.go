@@ -836,7 +836,7 @@ func (a *attempt) apply() error {
 	} else {
 		res, err = keys.Ensure(ctx, keys.Params{
 			Namespace: p.Namespace, SecretName: p.KeySecret, DataKey: c.cfg.Runtime.KeyDataKey(), User: p.GatewayUserID,
-			Labels: labels, Owner: owner, Registered: reg.Hash, Known: known,
+			Labels: map[string]string{api.LabelManagedBy: api.ManagedByValue, api.LabelDefinition: name}, Owner: owner, Registered: reg.Hash, Known: known,
 			EntryLabels: p.Labels, RegisteredLabels: reg.Labels, Adopted: adopted, Hold: p.Suspended,
 		}, c.cfg.Secrets, c.cfg.Gateway, c.cfg.Mint)
 	}

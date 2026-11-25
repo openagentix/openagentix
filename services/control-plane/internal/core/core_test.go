@@ -786,3 +786,21 @@ func sha(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// The admission guard lets a key Secret carry exactly two labels (managed-by and agent-definition). A definition's own labels (team, project:
+// informational, for cost and traces) go on the kagent objects and into the gateway entry, never on the Secret, or the API server refuses it (422).
+func TestKeySecretCarriesOnlyTheTwoGuardedLabels(t *testing.T) {
+	e, _ := newEnv(t)
+	o := defObjIn(e.ns, "researcher", nil)
+	o["metadata"].(kubetest.Object)["labels"] = map[string]any{"openagentix.io/team": "platform", "openagentix.io/project": "demo"}
+	e.srv.Seed("agentdefinitions", o)
+	e.pass(t)
+	sec, ok := e.srv.Get("secrets", "kagent", "researcher-virtual-key-"+uid8(e.raw("researcher")))
+	if !ok {
+		t.Fatalf("no key secret")
+	}
+	l, _ := kube.Meta(sec)["labels"].(map[string]any)
+	if len(l) != 2 || l["app.kubernetes.io/managed-by"] != "openagentix-control-plane" || l["openagentix.io/agent-definition"] != "researcher" {
+		t.Fatalf("secret labels must be exactly managed-by and agent-definition: %v", l)
+	}
+}
