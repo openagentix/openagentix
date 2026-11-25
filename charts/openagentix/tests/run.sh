@@ -2021,6 +2021,39 @@ D=$(docs "${CN10[@]}" --set console.traces.url=https://jaeger.example.org:16686)
 eq "console.traces.url overrides the bundled Jaeger and opens no egress for it" "$(q "$D" "$CNC|.env[]|select(.name==\"CONSOLE_TRACES_URL\")|.value") $(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app=="jaeger")]|length')" "https://jaeger.example.org:16686 0"
 eq "a console.traces.url with credentials is refused" "$(render_err "${CN10[@]}" --set 'console.traces.url=http://u:p@x:1/' | /usr/bin/grep -c 'console.traces.url')" 1
 
+echo "# bring your own agent (container runtime, ADR 0015)"
+CA=(--set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.allowedRuntimes={builtin,container}' --set 'controlPlane.policy.runtimes.container.images={registry.local/oa/}')
+H0=$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" 2>&1 | shasum -a 256)
+H1=$(helm template openagentix "$CHART" -n openagentix-system "${CP9[@]}" --set controlPlane.containerAgents.enabled=false --set 'controlPlane.policy.allowedRuntimes={builtin,container}' 2>&1 | shasum -a 256)
+eq "containerAgents off (even with the policy keys set) renders byte-identical to the defaults" "$H1" "$H0"
+D=$(docs "${CP9[@]}")
+eq "off: no workload namespace, no workload guard, no route list" "$(count "$D" '(.kind=="Namespace" and .metadata.name=="openagentix-workloads") or (.metadata.name // "" | startswith("openagentix-control-plane-guard-workload")) or .metadata.name=="a2a-gate-routes"')" 0
+eq "off: the policy file has no allowedRuntimes" "$(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-policy")|.data["policy.json"]|fromjson|has("allowedRuntimes")')" false
+eq "off: the catalog names no container adapter" "$(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.adapters|has("runtimes")')" false
+D=$(docs "${CP9[@]}" "${CA[@]}")
+eq "on: the workload namespace enforces Pod Security restricted" "$(q "$D" '.[]|select(.kind=="Namespace" and .metadata.name=="openagentix-workloads")|.metadata.labels["pod-security.kubernetes.io/enforce"]')" restricted
+eq "on: the workload namespace is deny-by-default (both directions, every pod)" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="default-deny" and .metadata.namespace=="openagentix-workloads")|[.spec.podSelector,(.spec.policyTypes|sort|join(",")),(.spec|has("ingress")),(.spec|has("egress"))]|tostring')" '[{},"Egress,Ingress",false,false]'
+WR='.[]|select(.kind=="Role" and .metadata.namespace=="openagentix-workloads")|.rules[]'
+eq "on: the controller's Role in the workload namespace can never read a Secret" "$(q "$D" "[$WR|select(.resources|index(\"secrets\"))|.verbs[]]|sort|join(\",\")")" "create,delete"
+eq "on: that Role has no wildcard and no pods or exec" "$(q "$D" "[$WR|(.resources+.verbs+.apiGroups)[]|select(.==\"*\" or .==\"pods\" or .==\"pods/exec\")]|length")" 0
+eq "on: the route list ConfigMap exists in the gate namespace, empty" "$(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="a2a-gate-routes")|.metadata.namespace+" "+.data["routes.json"]')" 'openagentix-gateway {"container":[]}'
+eq "on: the controller may only get and patch that ConfigMap there" "$(q "$D" '.[]|select(.kind=="Role" and .metadata.name=="openagentix-control-plane-routes")|.rules|tostring')" '[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["a2a-gate-routes"],"verbs":["get","patch"]}]'
+GATE='.[]|select(.kind=="Deployment" and .metadata.name=="a2a-gate")|.spec.template.spec'
+eq "on: the gate mounts the route list as a directory and reads it" "$(q "$D" "$GATE|[(.containers[0].env[]|select(.name==\"A2A_GATE_ROUTES_FILE\")|.value),(.containers[0].volumeMounts[]|select(.name==\"routes\")|.mountPath),(.containers[0].volumeMounts[]|select(.name==\"routes\")|has(\"subPath\"))]|tostring")" '["/etc/a2a-gate/routes/routes.json","/etc/a2a-gate/routes",false]'
+eq "on: the gate gets the workload namespace and its public URL" "$(q "$D" "$GATE|[.containers[0].env[]|select(.name==\"A2A_GATE_WORKLOAD_NAMESPACE\" or .name==\"A2A_GATE_PUBLIC_URL\")|.value]|tostring")" '["openagentix-workloads","http://a2a-gate.openagentix-gateway.svc.cluster.local:8080"]'
+eq "on: the policy lists container, and no image is allowed until the operator names a prefix" "$(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-policy")|.data["policy.json"]|fromjson|[.allowedRuntimes,.runtimes.container.images]|tostring')" '[["builtin","container"],["registry.local/oa/"]]'
+D2=$(docs "${CP9[@]}" --set controlPlane.containerAgents.enabled=true)
+eq "on: allowedRuntimes stays [builtin] unless the operator opens it" "$(q "$D2" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-policy")|.data["policy.json"]|fromjson|.allowedRuntimes|tostring')" '["builtin"]'
+GP='.[]|select(.kind=="ValidatingAdmissionPolicy" and (.metadata.name|startswith("openagentix-control-plane-guard-workload")))'
+eq "on: six workload guard policies (four kinds, Secrets, the route list), all fail-closed and Deny-bound" "$(q "$D" "[$GP|select(.spec.failurePolicy==\"Fail\")]|length") $(q "$D" '[.[]|select(.kind=="ValidatingAdmissionPolicyBinding" and (.metadata.name|startswith("openagentix-control-plane-guard-workload")) and .spec.validationActions==["Deny"])]|length')" "6 6"
+eq "on: every workload policy looks at the controller only" "$(q "$D" "[$GP|select(.spec.matchConditions[0].expression|contains(\"system:serviceaccount:openagentix-system:openagentix-control-plane\"))]|length")" 6
+eq "on: the guard of the agents namespace steps aside for the workload objects only" "$(q "$D" '.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name=="openagentix-control-plane-guard-secrets")|.spec.matchConditions|map(.name)|join(",")')" "only-the-controller,not-the-workload-namespace"
+eq "on: the container catalog section names the workload namespace and the gate" "$(q "$D" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.runtime.container|[.namespace,.gateNamespace,.gatePodSelector.app]|join(" ")')" "openagentix-workloads openagentix-gateway a2a-gate"
+eq "containerAgents needs the A2A gate" "$(render_err "${CP9[@]}" --set governance.a2a.enabled=false --set controlPlane.containerAgents.enabled=true | /usr/bin/grep -c 'containerAgents.enabled needs governance.a2a.enabled')" 1
+eq "the workload namespace may not be a platform namespace" "$(render_err "${CP9[@]}" "${CA[@]}" --set controlPlane.containerAgents.namespace=kagent | /usr/bin/grep -c 'foreign code needs a namespace of its own')" 1
+eq "an image prefix without a trailing slash is refused" "$(render_err "${CP9[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.runtimes.container.images={registry.local/oa}' | /usr/bin/grep -c 'trailing slash')" 1
+eq "an unknown runtime type is refused" "$(render_err "${CP9[@]}" --set controlPlane.containerAgents.enabled=true --set 'controlPlane.policy.allowedRuntimes={vm}' | /usr/bin/grep -c 'not a runtime type')" 1
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

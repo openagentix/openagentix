@@ -1,0 +1,329 @@
+{{- /*
+The output guard of the container runtime (ADR 0015): what the controller may write in the WORKLOAD namespace, as ValidatingAdmissionPolicies in the
+style of control-plane-guard.yaml (an allowlist of keys at every level, the values that matter pinned, failurePolicy Fail, only the controller's
+ServiceAccount is judged). Renders nothing unless controlPlane.enabled and controlPlane.containerAgents.enabled are true.
+  guard-workload-deployments, -services, -serviceaccounts, -networkpolicies, -secrets   one per kind, each also limited to the workload namespace
+  guard-workload-routes   the gate's route list ConfigMap: an UPDATE of the one key routes.json, {"container":["<agents namespace>/<name>",...]}
+The three policies of control-plane-guard.yaml that would otherwise refuse these writes (secrets, configmaps, other) stay as they are, except that
+they step aside for exactly these objects (a matchCondition or an exclusion rendered by control-plane-guard.yaml when the feature is on).
+A key outside an allowlist is refused whatever its value, so a field nobody thought of (hostNetwork, hostPID, hostIPC, privileged, extra capabilities,
+runAsUser 0, a second container, initContainers, ephemeralContainers, another volume, nodeName, tolerations, affinity, hostPath ...) stays out.
+The image is pinned to a digest and to the operator's registry prefixes here; that it is the image of the definition is the controller's check.
+*/ -}}
+{{- if include "oa.caOn" . }}
+{{- $ns := include "oa.cpNamespace" . }}
+{{- $kns := .Values.kagent.namespace }}
+{{- $sa := "openagentix-control-plane" }}
+{{- $ca := .Values.controlPlane.containerAgents }}
+{{- $wns := $ca.namespace }}
+{{- $gate := .Values.governance.a2a.namespace }}
+{{- $cat := include "oa.cpCatalog" . | fromJson }}
+{{- $ck := $cat.runtime.container }}
+{{- $pc := (.Values.controlPlane.policy.runtimes | default dict).container | default dict }}
+{{- $prefixes := $pc.images | default list }}
+{{- $maxCPU := ($pc.maxResources | default dict).cpu | default "1" }}
+{{- $maxMem := ($pc.maxResources | default dict).memory | default "1Gi" }}
+{{- $metaKeys := "['name', 'namespace', 'labels', 'annotations', 'ownerReferences', 'uid', 'resourceVersion', 'generation', 'creationTimestamp', 'deletionTimestamp', 'deletionGracePeriodSeconds', 'finalizers', 'managedFields']" }}
+{{- $labelKeys := "['app.kubernetes.io/managed-by', 'app.kubernetes.io/name', 'openagentix.io/agent', 'openagentix.io/agent-definition', 'openagentix.io/definition-namespace', 'openagentix.io/team', 'openagentix.io/project']" }}
+{{- $kinds := list
+      (dict "id" "deployments" "group" "apps" "kind" "Deployment" "extraAnn" ", 'deployment.kubernetes.io/revision'")
+      (dict "id" "services" "group" "" "kind" "Service" "extraAnn" "")
+      (dict "id" "serviceaccounts" "group" "" "kind" "ServiceAccount" "extraAnn" "")
+      (dict "id" "networkpolicies" "group" "networking.k8s.io" "kind" "NetworkPolicy" "extraAnn" "") }}
+{{- range $k := $kinds }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ printf "openagentix-control-plane-guard-workload-%s" $k.id }}
+  labels:
+    app: control-plane
+    {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [{{ $k.group | quote }}]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [{{ $k.id }}]
+  {{- include "oa.cpGuardHead" (dict "ns" $ns "sa" $sa) }}
+  variables:
+    - name: cur
+      expression: "dyn(object)"
+    - name: prev
+      expression: "dyn(oldObject)"
+    - name: del
+      expression: "request.operation == 'DELETE'"
+    - name: subject
+      expression: "variables.del ? variables.prev : variables.cur"
+    - name: agent
+      expression: "has(variables.subject.metadata.name) ? variables.subject.metadata.name : ''"
+  validations:
+    - message: {{ printf "the control plane may only write %s in the namespace %s" $k.id $wns | quote }}
+      expression: {{ printf "request.namespace == %s" ($wns | toJson) | toJson }}
+    # DELETE: the existing object carries the labels of this controller, and its definition namespace is the agents namespace
+    - message: "the control plane may only delete objects that carry its two labels, the agent name and the definition namespace"
+      expression: |-
+        request.operation != 'DELETE' || (
+          has(variables.prev.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in variables.prev.metadata.labels && variables.prev.metadata.labels['app.kubernetes.io/managed-by'] == 'openagentix-control-plane' &&
+          'openagentix.io/agent-definition' in variables.prev.metadata.labels && variables.prev.metadata.labels['openagentix.io/agent-definition'] == variables.agent &&
+          'openagentix.io/definition-namespace' in variables.prev.metadata.labels && variables.prev.metadata.labels['openagentix.io/definition-namespace'] == {{ $kns | toJson }})
+    # metadata: the key set, no owner reference (it cannot cross namespaces: the labels and the definition UID say whose it is), the labels
+    - message: "metadata must hold only name, namespace, labels, annotations and what the API server adds, no owner reference, no finalizer of its own"
+      expression: |-
+        request.operation == 'DELETE' || (
+          variables.cur.metadata.all(k, k in {{ $metaKeys }}) && has(variables.cur.metadata.name) &&
+          variables.cur.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$') && size(variables.cur.metadata.name) <= 63 &&
+          (!has(variables.cur.metadata.ownerReferences) || size(variables.cur.metadata.ownerReferences) == 0) &&
+          (!has(variables.cur.metadata.finalizers) || variables.cur.metadata.finalizers.all(f, f == 'foregroundDeletion')))
+    - message: "the labels must be only those of the container runtime: managed-by, the agent name, the definition name and the agents namespace (and team and project when set)"
+      expression: |-
+        request.operation == 'DELETE' || (
+          has(variables.cur.metadata.labels) && variables.cur.metadata.labels.all(k, k in {{ $labelKeys }}) &&
+          variables.cur.metadata.labels['app.kubernetes.io/managed-by'] == 'openagentix-control-plane' &&
+          variables.cur.metadata.labels['openagentix.io/agent'] == variables.agent &&
+          variables.cur.metadata.labels['openagentix.io/agent-definition'] == variables.agent &&
+          variables.cur.metadata.labels['openagentix.io/definition-namespace'] == {{ $kns | toJson }} &&
+          (!('app.kubernetes.io/name' in variables.cur.metadata.labels) || variables.cur.metadata.labels['app.kubernetes.io/name'] == variables.agent) &&
+          variables.cur.metadata.labels.all(k, !(k in ['openagentix.io/team', 'openagentix.io/project']) || (type(variables.cur.metadata.labels[k]) == string && variables.cur.metadata.labels[k].matches('^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$') && size(variables.cur.metadata.labels[k]) <= 63)))
+    - message: "the only annotation is the definition UID (and what the API server adds)"
+      expression: |-
+        request.operation == 'DELETE' || !has(variables.cur.metadata.annotations) ||
+          variables.cur.metadata.annotations.all(k, k in ['openagentix.io/definition-uid'{{ $k.extraAnn }}] && type(variables.cur.metadata.annotations[k]) == string && size(variables.cur.metadata.annotations[k]) <= 64)
+    - message: "the object may hold only apiVersion, kind, metadata, its own spec fields and status"
+      expression: |-
+        request.operation == 'DELETE' || variables.cur.all(k, k in ['apiVersion', 'kind', 'metadata', 'spec', 'status'{{ if eq $k.kind "ServiceAccount" }}, 'automountServiceAccountToken'{{ end }}])
+{{- if eq $k.kind "ServiceAccount" }}
+    - message: "a ServiceAccount of a container agent mounts no token and has no secrets or pull secrets"
+      expression: |-
+        request.operation == 'DELETE' || (has(variables.cur.automountServiceAccountToken) && variables.cur.automountServiceAccountToken == false &&
+          !has(variables.cur.secrets) && !has(variables.cur.imagePullSecrets) && !has(variables.cur.spec))
+{{- end }}
+{{- if eq $k.kind "Service" }}
+    - message: {{ printf "a Service is ClusterIP, selects only this agent's pod and exposes the one port 8080 to a container port of 1024 or more" | quote }}
+      expression: |-
+        request.operation == 'DELETE' || (
+          variables.cur.spec.all(k, k in ['type', 'selector', 'ports', 'clusterIP', 'clusterIPs', 'ipFamilies', 'ipFamilyPolicy', 'internalTrafficPolicy', 'sessionAffinity']) &&
+          variables.cur.spec.type == 'ClusterIP' &&
+          variables.cur.spec.selector == dyn({'openagentix.io/agent': variables.agent}) &&
+          size(variables.cur.spec.ports) == 1 &&
+          variables.cur.spec.ports.all(p, p.all(k, k in ['name', 'port', 'protocol', 'targetPort']) && p.port == 8080 && (!has(p.protocol) || p.protocol == 'TCP') &&
+            type(p.targetPort) == int && p.targetPort >= 1024 && p.targetPort <= 65535))
+{{- end }}
+{{- if eq $k.kind "NetworkPolicy" }}
+    - message: "a NetworkPolicy admits only the A2A gate to the agent's port and lets the agent reach only DNS and the model gateway"
+      expression: |-
+        request.operation == 'DELETE' || (
+          variables.cur.spec.all(k, k in ['podSelector', 'policyTypes', 'ingress', 'egress']) &&
+          variables.cur.spec.podSelector == dyn({'matchLabels': {'openagentix.io/agent': variables.agent}}) &&
+          variables.cur.spec.policyTypes == dyn(['Ingress', 'Egress']) &&
+          size(variables.cur.spec.ingress) == 1 && size(variables.cur.spec.egress) == 2 &&
+          'from' in variables.cur.spec.ingress[0] && 'ports' in variables.cur.spec.ingress[0] && variables.cur.spec.ingress[0].all(k, k in ['from', 'ports']) &&
+          variables.cur.spec.ingress[0].from == dyn([{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': {{ $ck.gateNamespace | toJson }}}}, 'podSelector': {'matchLabels': {{ include "oa.celMap" $ck.gatePodSelector }}}}]) &&
+          size(variables.cur.spec.ingress[0].ports) == 1 && variables.cur.spec.ingress[0].ports[0].all(k, k in ['protocol', 'port']) &&
+          variables.cur.spec.ingress[0].ports[0].protocol == 'TCP' && type(variables.cur.spec.ingress[0].ports[0].port) == int &&
+          variables.cur.spec.ingress[0].ports[0].port >= 1024 && variables.cur.spec.ingress[0].ports[0].port <= 65535 &&
+          variables.cur.spec.egress[0] == dyn({'to': dyn([{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': {{ $ck.dnsNamespace | toJson }}}}, 'podSelector': {'matchLabels': {'k8s-app': 'kube-dns'}}}]),
+                                           'ports': dyn([{'protocol': dyn('UDP'), 'port': dyn(53)}, {'protocol': dyn('TCP'), 'port': dyn(53)}])}) &&
+          variables.cur.spec.egress[1] == dyn({'to': dyn([{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': {{ $ck.gatewayNamespace | toJson }}}}, 'podSelector': {'matchLabels': {{ include "oa.celMap" $ck.gatewayPodSelector }}}}]),
+                                           'ports': dyn([{'protocol': dyn('TCP'), 'port': dyn({{ $ck.gatewayPort }})}])}))
+{{- end }}
+{{- if eq $k.kind "Deployment" }}
+    - message: "a Deployment has one replica or none, selects only this agent's pod label and changes nothing else about the rollout"
+      expression: |-
+        request.operation == 'DELETE' || (
+          variables.cur.spec.all(k, k in ['replicas', 'selector', 'template', 'strategy', 'revisionHistoryLimit', 'progressDeadlineSeconds', 'minReadySeconds']) &&
+          variables.cur.spec.replicas in [0, 1] &&
+          variables.cur.spec.selector == dyn({'matchLabels': {'openagentix.io/agent': variables.agent}}) &&
+          variables.cur.spec.template.all(k, k in ['metadata', 'spec']) &&
+          variables.cur.spec.template.metadata.all(k, k in ['labels', 'annotations', 'creationTimestamp']) &&
+          variables.cur.spec.template.metadata.labels == dyn({'openagentix.io/agent': variables.agent}) &&
+          (!has(variables.cur.spec.template.metadata.annotations) ||
+            variables.cur.spec.template.metadata.annotations.all(k, k == 'openagentix.io/key-fingerprint' && type(variables.cur.spec.template.metadata.annotations[k]) == string && variables.cur.spec.template.metadata.annotations[k].matches('^[0-9a-f]{1,16}$'))))
+    # the pod: its own ServiceAccount without a token, non-root 65532, seccomp RuntimeDefault; no host namespaces, node placement, init or ephemeral containers
+    - message: "the pod must use only its own ServiceAccount without a token, run as 65532 non-root with seccomp RuntimeDefault, and set no host namespace, node, toleration, affinity or extra container"
+      expression: |-
+        request.operation == 'DELETE' || (
+          variables.cur.spec.template.spec.all(k, k in ['serviceAccountName', 'serviceAccount', 'automountServiceAccountToken', 'enableServiceLinks', 'securityContext', 'containers', 'volumes', 'runtimeClassName', 'restartPolicy', 'terminationGracePeriodSeconds', 'dnsPolicy', 'schedulerName']) &&
+          variables.cur.spec.template.spec.serviceAccountName == variables.agent &&
+          (!has(variables.cur.spec.template.spec.serviceAccount) || variables.cur.spec.template.spec.serviceAccount == variables.agent) &&
+          has(variables.cur.spec.template.spec.automountServiceAccountToken) && variables.cur.spec.template.spec.automountServiceAccountToken == false &&
+          (!has(variables.cur.spec.template.spec.enableServiceLinks) || variables.cur.spec.template.spec.enableServiceLinks == false) &&
+          (!has(variables.cur.spec.template.spec.runtimeClassName) || variables.cur.spec.template.spec.runtimeClassName == {{ $ck.runtimeClassName | toJson }}) &&
+          (!has(variables.cur.spec.template.spec.dnsPolicy) || variables.cur.spec.template.spec.dnsPolicy == 'ClusterFirst') &&
+          (!has(variables.cur.spec.template.spec.restartPolicy) || variables.cur.spec.template.spec.restartPolicy == 'Always') &&
+          variables.cur.spec.template.spec.securityContext.all(k, k in ['runAsNonRoot', 'runAsUser', 'runAsGroup', 'seccompProfile']) &&
+          variables.cur.spec.template.spec.securityContext.runAsNonRoot == true && variables.cur.spec.template.spec.securityContext.runAsUser == 65532 &&
+          variables.cur.spec.template.spec.securityContext.runAsGroup == 65532 &&
+          variables.cur.spec.template.spec.securityContext.seccompProfile == dyn({'type': 'RuntimeDefault'}))
+    - message: "the one container must run a digest-pinned image of an allowed registry prefix, with no privilege escalation, a read-only root filesystem and every capability dropped"
+      expression: |-
+        request.operation == 'DELETE' || (
+          size(variables.cur.spec.template.spec.containers) == 1 &&
+          variables.cur.spec.template.spec.containers.all(c,
+            c.all(k, k in ['name', 'image', 'ports', 'env', 'resources', 'securityContext', 'volumeMounts', 'readinessProbe', 'livenessProbe', 'imagePullPolicy', 'terminationMessagePath', 'terminationMessagePolicy']) &&
+            c.name == 'agent' &&
+            c.image.matches('^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$') &&
+            {{ toJson $prefixes }}.exists(p, c.image.startsWith(p)) &&
+            c.securityContext.all(k, k in ['allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities']) &&
+            c.securityContext.allowPrivilegeEscalation == false && c.securityContext.readOnlyRootFilesystem == true &&
+            c.securityContext.capabilities == dyn({'drop': ['ALL']}) &&
+            size(c.ports) == 1 && c.ports.all(p, p.all(k, k in ['name', 'containerPort', 'protocol']) && type(p.containerPort) == int && p.containerPort >= 1024 && p.containerPort <= 65535 && (!has(p.protocol) || p.protocol == 'TCP'))))
+    - message: "the container's environment is the key from its own Secret, the gateway URL, the model and the user's plain variables, none of them with a reserved prefix"
+      expression: |-
+        request.operation == 'DELETE' || variables.cur.spec.template.spec.containers.all(c, has(c.env) && c.env.all(e,
+          e.all(k, k in ['name', 'value', 'valueFrom']) && type(e.name) == string &&
+          (e.name == 'OPENAI_API_KEY' ?
+            (!has(e.value) && has(e.valueFrom) && e.valueFrom.all(k, k == 'secretKeyRef') && e.valueFrom.secretKeyRef.all(k, k in ['name', 'key']) && e.valueFrom.secretKeyRef.key == 'OPENAI_API_KEY' &&
+             e.valueFrom.secretKeyRef.name.matches('^' + variables.agent + '-virtual-key-[0-9a-f]{8}$')) :
+          e.name == 'OPENAI_BASE_URL' ? (!has(e.valueFrom) && e.value == {{ $cat.gatewayBaseUrl | toJson }}) :
+          e.name == 'OPENAGENTIX_MODEL' ? (!has(e.valueFrom) && e.value in {{ toJson $cat.models }}) :
+          (!has(e.valueFrom) && has(e.value) && e.name.matches('^[A-Z_][A-Z0-9_]*$') && size(e.value) <= 4096 &&
+           !e.name.startsWith('OPENAGENTIX_') && !e.name.startsWith('OPENAI_') && !e.name.startsWith('OTEL_') && !e.name.startsWith('KUBERNETES_')))))
+    - message: {{ printf "resources must set CPU and memory limits at or under the platform maximum (cpu %s, memory %s), requests no higher than the limits" $maxCPU $maxMem | quote }}
+      expression: |-
+        request.operation == 'DELETE' || variables.cur.spec.template.spec.containers.all(c,
+          has(c.resources) && c.resources.all(k, k in ['requests', 'limits']) && has(c.resources.limits) && c.resources.limits.all(k, k in ['cpu', 'memory']) &&
+          has(c.resources.limits.cpu) && has(c.resources.limits.memory) &&
+          quantity(c.resources.limits.cpu).compareTo(quantity({{ $maxCPU | toString | toJson }})) <= 0 &&
+          quantity(c.resources.limits.memory).compareTo(quantity({{ $maxMem | toString | toJson }})) <= 0 &&
+          (!has(c.resources.requests) || (c.resources.requests.all(k, k in ['cpu', 'memory']) &&
+            (!has(c.resources.requests.cpu) || quantity(c.resources.requests.cpu).compareTo(quantity(c.resources.limits.cpu)) <= 0) &&
+            (!has(c.resources.requests.memory) || quantity(c.resources.requests.memory).compareTo(quantity(c.resources.limits.memory)) <= 0))))
+    - message: "the only volume is an emptyDir of 256Mi mounted at /tmp, and the probes are HTTP GETs of the agent card"
+      expression: |-
+        request.operation == 'DELETE' || (
+          size(variables.cur.spec.template.spec.volumes) == 1 && variables.cur.spec.template.spec.volumes[0].all(k, k in ['name', 'emptyDir']) && variables.cur.spec.template.spec.volumes[0].name == 'tmp' &&
+          variables.cur.spec.template.spec.volumes[0].emptyDir.all(k, k == 'sizeLimit') && variables.cur.spec.template.spec.volumes[0].emptyDir.sizeLimit == '256Mi' &&
+          variables.cur.spec.template.spec.containers.all(c, c.volumeMounts == dyn([{'name': 'tmp', 'mountPath': '/tmp'}]) &&
+            ['readinessProbe', 'livenessProbe'].all(pn, !(pn in c) || (c[pn].all(k, k in ['httpGet', 'periodSeconds', 'failureThreshold', 'timeoutSeconds', 'successThreshold', 'initialDelaySeconds']) &&
+              has(c[pn].httpGet) && c[pn].httpGet.all(k, k in ['path', 'port', 'scheme']) && c[pn].httpGet.path == '/.well-known/agent-card.json' && type(c[pn].httpGet.port) == int))))
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ printf "openagentix-control-plane-guard-workload-%s" $k.id }}
+  labels:
+    app: control-plane
+    {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  policyName: {{ printf "openagentix-control-plane-guard-workload-%s" $k.id }}
+  validationActions: [Deny]
+{{- end }}
+{{- /* ---- the key Secret in the workload namespace ---- */}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openagentix-control-plane-guard-workload-secrets
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [secrets]
+  {{- include "oa.cpGuardHead" (dict "ns" $ns "sa" $sa) }}
+    # only the workload namespace: the agents namespace has its own policy (control-plane-guard.yaml)
+    - name: only-the-workload-namespace
+      expression: {{ printf "request.namespace == %s" ($wns | toJson) | toJson }}
+  variables:
+    - name: cur
+      expression: "dyn(object)"
+    - name: prev
+      expression: "dyn(oldObject)"
+    - name: subject
+      expression: "request.operation == 'DELETE' ? variables.prev : variables.cur"
+    - name: secretAgent
+      expression: "has(variables.subject.metadata.name) && size(variables.subject.metadata.name) > 21 ? variables.subject.metadata.name.substring(0, size(variables.subject.metadata.name) - 21) : ''"
+  validations:
+    - message: "the control plane may only create or delete Secrets in the workload namespace, never update one"
+      expression: "request.operation in ['CREATE', 'DELETE']"
+    - message: "a key Secret must be <name>-virtual-key-<8 hex>, labelled with the agent name and the agents namespace, with no owner reference, immutable, Opaque, with the single key OPENAI_API_KEY"
+      expression: |-
+        request.operation != 'CREATE' || (
+          variables.cur.all(k, k in ['apiVersion', 'kind', 'metadata', 'type', 'immutable', 'data']) &&
+          variables.cur.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?-virtual-key-[0-9a-f]{8}$') &&
+          variables.cur.metadata.all(k, k in {{ $metaKeys }}) &&
+          has(variables.cur.metadata.labels) && variables.cur.metadata.labels.all(k, k in ['app.kubernetes.io/managed-by', 'openagentix.io/agent-definition', 'openagentix.io/definition-namespace']) &&
+          variables.cur.metadata.labels['app.kubernetes.io/managed-by'] == 'openagentix-control-plane' &&
+          variables.cur.metadata.labels['openagentix.io/agent-definition'] == variables.secretAgent &&
+          variables.cur.metadata.labels['openagentix.io/definition-namespace'] == {{ $kns | toJson }} &&
+          (!has(variables.cur.metadata.ownerReferences) || size(variables.cur.metadata.ownerReferences) == 0) &&
+          (!has(variables.cur.metadata.annotations) || variables.cur.metadata.annotations.all(k, k == 'openagentix.io/key-fingerprint' && type(variables.cur.metadata.annotations[k]) == string && variables.cur.metadata.annotations[k].matches('^[0-9a-f]{1,16}$'))) &&
+          has(variables.cur.immutable) && variables.cur.immutable == true && has(variables.cur.type) && variables.cur.type == 'Opaque' &&
+          has(variables.cur.data) && size(variables.cur.data) == 1 && 'OPENAI_API_KEY' in variables.cur.data && size(variables.cur.data['OPENAI_API_KEY']) <= 64)
+    - message: "the control plane may only delete key Secrets that carry its labels"
+      expression: |-
+        request.operation != 'DELETE' || (
+          variables.prev.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?-virtual-key-[0-9a-f]{8}$') && has(variables.prev.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in variables.prev.metadata.labels && variables.prev.metadata.labels['app.kubernetes.io/managed-by'] == 'openagentix-control-plane' &&
+          'openagentix.io/agent-definition' in variables.prev.metadata.labels && variables.prev.metadata.labels['openagentix.io/agent-definition'] == variables.secretAgent)
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openagentix-control-plane-guard-workload-secrets
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  policyName: openagentix-control-plane-guard-workload-secrets
+  validationActions: [Deny]
+{{- /* ---- the gate's route list ---- */}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openagentix-control-plane-guard-workload-routes
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [configmaps]
+  {{- include "oa.cpGuardHead" (dict "ns" $ns "sa" $sa) }}
+    - name: only-the-route-list
+      expression: {{ printf "request.namespace == %s && request.name == 'a2a-gate-routes'" ($gate | toJson) | toJson }}
+  variables:
+    - name: cur
+      expression: "dyn(object)"
+    - name: prev
+      expression: "dyn(oldObject)"
+  validations:
+    - message: "the control plane may only update the route list"
+      expression: "request.operation == 'UPDATE'"
+    - message: "only the data may change, and only the key routes.json"
+      expression: |-
+        request.operation != 'UPDATE' || (
+          variables.cur.all(k, k in ['apiVersion', 'kind', 'metadata', 'data']) && variables.cur.metadata.all(k, k in {{ $metaKeys }}) &&
+          (has(variables.cur.metadata.labels) ? (has(variables.prev.metadata.labels) && variables.cur.metadata.labels == variables.prev.metadata.labels) : !has(variables.prev.metadata.labels)) &&
+          (has(variables.cur.metadata.annotations) ? (has(variables.prev.metadata.annotations) && variables.cur.metadata.annotations == variables.prev.metadata.annotations) : !has(variables.prev.metadata.annotations)) &&
+          (!has(variables.cur.metadata.ownerReferences) || size(variables.cur.metadata.ownerReferences) == 0) &&
+          has(variables.cur.data) && variables.cur.data.all(k, k == 'routes.json'))
+    - message: {{ printf "routes.json must be exactly {\"container\":[\"%s/<name>\",...]}: namespace/name entries of the agents namespace, never a URL" $kns | quote }}
+      expression: |-
+        request.operation != 'UPDATE' || (
+          has(variables.cur.data) && 'routes.json' in variables.cur.data && size(variables.cur.data['routes.json']) <= 65536 &&
+          variables.cur.data['routes.json'].matches({{ printf "^\\{\"container\":\\[(\"%s/[a-z]([-a-z0-9]*[a-z0-9])?\"(,\"%s/[a-z]([-a-z0-9]*[a-z0-9])?\")*)?\\]\\}$" $kns $kns | toJson }}))
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openagentix-control-plane-guard-workload-routes
+  labels:
+    app: control-plane
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  policyName: openagentix-control-plane-guard-workload-routes
+  validationActions: [Deny]
+{{- end }}

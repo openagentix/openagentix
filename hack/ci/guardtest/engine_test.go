@@ -183,7 +183,7 @@ func (e *engine) eval(r request) verdict {
 				if i := strings.IndexByte(msg, '\n'); i > 0 {
 					msg = msg[:i]
 				}
-				v.Why = append(v.Why, fmt.Sprintf("%s [%s] %.90s", p.pol.Name, d.Evaluation, msg))
+				v.Why = append(v.Why, fmt.Sprintf("%s [%s] %.700s", p.pol.Name, d.Evaluation, msg))
 			}
 		}
 	}

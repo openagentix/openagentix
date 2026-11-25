@@ -93,9 +93,19 @@ spec:
             - {name: A2A_GATE_KEYS_DIR, value: /etc/a2a-gate/keys}
             - {name: A2A_GATE_AUDIT_USER_ID, value: {{ $g.audit.userId | quote }}}
             - {name: A2A_GATE_MAX_INFLIGHT, value: {{ $g.maxInFlight | default 128 | quote }}}
+            {{- if include "oa.caOn" . }}
+            # bring your own agent (ADR 0015): the controller-written route list, the workload namespace and how clients reach the gate
+            - {name: A2A_GATE_ROUTES_FILE, value: /etc/a2a-gate/routes/routes.json}
+            - {name: A2A_GATE_WORKLOAD_NAMESPACE, value: {{ .Values.controlPlane.containerAgents.namespace | quote }}}
+            - {name: A2A_GATE_PUBLIC_URL, value: {{ .Values.controlPlane.containerAgents.publicUrl | default (include "oa.a2aGateUrl" .) | quote }}}
+            {{- end }}
           volumeMounts:
             - {name: rules, mountPath: /etc/a2a-gate/rules, readOnly: true}
             - {name: keys, mountPath: /etc/a2a-gate/keys, readOnly: true}
+            {{- if include "oa.caOn" . }}
+            # a directory mount, not subPath: the kubelet refreshes it in place when the controller changes the list
+            - {name: routes, mountPath: /etc/a2a-gate/routes, readOnly: true}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -121,6 +131,10 @@ spec:
             secretName: {{ $g.keysSecret | quote }}
             optional: true   # no Kourier binding, no keys: the gate starts without the Secret
             defaultMode: 0440
+        {{- if include "oa.caOn" . }}
+        - name: routes
+          configMap: {name: a2a-gate-routes}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

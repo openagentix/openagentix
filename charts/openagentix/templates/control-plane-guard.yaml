@@ -87,6 +87,11 @@ spec:
         operations: [CREATE, UPDATE, DELETE]
         resources: [secrets]
   {{- include "oa.cpGuardHead" (dict "ns" $ns "sa" $sa) }}
+  {{- if include "oa.caOn" . }}
+    # the workload namespace has its own policy (control-plane-guard-workload.yaml)
+    - name: not-the-workload-namespace
+      expression: {{ printf "request.namespace != %s" (.Values.controlPlane.containerAgents.namespace | toJson) | toJson }}
+  {{- end }}
   variables:
     - name: cur
       expression: "dyn(object)"
@@ -160,6 +165,11 @@ spec:
         operations: [CREATE, UPDATE, DELETE]
         resources: [configmaps]
   {{- include "oa.cpGuardHead" (dict "ns" $ns "sa" $sa) }}
+  {{- if include "oa.caOn" . }}
+    # the gate's route list has its own policy (control-plane-guard-workload.yaml)
+    - name: not-the-route-list
+      expression: {{ printf "!(request.namespace == %s && request.name == 'a2a-gate-routes')" (.Values.governance.a2a.namespace | toJson) | toJson }}
+  {{- end }}
   variables:
     - name: cur
       expression: "dyn(object)"
@@ -419,6 +429,13 @@ spec:
         apiVersions: ["*"]
         operations: ["*"]
         resources: [secrets, configmaps]
+  {{- if include "oa.caOn" . }}
+      # the container runtime's kinds are judged by control-plane-guard-workload.yaml (each of those policies refuses every namespace but the workload one)
+      - apiGroups: ["", apps, networking.k8s.io]
+        apiVersions: ["*"]
+        operations: ["*"]
+        resources: [deployments, services, serviceaccounts, networkpolicies]
+  {{- end }}
       - apiGroups: [api.kagent.dev]
         apiVersions: ["*"]
         operations: ["*"]
