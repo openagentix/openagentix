@@ -243,6 +243,47 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
+  /api/v1/schedules:
+    get:
+      tags: [governance]
+      summary: The chart's schedules (CronJobs). Empty with configured false when the console was not told where they are.
+      operationId: listSchedules
+      responses:
+        "200":
+          description: The schedules. No prompt, token or user id.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ScheduleList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502":
+          description: cluster_error. The Kubernetes text is only in the console log.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /api/v1/access:
+    get:
+      tags: [governance]
+      summary: The A2A gate's caller rules. Never a key, a hash or a user id value.
+      operationId: listAccess
+      responses:
+        "200":
+          description: The caller rules.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccessList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404":
+          description: gate_rules_missing.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429": {$ref: "#/components/responses/TooManyAttempts"}
+        "502":
+          description: cluster_error. The Kubernetes text is only in the console log.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /api/v1/traces:
     get:
       tags: [observability]
@@ -671,6 +712,49 @@ components:
               tokensCacheRead: {type: number}
         series: {type: array, maxItems: 24, items: {type: number}}
         generatedAt: {type: string}
+    ScheduleList:
+      type: object
+      required: [configured, namespace, items]
+      properties:
+        configured: {type: boolean}
+        namespace: {type: string}
+        items:
+          type: array
+          items:
+            type: object
+            required: [name, agent, cron, timeZone, concurrencyPolicy, timeout, state, active, lastScheduled, lastSucceeded, created]
+            properties:
+              name: {type: string}
+              agent: {type: string, description: Empty when the agent cannot be read from the CronJob.}
+              cron: {type: string}
+              timeZone: {type: string, description: Empty means the controller's time zone.}
+              concurrencyPolicy: {type: string}
+              timeout: {type: string}
+              state: {type: string, enum: [active, suspended]}
+              active: {type: integer, description: Runs going now.}
+              lastScheduled: {type: string, description: Time, or empty if it never ran.}
+              lastSucceeded: {type: string, description: Time, or empty.}
+              created: {type: string}
+    AccessList:
+      type: object
+      required: [configured, namespace, items]
+      properties:
+        configured: {type: boolean}
+        namespace: {type: string}
+        items:
+          type: array
+          items:
+            type: object
+            required: [name, source, serviceAccount, key, agents, userIdRule, methods, memory]
+            properties:
+              name: {type: string}
+              source: {type: string, enum: [chart, values]}
+              serviceAccount: {type: string, description: namespace/name, or empty for a caller that uses a key.}
+              key: {type: boolean}
+              agents: {type: array, items: {type: string}}
+              userIdRule: {type: string, enum: [exact, prefix, fixed, ""], description: The kind of rule. The value is never sent.}
+              methods: {type: array, items: {type: string}}
+              memory: {type: boolean}
     Turn:
       type: object
       required: [traceId, start, agent, outcome, modelCalls, durationMs, tokensIn, tokensOut]

@@ -23,6 +23,7 @@ import (
 
 	"github.com/openagentix/openagentix/services/console/ext"
 	"github.com/openagentix/openagentix/services/console/internal/backend"
+	"github.com/openagentix/openagentix/services/console/internal/govern"
 	"github.com/openagentix/openagentix/services/console/internal/model"
 	"github.com/openagentix/openagentix/services/console/internal/observe"
 	"github.com/openagentix/openagentix/services/console/internal/platform"
@@ -46,6 +47,8 @@ var Routes = []string{
 	"GET /api/v1/platform",
 	"GET /api/v1/agents",
 	"GET /api/v1/metrics/summary",
+	"GET /api/v1/schedules",
+	"GET /api/v1/access",
 	"GET /api/v1/traces",
 	"GET /api/v1/traces/{traceId}",
 	"POST /api/v1/agents",
@@ -75,6 +78,10 @@ type Options struct {
 	RequestTimeout time.Duration
 	// Observe reads metrics; nil: not configured (GET /api/v1/metrics/summary answers 503 and /platform says so).
 	Observe observe.Observability
+	// Schedules and Access read the chart's schedules and the gate's caller rules; nil: not configured (the routes answer
+	// an empty list with configured: false).
+	Schedules govern.ScheduleSource
+	Access    govern.AccessSource
 
 	// AllowedHosts are host names (optionally with a port) accepted in the Host header besides localhost, 127.0.0.1 and
 	// [::1]; a future Ingress name goes here. Any other Host is answered 421 before routing.
@@ -121,6 +128,8 @@ func New(o Options) *Server {
 	s.handle("GET /api/v1/platform", s.api(ext.ActionRead, s.platform))
 	s.handle("GET /api/v1/agents", s.api(ext.ActionRead, s.list))
 	s.handle("GET /api/v1/metrics/summary", s.api(ext.ActionRead, s.metricsSummary))
+	s.handle("GET /api/v1/schedules", s.api(ext.ActionRead, s.schedules))
+	s.handle("GET /api/v1/access", s.api(ext.ActionRead, s.access))
 	s.handle("GET /api/v1/traces", s.api(ext.ActionRead, s.traces))
 	s.handle("GET /api/v1/traces/{traceId}", s.api(ext.ActionRead, s.traceOne))
 	s.handle("POST /api/v1/agents", s.api(ext.ActionCreate, s.create))
@@ -830,4 +839,32 @@ func (s *Server) traceOne(w http.ResponseWriter, r *http.Request, _ *call) {
 	default:
 		writeJSON(w, 200, d)
 	}
+}
+
+// schedules answers GET /api/v1/schedules: the chart's CronJobs, without prompts, tokens or user ids.
+func (s *Server) schedules(w http.ResponseWriter, r *http.Request, _ *call) {
+	if s.o.Schedules == nil {
+		writeJSON(w, 200, govern.ScheduleList{Items: []govern.Schedule{}})
+		return
+	}
+	l, err := s.o.Schedules.Schedules(r.Context())
+	if err != nil {
+		s.backendErr(w, r, err)
+		return
+	}
+	writeJSON(w, 200, l)
+}
+
+// access answers GET /api/v1/access: the gate's caller rules by name, agents and methods; never keys, hashes or user id values.
+func (s *Server) access(w http.ResponseWriter, r *http.Request, _ *call) {
+	if s.o.Access == nil {
+		writeJSON(w, 200, govern.AccessList{Items: []govern.Caller{}})
+		return
+	}
+	l, err := s.o.Access.Access(r.Context())
+	if err != nil {
+		s.backendErr(w, r, err)
+		return
+	}
+	writeJSON(w, 200, l)
 }

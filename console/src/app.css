@@ -494,6 +494,7 @@ th[aria-sort] button svg{width:12px;height:12px}
 .dot.d-chart{background:var(--color-surface);box-shadow:inset 0 0 0 2px var(--color-text-3)}
 .onoff{display:inline-flex;align-items:center;gap:4px;font-weight:600;margin-right:4px}
 .onoff.on{color:var(--color-ready)} .onoff.off{color:var(--color-paused)}
+button.rowbtn{background:none;border:0;padding:0;margin:0;font:inherit;color:var(--color-accent);cursor:pointer;text-align:left} button.rowbtn:hover{text-decoration:underline}
 table.mini{min-width:0}
 table.mini .reason{overflow-wrap:anywhere}
 .cards{align-content:start}

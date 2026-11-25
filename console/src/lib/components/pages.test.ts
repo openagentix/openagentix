@@ -240,7 +240,8 @@ describe('Governance', () => {
         expect(row).toHaveTextContent('osv_query_vulnerability');
         expect(screen.getByRole('row', { name: /assistant/ })).toHaveTextContent('not read for chart agents');
         await userEvent.click(screen.getByRole('tab', { name: 'Gate callers' }));
-        expect(screen.getByText(/no source in the console API/)).toBeInTheDocument();
+        expect(screen.getByText(/The A2A gate is on/)).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Open Access' })).toHaveAttribute('href', '/access');
         expect(screen.queryByRole('table')).toBeNull();
     });
 });
