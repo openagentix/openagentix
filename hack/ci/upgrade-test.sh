@@ -216,13 +216,22 @@ if [ "${UPGRADE_SKIP_B:-0}" != 1 ]; then
   check "the CRD is Established" "$($K get crd agentdefinitions.openagentix.io -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null)" True
   # A CRD that is new in the cluster is not known to the Kubernetes quota controller until its next discovery pass, so the first writes are refused with
   # "status unknown for quota" (known start-up race, see the stability audit; install.sh retries for its own definition). A user meets it too: retry, and say how long it took.
-  applied=0
+  applied=0; nudged=0
   for i in $(seq 1 "${APPLY_TRIES:-60}"); do
     if $K apply -f "$W/definition.yaml" >"$W/apply.log" 2>&1; then applied=$i; break; fi
     grep -q "status unknown for quota" "$W/apply.log" || break
+    # The quota controller backs off after its failed first sync, so the status can stay unknown for minutes (run of 2026-11-26: more than 5 minutes).
+    # A change of the quota's spec makes it sync at once: the same nudge install.sh uses for the quick start agent (limit up by one and back).
+    if [ $((i % 10)) = 0 ]; then
+      hard=$($K get resourcequota openagentix-agentdefinitions -n "$KAGENT_NS" -o json 2>/dev/null | jq -r '.spec.hard["count/agentdefinitions.openagentix.io"] // empty')
+      if [[ "$hard" =~ ^[0-9]+$ ]]; then
+        echo "      NOTE: still refused after $i attempts; nudging the ResourceQuota openagentix-agentdefinitions ($hard -> $((hard+1)) -> $hard) as install.sh does"; nudged=$((nudged+1))
+        for v in $((hard + 1)) "$hard"; do $K patch resourcequota openagentix-agentdefinitions -n "$KAGENT_NS" --type merge -p "{\"spec\":{\"hard\":{\"count/agentdefinitions.openagentix.io\":\"$v\"}}}" >/dev/null 2>&1 || true; done
+      fi
+    fi
     sleep "${APPLY_SLEEP:-5}"
   done
-  if [ "$applied" -gt 0 ]; then ok "an AgentDefinition is accepted by the API server (attempt $applied; attempts before the first success are the quota controller learning the new CRD)"
+  if [ "$applied" -gt 0 ]; then ok "an AgentDefinition is accepted by the API server (attempt $applied, $nudged quota nudge(s); attempts before the first success are the quota controller learning the new CRD, issue #210)"
   else bad "kubectl apply of an AgentDefinition failed" "$(cat "$W/apply.log")"; fi
   acc=""
   for _ in $(seq 1 60); do acc=$($K get agentdefinition upgrade-check -n "$KAGENT_NS" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null); [ -n "$acc" ] && break; sleep 2; done
