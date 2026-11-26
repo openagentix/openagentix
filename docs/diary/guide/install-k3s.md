@@ -62,7 +62,15 @@ The second command removes the volume the installer made for the runtime (see be
 | Traefik and ServiceLB | none | on by default | the installer turns both off: nothing in the chart uses an Ingress or a LoadBalancer |
 | Gateway API CRDs | none | k3s installs them itself (bundle v1.6.3, Helm release `gateway-api-crd` in `kube-system`) | the model gateway script sees them and leaves them alone |
 | NetworkPolicy | kindnet does not enforce egress to the internet | enforced by k3s | nothing to do; see below |
+| Anonymous access to the API server | allowed (the signing keys can be read without a token) | off: k3s sets `anonymous-auth=false` | the k3d cluster gets `hack/k3s-authn.yaml`, which allows it on `/.well-known/openid-configuration` and `/openid/v1/jwks` only |
 | API server NetworkPolicy address | the node's `/24` | the exact node address (`/32`) | the same code path as any non-kind cluster |
+
+### Anonymous access to the signing keys
+
+Container agents with tools (ADR 0019) need the tool server to read the cluster's public signing keys without a token. k3s turns anonymous access off, so the first k3s run refused every token (`failed to lookup JWKS`). `hack/k3s-authn.yaml` fixes it for the cluster the installer makes. It needs Kubernetes 1.34 or newer.
+
+- A k3s you install yourself with the install script needs the same file. Pass `--kube-apiserver-arg=authentication-config=<path>` to the k3s server. This flag replaces the default authentication settings, so check that the file keeps what you need.
+- A k3d cluster made by an older version of the installer has no such file. Delete it (`k3d cluster delete <name>`) and run the installer again.
 
 ### The volume for `/var/lib/ate`
 

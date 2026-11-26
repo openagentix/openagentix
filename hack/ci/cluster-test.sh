@@ -40,7 +40,13 @@ t "k3d network" "$(run k3d cluster_network)" k3d-alpha
 run k3d cluster_exists; t "k3d: alpha exists" "$?" 0
 CLUSTER=gamma run k3d cluster_exists; t "k3d: gamma does not exist" "$?" 1
 : > "$D/calls"; run k3d cluster_create . >/dev/null
-t "k3d create: one server, a volume for /var/lib/ate, no Traefik, no ServiceLB" "$(calls)" "k3d cluster create alpha --image rancher/k3s:v1.37.2-k3s1 --servers 1 --agents 0 --no-lb --wait --timeout 300s --volume k3d-alpha-ate:/var/lib/ate@server:0 --k3s-arg --disable=traefik@server:0 --k3s-arg --disable=servicelb@server:0;"
+t "k3d create: one server, a volume for /var/lib/ate, no Traefik, no ServiceLB, the authentication config" "$(calls)" "k3d cluster create alpha --image rancher/k3s:v1.37.2-k3s1 --servers 1 --agents 0 --no-lb --wait --timeout 300s --volume k3d-alpha-ate:/var/lib/ate@server:0 --volume $PWD/hack/k3s-authn.yaml:/etc/openagentix/k3s-authn.yaml:ro@server:0 --k3s-arg --disable=traefik@server:0 --k3s-arg --disable=servicelb@server:0 --k3s-arg --kube-apiserver-arg=authentication-config=/etc/openagentix/k3s-authn.yaml@server:0;"
+# k3s turns anonymous authentication off (anonymous-auth=false) unless an authentication config is given. The workload tool server fetches the
+# public signing keys without a token (ADR 0019), so the config admits anonymous callers on the two discovery paths and nowhere else.
+run k3d cluster_create hack/.. >/dev/null; t "k3d create: a relative repo root becomes an absolute mount path" "$(calls | grep -o "\-\-volume $PWD/hack/k3s-authn.yaml" )" "--volume $PWD/hack/k3s-authn.yaml"
+t "k3s authn config: anonymous on" "$(yq -r '.anonymous.enabled' hack/k3s-authn.yaml 2>/dev/null)" true
+t "k3s authn config: only the issuer document and the public keys" "$(yq -r '[.anonymous.conditions[].path]|sort|join(",")' hack/k3s-authn.yaml 2>/dev/null)" "/.well-known/openid-configuration,/openid/v1/jwks"
+t "k3s authn config: no other authenticator" "$(yq -r 'keys|sort|join(",")' hack/k3s-authn.yaml 2>/dev/null)" "anonymous,apiVersion,kind"
 t "k3d create never turns the network policy controller off" "$(grep -c 'disable-network-policy' hack/cluster.sh)" 0
 K3D_NODE_IMAGE=rancher/k3s:v9 run k3d cluster_create . >/dev/null; t "K3D_NODE_IMAGE overrides the image" "$(calls | grep -o 'rancher/k3s:v9')" rancher/k3s:v9
 run k3d cluster_load_images a:1 b:2 >/dev/null; t "k3d image import" "$(calls)" "k3d image import a:1 b:2 --cluster alpha;"
