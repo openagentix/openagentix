@@ -38,6 +38,20 @@ The branch protection rule for `main` requires **`ci-ok`** and **`DCO`** (the DC
 
 `.github/workflows/e2e-k3s.yml` is the same install and smoke test as `e2e`, on k3s in Docker made by k3d (`CLUSTER_TYPE=k3d`, `hack/cluster.sh`), with the sample container agent (`QUICKSTART_BYO=1`, `SMOKE_BYO=1`). It then runs `hack/ci/netpol-test.sh`, which checks live whether the cluster enforces NetworkPolicy for ingress and for egress to the internet. The job has `continue-on-error`, is not in `ci-ok` and never turns a pull request red; read its steps, not its colour. It runs nightly, by hand, and on pull requests that touch the installer or the cluster helper. Local equivalent: `CLUSTER_TYPE=k3d CLUSTER=oa-k3s-test PROFILE=quickstart ./install.sh && hack/ci/smoke.sh` (use a `KUBECONFIG` file of your own; do not run it beside another cluster in a small Docker VM). The record of the runs is in [Install on k3s](../../docs/diary/guide/install-k3s.md).
 
+## flake-sweep (nightly)
+
+`.github/workflows/flake-sweep.yml` runs at 02:23 UTC and by hand. It finds the Go modules (`hack/ci/go-modules.sh --json`) and runs one job per module: `go test ./... -race -count=20 -timeout 30m` through `hack/ci/flake-sweep.sh`. Every test runs 20 times, so a test that fails 1 time in 10 fails the sweep almost every night. The job summary lists each failing test, its package and how many of the 20 runs failed (for example `2 of 20`). A failure that is not a test (a build error, a timeout, a panic outside a test) is reported with its last lines. One module failing does not stop the others (`fail-fast: false`).
+
+It never runs on a pull request and is not in `ci-ok`: a red sweep is a report, not a block. What to do with a red run: open the job summary, find the test, reproduce it with the command below, and fix the test or the code under it (a test that fails only under `-race -count=20` is usually a timing assumption or a shared variable). Do not retry the sweep until it turns green.
+
+```
+make flake-sweep                                            # every module, 20 runs each (slow)
+make flake-sweep MODULES=services/a2a-gate COUNT=50         # one module, more runs
+hack/ci/flake-sweep.sh services/kb --count 20               # the same command the workflow runs
+```
+
+The offline test builds a throwaway Go module with a test that fails 2 times in 20, and checks the exit code and that the test is named (`hack/ci/flake-sweep-test.sh`, in `make test-shell`).
+
 ## Tools and pins
 
 `helm` v3.22.0 (`azure/setup-helm`), `jq` from the runner image (1.7.x), `yq` **kislyuk 3.4.3** (the Python jq wrapper that
