@@ -282,6 +282,26 @@ test('create a new agent and see it Pending', async ({ page }) => {
     await done();
 });
 
+test('with a required tool profile and none available, the builder says so and cannot create', async ({ page }) => {
+    const done = await watch(page);
+    await page.route('**/api/v1/platform', async (route) => {
+        const res = await route.fetch();
+        const body = await res.json();
+        await route.fulfill({ response: res, json: { ...body, profiles: [] } });
+    });
+    await signIn(page);
+    await goTo(page, '/agents');
+    await page.getByRole('button', { name: /New agent/ }).click();
+    await expect(page.getByTestId('no-profile')).toContainText(
+        'This platform requires a tool profile and none is available',
+    );
+    await expect(page.getByTestId('no-profile')).toContainText('mcp.profiles');
+    await page.getByLabel('Name', { exact: true }).fill('no-profile-agent');
+    await page.getByLabel('Instructions').fill('Answer in one sentence.');
+    await expect(page.getByRole('button', { name: 'Create agent' })).toHaveAttribute('aria-disabled', 'true');
+    await done();
+});
+
 test('a draft that the policy would refuse is flagged before saving', async ({ page }) => {
     const done = await watch(page);
     await signIn(page);

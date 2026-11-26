@@ -214,7 +214,6 @@ export interface Platform {
     gatewayBaseUrl: string;
     gateEnabled: boolean;
     models: string[];
-    toolServer: string;
     profiles: Profile[];
     knowledge: Feature;
     notify: Feature;

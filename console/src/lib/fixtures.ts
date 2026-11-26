@@ -8,7 +8,6 @@ export function platform(): Platform {
         gatewayBaseUrl: 'http://gw/v1',
         gateEnabled: true,
         models: ['claude-haiku'],
-        toolServer: 'toolhive-vmcp',
         profiles: [
             {
                 name: 'lookup',

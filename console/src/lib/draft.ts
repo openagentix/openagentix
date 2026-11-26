@@ -2,6 +2,24 @@
 // the secret-shape scan, and the mapping of controller sentences onto fields. It is tested on its own.
 import type { Platform, Prediction, Spec } from './types';
 
+/** The controller's list rule: the single entry "*" allows every name the catalog has; an empty list allows none. */
+export function allows(list: string[], name: string): boolean {
+    return list.includes('*') || list.includes(name);
+}
+
+/**
+ * Plain-English reason when the policy requires a tool profile but the builder has none to offer, else undefined.
+ * Tool profiles come from the chart value mcp.profiles, so only the platform operator can fix it.
+ */
+export function noProfileAvailable(p: Platform): string | undefined {
+    if (!p.policy.requireToolProfile) return undefined;
+    if (p.profiles.some((x) => allows(p.policy.allowedProfiles, x.name))) return undefined;
+    return (
+        'This platform requires a tool profile and none is available. Tool profiles are defined by the platform ' +
+        'operator in the chart value mcp.profiles, and the policy must list one in allowedProfiles. Ask your operator.'
+    );
+}
+
 export const MAX_DESCRIPTION = 256;
 export const MAX_INSTRUCTIONS_BYTES = 16384;
 export const MAX_NAME = 40;
@@ -33,10 +51,10 @@ export interface Draft {
 }
 
 export function emptyDraft(p: Platform | undefined): Draft {
-    const model = p?.models.find((m) => p.policy.allowedModels.includes(m)) ?? '';
+    const model = p?.models.find((m) => allows(p.policy.allowedModels, m)) ?? '';
     const profile =
         p && p.policy.requireToolProfile
-            ? (p.profiles.find((x) => p.policy.allowedProfiles.includes(x.name))?.name ?? '')
+            ? (p.profiles.find((x) => allows(p.policy.allowedProfiles, x.name))?.name ?? '')
             : '';
     return {
         name: '',
@@ -152,7 +170,7 @@ export interface OptionState {
 
 export function modelOptions(p: Platform): OptionState[] {
     return p.models.map((m) =>
-        p.policy.allowedModels.includes(m)
+        allows(p.policy.allowedModels, m)
             ? { value: m, label: m, disabled: false }
             : { value: m, label: m, disabled: true, reason: 'Not allowed by the platform policy' },
     );
@@ -165,7 +183,7 @@ export function profileOptions(p: Platform): OptionState[] {
     return [
         none,
         ...p.profiles.map((x) =>
-            p.policy.allowedProfiles.includes(x.name)
+            allows(p.policy.allowedProfiles, x.name)
                 ? { value: x.name, label: x.name, disabled: false }
                 : { value: x.name, label: x.name, disabled: true, reason: 'Not allowed by the platform policy' },
         ),
@@ -234,7 +252,7 @@ export interface SkillState {
 }
 export function skillStates(p: Platform): SkillState[] {
     return p.skills.map((s) =>
-        p.policy.allowedSkills.includes(s.name)
+        allows(p.policy.allowedSkills, s.name)
             ? { name: s.name, disabled: false }
             : { name: s.name, disabled: true, reason: 'Not allowed by the platform policy' },
     );

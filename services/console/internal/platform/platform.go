@@ -46,15 +46,23 @@ type Adapters struct {
 	Tools        string `json:"tools"`
 }
 
-// Catalog is what exists on the platform.
+// ToolSections is the catalog's "tools" object: one section per tool adapter, as the control plane writes it
+// (services/control-plane/internal/catalog). Only the profiles are read.
+type ToolSections struct {
+	Toolhive *struct {
+		Profiles []Profile `json:"profiles"`
+	} `json:"toolhive"`
+}
+
+// Catalog is what exists on the platform. It has the shape the control plane writes; golden_test.go reads the file
+// that the control plane's tests and the chart tests share.
 type Catalog struct {
 	Demo           bool              `json:"demo"`
 	Adapters       Adapters          `json:"adapters"`
 	Namespaces     Namespaces        `json:"namespaces"`
 	GatewayBaseURL string            `json:"gatewayBaseUrl"`
 	Models         []string          `json:"models"`
-	ToolServer     string            `json:"toolServer"`
-	Profiles       []Profile         `json:"profiles"`
+	Tools          ToolSections      `json:"tools"`
 	Knowledge      Feature           `json:"knowledge"`
 	Notify         Feature           `json:"notify"`
 	Memory         Memory            `json:"memory"`
@@ -90,8 +98,16 @@ type Policy struct {
 	SuspendAll bool `json:"suspendAll"`
 }
 
+// ToolProfiles are the tool profiles the tool adapter offers.
+func (c Catalog) ToolProfiles() []Profile {
+	if c.Tools.Toolhive == nil {
+		return nil
+	}
+	return c.Tools.Toolhive.Profiles
+}
+
 func (c Catalog) Profile(name string) (Profile, bool) {
-	for _, p := range c.Profiles {
+	for _, p := range c.ToolProfiles() {
 		if p.Name == name {
 			return p, true
 		}
@@ -179,7 +195,6 @@ type Summary struct {
 	GatewayBaseURL string     `json:"gatewayBaseUrl"`
 	GateEnabled    bool       `json:"gateEnabled"`
 	Models         []string   `json:"models"`
-	ToolServer     string     `json:"toolServer"`
 	Profiles       []Profile  `json:"profiles"`
 	Knowledge      Feature    `json:"knowledge"`
 	Notify         Feature    `json:"notify"`
@@ -214,8 +229,8 @@ func Summarize(b Both, demo bool) Summary {
 		skills = append(skills, Skill{Name: n, Ref: c.Skills[n]})
 	}
 	c.Knowledge.Tools, c.Notify.Tools = nz(c.Knowledge.Tools), nz(c.Notify.Tools)
-	profiles := make([]Profile, 0, len(c.Profiles))
-	for _, pr := range c.Profiles {
+	profiles := make([]Profile, 0, len(c.ToolProfiles()))
+	for _, pr := range c.ToolProfiles() {
 		pr.Tools = nz(pr.Tools)
 		profiles = append(profiles, pr)
 	}
@@ -224,15 +239,20 @@ func Summarize(b Both, demo bool) Summary {
 	p.Egress.InClusterDestinations = nz(p.Egress.InClusterDestinations)
 	return Summary{
 		Demo: demo || c.Demo, Adapters: c.Adapters, Namespaces: c.Namespaces, GatewayBaseURL: c.GatewayBaseURL,
-		GateEnabled: c.GateURL != "", Models: nz(c.Models), ToolServer: c.ToolServer, Profiles: profiles,
+		GateEnabled: c.GateURL != "", Models: nz(c.Models), Profiles: profiles,
 		Knowledge: c.Knowledge, Notify: c.Notify, Memory: c.Memory, Skills: skills, ReservedNames: nz(c.ReservedNames), Policy: p,
 	}
 }
 
 // Allowed helpers used by the prediction rules.
-func (p Policy) ModelAllowed(m string) bool   { return slices.Contains(p.AllowedModels, m) }
-func (p Policy) ProfileAllowed(n string) bool { return slices.Contains(p.AllowedProfiles, n) }
-func (p Policy) SkillAllowed(n string) bool   { return slices.Contains(p.AllowedSkills, n) }
+// allowed is the controller's rule: the single entry "*" allows every name the catalog has, an empty list allows none.
+func allowed(list []string, v string) bool {
+	return slices.Contains(list, "*") || slices.Contains(list, v)
+}
+
+func (p Policy) ModelAllowed(m string) bool   { return allowed(p.AllowedModels, m) }
+func (p Policy) ProfileAllowed(n string) bool { return allowed(p.AllowedProfiles, n) }
+func (p Policy) SkillAllowed(n string) bool   { return allowed(p.AllowedSkills, n) }
 
 // OriginRE is the shape of an egress origin (the CRD allows up to 270 characters).
 var OriginRE = regexp.MustCompile(`^https?://(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*(:[0-9]{1,5})?$`)

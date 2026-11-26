@@ -153,6 +153,25 @@ describe('paused and the new status contract', () => {
         expect(within(row).getByText('team platform')).toBeInTheDocument();
         expect(within(row).getByText('project demo')).toBeInTheDocument();
     });
+    it('says why a new agent cannot be created when the policy requires a profile and none is available', async () => {
+        const p = platform();
+        vi.spyOn(ctx, 'platform', 'get').mockReturnValue({ ...p, profiles: [] });
+        render(AgentBuilder, {});
+        const note = await screen.findByTestId('no-profile');
+        expect(note).toHaveTextContent('This platform requires a tool profile and none is available');
+        expect(note).toHaveTextContent('mcp.profiles');
+        expect(note.querySelector('a')).toHaveAttribute('href', expect.stringContaining('platform-catalog'));
+        await userEvent.type(await screen.findByLabelText('Name'), 'x1');
+        await userEvent.type(screen.getByLabelText('Instructions'), 'hi');
+        const create = screen.getByRole('button', { name: /Create agent/ });
+        expect(create).toHaveAttribute('aria-disabled', 'true');
+        expect(create).toHaveAccessibleDescription(/none is available/);
+    });
+    it('shows no such note when a profile is available', async () => {
+        render(AgentBuilder, {});
+        await screen.findByLabelText('Instructions');
+        expect(screen.queryByTestId('no-profile')).toBeNull();
+    });
     it('pauses the saved spec and resumes it', async () => {
         render(AgentBuilder, { name: 'researcher' });
         await userEvent.click(await screen.findByRole('button', { name: 'Pause' }));

@@ -631,7 +631,6 @@ components:
         gatewayBaseUrl: {type: string}
         gateEnabled: {type: boolean}
         models: {type: array, items: {type: string}}
-        toolServer: {type: string}
         profiles: {type: array, items: {$ref: "#/components/schemas/Profile"}}
         knowledge: {$ref: "#/components/schemas/PlatformFeature"}
         notify: {$ref: "#/components/schemas/PlatformFeature"}
