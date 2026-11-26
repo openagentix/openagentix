@@ -139,6 +139,8 @@ jobs:
           hack/ci/kind-image-digest-test.sh
           components/quickstart/tests/run.sh
           hack/ci/cluster-test.sh
+          hack/ci/preflight-test.sh
+          hack/ci/sa-issuer-test.sh
           hack/ci/uninstall-test.sh
           components/runtime/tests/run.sh
       - name: reference docs tests
