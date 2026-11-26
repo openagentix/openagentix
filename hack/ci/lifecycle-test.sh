@@ -63,7 +63,7 @@ live_keys(){
   awk -F'\t' 'NR==FNR{ if($2=="-") any[$1 FS $3]=1; else ns[$1 FS $2 FS $3]=1; next }
               { if (($1 FS $3) in any || ($1 FS $2 FS $3) in ns) print }' "$keys" "$W/live.all" | sort -u
 }
-agent_keys(){ $K get agentdefinitions.openagentix.io,agents.kagent.dev -A -o json 2>/dev/null | jq -r '.items[]?|[.kind,.metadata.namespace,.metadata.name,.metadata.uid]|@tsv' | sort; }
+agent_keys(){ $K get agentdefinitions.openagentix.io,agents.api.kagent.dev -A -o json 2>/dev/null | jq -r '.items[]?|[.kind,.metadata.namespace,.metadata.name,.metadata.uid]|@tsv' | sort; }
 workloads(){  # every workload and Service of the platform namespaces, by name (not only the ones the manifest names: an extra copy shows here)
   $K get deployments,statefulsets,daemonsets,cronjobs,services -A -o json 2>/dev/null | jq -r --arg re "$NS_RE" '.items[]?|select(.metadata.namespace|test($re))|[.kind,.metadata.namespace,.metadata.name]|@tsv' | sort -u
 }
@@ -159,7 +159,9 @@ if has reinstall2; then
     # the kept Secrets must come back unchanged: install.sh creates a Secret only when it is absent
     comm -23 "$W/s1/secrets" "$W/s3/secrets" | cut -f1 > "$W/lost"
     comm -13 "$W/s1/secrets" "$W/s3/secrets" | cut -f1 > "$W/new"
-    changed=$(comm -12 "$W/lost" "$W/new")
+    # Secrets the upstream agentgateway controller makes for the Gateway it serves (a session key) are made again when the Gateway is recreated:
+    # not ours, not kept by uninstall.sh. LIFECYCLE_SECRET_IGNORE names them (default: a name ending in -session-key).
+    changed=$(comm -12 "$W/lost" "$W/new" | grep -Ev "${LIFECYCLE_SECRET_IGNORE:--session-key\$}" || true)
     [ -z "$changed" ] && ok "no Secret changed its content across uninstall and reinstall" || bad "Secrets whose content changed across uninstall and reinstall (keys rotated)" "$changed"
   fi
 fi

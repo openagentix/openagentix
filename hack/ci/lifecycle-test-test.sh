@@ -42,7 +42,7 @@ cat > "$D/bin/kubectl" <<EOS
 a="\$*"
 items(){ jq -Rn --arg kg "\$1" '[inputs|split("\t")|select(.[0]==\$kg)|{kind:(.[0]|split(".")[0]),metadata:{namespace:(if .[1]=="-" then null else .[1] end),name:.[2],uid:.[3]}}]|{items:.}' < "$D/world"; }
 case "\$a" in
-  "get agentdefinitions.openagentix.io,agents.kagent.dev -A -o json") jq -Rn '[inputs|split("\t")|select(.[0]|split(".")[0]|IN("AgentDefinition","Agent"))|{kind:(.[0]|split(".")[0]),metadata:{namespace:.[1],name:.[2],uid:.[3]}}]|{items:.}' < "$D/world";;
+  "get agentdefinitions.openagentix.io,agents.api.kagent.dev -A -o json") jq -Rn '[inputs|split("\t")|select(.[0]|split(".")[0]|IN("AgentDefinition","Agent"))|{kind:(.[0]|split(".")[0]),metadata:{namespace:.[1],name:.[2],uid:.[3]}}]|{items:.}' < "$D/world";;
   "get deployments,statefulsets,daemonsets,cronjobs,services -A -o json") jq -Rn '[inputs|split("\t")|select(.[0]|split(".")[0]|IN("Deployment","Service"))|{kind:(.[0]|split(".")[0]),metadata:{namespace:.[1],name:.[2]}}]|{items:.}' < "$D/world";;
   "get secrets -A -o json") cat "$D/secrets.json";;
   "get pods -A -o json") cat "$D/pods.json";;

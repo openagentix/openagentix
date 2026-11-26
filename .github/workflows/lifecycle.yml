@@ -63,7 +63,7 @@ jobs:
         run: |
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
-          kubectl get agentdefinitions.openagentix.io,agents.kagent.dev -A -o yaml | head -150 || true
+          kubectl get agentdefinitions.openagentix.io,agents.api.kagent.dev -A -o yaml | head -150 || true
           helm list -A || true
           kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
           kind export logs ./kind-logs --name openagentix || true
