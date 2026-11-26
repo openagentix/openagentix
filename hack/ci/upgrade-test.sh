@@ -44,9 +44,23 @@ run(){ local label=$1; shift; local t0; t0=$(date +%s); echo "=== $label"
 # ---- values: the same file for the old install and for upgrade A (Helm replaces release values on each run, so both must pass it) -------------
 VALUES_A="$W/values-a.yaml"; VALUES_B="$W/values-b.yaml"
 cat > "$VALUES_A" <<'EOS'
-# Values for the upgrade test: v0.2.0 defaults (agent `assistant` with knowledge base, memory and a skill), no Telegram bridge, one suspended schedule.
+# Values for the upgrade test: the v0.2.0 defaults (agent `assistant` with knowledge base and memory), no Telegram bridge, one suspended schedule.
+# The agent is restated without its skill: the installer of v0.2.0 pushes the skill with a crane image and that step stops on a hosted runner
+# (see SKIP_SKILL below). Lists are replaced, not merged, so the whole agent is written here.
 bridge:
   enabled: false
+agents:
+  - name: assistant
+    description: Agent of the upgrade test
+    model: claude-haiku
+    modelConfigName: gateway-claude-haiku
+    systemPrompt: Answer in one short sentence.
+    tools:
+      - tools: [execute_tool_script, fetch_fetch, osv_get_vulnerability, osv_query_vulnerabilities_batch, osv_query_vulnerability]
+    knowledge: true
+    memory:
+      enabled: true
+      ttlDays: 30
 schedules:
   - name: upgrade-canary
     agent: assistant
@@ -77,7 +91,7 @@ spec:
 EOS
 
 # placeholders only: the install needs a provider key and a bot token to exist, and nothing in this test calls a model or Telegram
-PLACEHOLDERS=(ANTHROPIC_API_KEY=ci-placeholder-not-a-real-key TELEGRAM_BOT_TOKEN=0:ci-placeholder-not-a-real-token TELEGRAM_ALLOWED_CHAT_IDS=0)
+PLACEHOLDERS=(SKIP_SKILL=1 ANTHROPIC_API_KEY=ci-placeholder-not-a-real-key TELEGRAM_BOT_TOKEN=0:ci-placeholder-not-a-real-token TELEGRAM_ALLOWED_CHAT_IDS=0)
 extract_old(){ OLD="$W/old"; mkdir -p "$OLD" && git -C "$REPO" archive "$FROM" | tar -x -C "$OLD"; }
 old_install(){
   # Finding on v0.2.0 (fixed in main, only the old tag has it): with bridge.enabled=false it still writes the Telegram Secret into the namespace openagentix-gateway before that
