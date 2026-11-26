@@ -539,6 +539,8 @@ Skill references must be digest-pinned (`...@sha256:<64 hex>`); the render fails
 
 ## Tests
 
+The offline checks that CI runs are `make` targets (`make help` lists them): `make test` runs the Go tests, the chart tests and the shell suites with no Docker and no cluster. To run one piece by hand:
+
 ```sh
 charts/openagentix/tests/run.sh      # shell assertions over `helm template`, needs helm, yq, jq
 helm lint charts/openagentix
@@ -712,7 +714,7 @@ The `NOTES.md` files record versions, deviations from upstream docs, failures an
 
 OpenAgentix is Apache-2.0 and open to contributions. It is a young project with one maintainer, and it wants more.
 
-- [CONTRIBUTING.md](CONTRIBUTING.md): how to build, test and send a change (every commit is signed off, `git commit -s`).
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to build, test and send a change (every commit is signed off, `git commit -s`). New here? [Your first contribution in an hour](docs/diary/guide/first-contribution.md) needs no Docker and no cluster.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): the Contributor Covenant 2.1.
 - [SECURITY.md](SECURITY.md): report a vulnerability privately through the repository's Security tab ("Report a vulnerability"), not in a public issue.
 - [GOVERNANCE.md](GOVERNANCE.md) and [MAINTAINERS.md](MAINTAINERS.md): how decisions are made and how to become a maintainer.

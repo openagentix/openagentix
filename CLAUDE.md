@@ -59,6 +59,7 @@ make test-shell        # channels, quickstart, dashboard, bench, image-tag tests
 make test-guard        # admission guard executed with the Kubernetes CEL code (hack/ci/guardtest)
 make test-apiserver    # CRD and guard on a real API server in a throwaway kind cluster "oa-ci-test"
 make test-integration  # needs Docker: kb on PostgreSQL+pgvector, memory-expiry job
+make test-python-samples  # Python sample agent: hash-checked venv, pytest, contract test (needs python3)
 make test-console      # pnpm install --frozen-lockfile, lint, svelte-check, vitest
 make test-console-e2e  # Playwright in Chromium against the Go binary in demo mode
 make lint              # gofmt, go vet, shellcheck (shellcheck is a report unless SHELLCHECK_STRICT=1)
