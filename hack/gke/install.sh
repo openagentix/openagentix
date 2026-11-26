@@ -5,7 +5,9 @@
 # sets SET_DEFAULT_STORAGECLASS=standard-rwo when the cluster has no default StorageClass, so the installer marks it (a new
 # GKE cluster had none in the first run; GKE_KEEP_STORAGECLASS=1 skips that), then runs ./install.sh with:
 #   CLUSTER_TYPE=remote PROFILE=quickstart NODE_SETTINGS=daemonset SKIP_SKILL=1 and the four SKIP_*_IMAGE=1, because the
-#   images come from Artifact Registry through the values file up.sh wrote (the installer's own registry mode is issue 162).
+#   images come from Artifact Registry through the values file up.sh wrote (built by Cloud Build).
+#   GKE_IMAGES=installer instead lets ./install.sh build and push them itself (IMAGE_REGISTRY=<the run's repository>, ADR 0022):
+#   no SKIP_*_IMAGE and no image values file; docker must be logged in to the repository. Not run on GKE yet.
 # NODE_SETTINGS and other installer variables you set are passed on (NODE_SETTINGS=none for a run without the DaemonSet).
 # VALUES_FILE you set is added after the image values file.
 set -euo pipefail
@@ -40,8 +42,14 @@ if [ -z "$DEF" ] && [ "${GKE_KEEP_STORAGECLASS:-0}" != 1 ]; then
 fi
 
 NS=${NODE_SETTINGS:-daemonset}; [ "$NS" = none ] && NS=""   # none: the installer skips the node settings (its default on remote)
-export CLUSTER_TYPE=remote KUBE_CONTEXT="$CTX" PROFILE=quickstart NODE_SETTINGS="$NS" SKIP_SKILL=1 \
-  SKIP_A2A_GATE_IMAGE=1 SKIP_STUB_MODEL_IMAGE=1 SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 \
-  VALUES_FILE="$VALUES_FILE_GKE${VALUES_FILE:+ $VALUES_FILE}"
+export CLUSTER_TYPE=remote KUBE_CONTEXT="$CTX" PROFILE=quickstart NODE_SETTINGS="$NS" SKIP_SKILL=1
+case "${GKE_IMAGES:-cloudbuild}" in
+  cloudbuild) export SKIP_A2A_GATE_IMAGE=1 SKIP_STUB_MODEL_IMAGE=1 SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 \
+                VALUES_FILE="$VALUES_FILE_GKE${VALUES_FILE:+ $VALUES_FILE}";;
+  # the installer builds with docker buildx on this machine and pushes to the run's repository (ADR 0022); log in first:
+  # gcloud auth configure-docker <region>-docker.pkg.dev. On Apple silicon the amd64 build is slow (emulation).
+  installer) export IMAGE_REGISTRY="$REPO" IMAGE_PLATFORM=linux/amd64;;
+  *) die "GKE_IMAGES must be cloudbuild (default: the images up.sh built) or installer (IMAGE_REGISTRY: install.sh builds and pushes)";;
+esac
 echo "== ./install.sh on $CTX (NODE_SETTINGS=${NODE_SETTINGS:-none})"
 exec "${OA_INSTALL_SH:-./install.sh}"   # OA_INSTALL_SH exists for the offline tests

@@ -228,7 +228,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: control-plane
-          image: {{ printf "%s:%s" $c.image.repository (toString $c.image.tag) | quote }}
+          image: {{ include "oa.image" (list $c.image "controlPlane") | quote }}
           imagePullPolicy: {{ $c.image.pullPolicy }}
           ports:
             - {name: health, containerPort: 8081}

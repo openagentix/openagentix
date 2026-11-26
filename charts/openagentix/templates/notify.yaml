@@ -48,7 +48,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: notify
-          image: {{ printf "%s:%s" $n.image.repository (toString $n.image.tag) | quote }}
+          image: {{ include "oa.image" (list $n.image "notify") | quote }}
           imagePullPolicy: {{ $n.image.pullPolicy }}
           ports:
             - {name: http, containerPort: 8080}

@@ -86,7 +86,7 @@ spec:
             seccompProfile: {type: RuntimeDefault}
           containers:
             - name: a2a-call
-              image: {{ printf "%s:%s" $sc.image.repository (toString $sc.image.tag) | quote }}
+              image: {{ include "oa.image" (list $sc.image "scheduling") | quote }}
               imagePullPolicy: {{ $sc.image.pullPolicy }}
               env:
                 {{- if include "oa.a2aGateOn" $ }}

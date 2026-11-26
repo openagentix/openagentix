@@ -103,8 +103,9 @@ t "remote: cluster_node says there is no node shell" "$(grep -c 'no node shell o
 KUBE_CONTEXT=$R run remote cluster_ctr images ls 2>"$D/err"; t "remote: cluster_ctr fails" "$?" 1
 t "remote: cluster_ctr says there is no node shell" "$(grep -c 'no node shell on a remote cluster' "$D/err")" 1
 KUBE_CONTEXT=$R run remote cluster_network 2>/dev/null; t "remote: cluster_network fails (no Docker network)" "$?" 1
-KUBE_CONTEXT=$R run remote cluster_load_images a:1 2>"$D/err"; t "remote: cluster_load_images fails (no registry push yet)" "$?" 1
-t "remote: the load message names the registry issue" "$(grep -c 'issue #162' "$D/err")" 1
+KUBE_CONTEXT=$R run remote cluster_load_images a:1 2>"$D/err"; t "remote: cluster_load_images fails (the images are pushed instead)" "$?" 1
+t "remote: the load message says install.sh pushes to IMAGE_REGISTRY (ADR 0022)" "$(grep -c 'pushes them to IMAGE_REGISTRY.*ADR 0022' "$D/err")" 1
+t "remote: cluster_load_images runs nothing" "$(calls)" ""
 t "remote: delete hint points at the cloud teardown" "$(KUBE_CONTEXT=$R run remote cluster_delete_hint | grep -c 'install-gke.md#teardown')" 1
 t "remote: delete hint runs nothing" "$(KUBE_CONTEXT=$R run remote cluster_delete_hint >/dev/null; calls)" ""
 KUBE_CONTEXT=$R run remote cluster_node_settings . >"$D/out"; t "remote: node settings exit 0 by default" "$?" 0
