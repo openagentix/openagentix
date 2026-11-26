@@ -174,11 +174,14 @@
     // ---- derived state ----
 
     const chart = $derived(detail?.source === 'chart');
-    const readOnly = $derived(chart || (!!session && !session.canWrite));
+    // a container agent (ADR 0015) is made in "Bring your own agent"; this form has no control for its image, so it shows it only
+    const containerAgent = $derived(detail?.runtimeType === 'container' || detail?.spec?.runtime?.type === 'container');
+    const containerOf = $derived(detail?.spec?.runtime?.container);
+    const readOnly = $derived(chart || containerAgent || (!!session && !session.canWrite));
     // spec fields the stored object has and this form has no control for; a save keeps them
     const unmanaged = $derived(detail?.unmanaged ?? []);
     const promptFromConfigMap = $derived(unmanaged.includes('instructionsFrom'));
-    const otherUnmanaged = $derived(unmanaged.filter((k) => k !== 'instructionsFrom'));
+    const otherUnmanaged = $derived(unmanaged.filter((k) => k !== 'instructionsFrom' && k !== 'runtime'));
     const spec = $derived(specFromDraft(draft));
     const dirty = $derived(baseline ? !sameSpec(spec, baseline) : false);
     const dirtyNew = $derived(isNew && (draft.name !== '' || draft.instructions !== '' || draft.description !== ''));
@@ -526,6 +529,13 @@
             </Notice>
         {/if}
 
+        {#if isNew && platform?.container.available && platform.container.allowed && !readOnly}
+            <p class="sm t2" data-testid="byo-link">
+                Already have an agent in a container image?
+                <a href="/agents/new/container">Bring your own agent</a>.
+            </p>
+        {/if}
+
         <Tabs
             label="Agent"
             prefix="b"
@@ -621,411 +631,451 @@
                     >
                 {/if}
 
-                <div class="bgrid">
-                    <div class="panel">
-                        <div class="hd"><h2>Identity and instructions</h2></div>
-                        <div class="bd stack">
-                            <div class="grid g2">
-                                {#if isNew}
+                {#if containerAgent}
+                    <Notice kind="info" title="This is a container agent">
+                        <div data-testid="container-note" class="stack">
+                            <p class="sm">
+                                It runs your own image, so there are no instructions to edit here. The console shows it
+                                and does not change it, so a save can never drop the image. To change the image, the
+                                port or the variables, create a new agent from
+                                <a href="/agents/new/container">Bring your own agent</a>, or edit the definition with
+                                kubectl.
+                            </p>
+                            <dl class="kv sm">
+                                <dt>Image</dt>
+                                <dd><code>{containerOf?.image ?? ''}</code></dd>
+                                <dt>Port</dt>
+                                <dd>{containerOf?.port ?? ''}</dd>
+                                {#if containerOf?.env?.length}
+                                    <dt>Variables</dt>
+                                    <dd>{containerOf.env.map((e) => e.name).join(', ')}</dd>
+                                {/if}
+                                {#if detail?.isolation}
+                                    <dt>Isolation</dt>
+                                    <dd>{detail.isolation}</dd>
+                                {/if}
+                            </dl>
+                        </div>
+                    </Notice>
+                {:else}
+                    <div class="bgrid">
+                        <div class="panel">
+                            <div class="hd"><h2>Identity and instructions</h2></div>
+                            <div class="bd stack">
+                                <div class="grid g2">
+                                    {#if isNew}
+                                        <TextField
+                                            label="Name"
+                                            bind:value={draft.name}
+                                            mono
+                                            maxlength={MAX_NAME + 10}
+                                            error={nameError || msg('name')}
+                                            hint="Lower case letters, digits and dashes. It cannot change later."
+                                            id="f-name"
+                                        />
+                                    {:else}
+                                        <TextField
+                                            label="Name"
+                                            value={name ?? ''}
+                                            readonly
+                                            mono
+                                            hint="Names cannot change; create a new agent instead."
+                                            id="f-name"
+                                        />
+                                    {/if}
                                     <TextField
-                                        label="Name"
-                                        bind:value={draft.name}
-                                        mono
-                                        maxlength={MAX_NAME + 10}
-                                        error={nameError || msg('name')}
-                                        hint="Lower case letters, digits and dashes. It cannot change later."
-                                        id="f-name"
-                                    />
-                                {:else}
-                                    <TextField
-                                        label="Name"
-                                        value={name ?? ''}
+                                        label="Namespace"
+                                        value={session?.namespace ?? ''}
                                         readonly
                                         mono
-                                        hint="Names cannot change; create a new agent instead."
-                                        id="f-name"
+                                        hint="Only {session?.namespace ?? 'kagent'} is reconciled in v1alpha1."
+                                        id="f-ns"
                                     />
-                                {/if}
+                                </div>
                                 <TextField
-                                    label="Namespace"
-                                    value={session?.namespace ?? ''}
-                                    readonly
-                                    mono
-                                    hint="Only {session?.namespace ?? 'kagent'} is reconciled in v1alpha1."
-                                    id="f-ns"
+                                    label="Description"
+                                    bind:value={draft.description}
+                                    readonly={readOnly}
+                                    hint="One line about what the agent does."
+                                    counter={counterText([...draft.description].length, MAX_DESCRIPTION)}
+                                    counterOver={[...draft.description].length > MAX_DESCRIPTION}
+                                    error={msg('description')}
+                                    id="f-desc"
                                 />
+                                <TextArea
+                                    label="Instructions"
+                                    bind:value={draft.instructions}
+                                    readonly={readOnly || promptFromConfigMap}
+                                    rows={11}
+                                    hint="The system prompt. Checked for anything shaped like a secret."
+                                    counter={counterText(instrBytes, MAX_INSTRUCTIONS_BYTES, 'bytes')}
+                                    counterOver={instrBytes > MAX_INSTRUCTIONS_BYTES}
+                                    counterLive={nearLimit(instrBytes, MAX_INSTRUCTIONS_BYTES)}
+                                    error={secrets.length ? secretSentence(secrets) : msg('instructions')}
+                                    id="f-ins"
+                                />
+                                {#if platform}
+                                    <details class="sm" bind:open={prompts}>
+                                        <summary class="t2 cursor-pointer"
+                                            >Prompts the platform adds ({added.length})</summary
+                                        >
+                                        <div class="mt-2 stack">
+                                            {#if added.length === 0}
+                                                <p class="t3">
+                                                    Turn on knowledge, notify or memory and the paragraph the platform
+                                                    adds to the system prompt shows here.
+                                                </p>
+                                            {/if}
+                                            {#each added as a (a.title)}
+                                                <div class="code">
+                                                    <pre class="whitespace-pre-wrap"><span class="c"
+                                                            ># {a.title} prompt from the platform catalog</span
+                                                        >{'\n' + a.text}</pre>
+                                                </div>
+                                            {/each}
+                                        </div>
+                                    </details>
+                                {/if}
                             </div>
-                            <TextField
-                                label="Description"
-                                bind:value={draft.description}
-                                readonly={readOnly}
-                                hint="One line about what the agent does."
-                                counter={counterText([...draft.description].length, MAX_DESCRIPTION)}
-                                counterOver={[...draft.description].length > MAX_DESCRIPTION}
-                                error={msg('description')}
-                                id="f-desc"
-                            />
-                            <TextArea
-                                label="Instructions"
-                                bind:value={draft.instructions}
-                                readonly={readOnly || promptFromConfigMap}
-                                rows={11}
-                                hint="The system prompt. Checked for anything shaped like a secret."
-                                counter={counterText(instrBytes, MAX_INSTRUCTIONS_BYTES, 'bytes')}
-                                counterOver={instrBytes > MAX_INSTRUCTIONS_BYTES}
-                                counterLive={nearLimit(instrBytes, MAX_INSTRUCTIONS_BYTES)}
-                                error={secrets.length ? secretSentence(secrets) : msg('instructions')}
-                                id="f-ins"
-                            />
-                            {#if platform}
-                                <details class="sm" bind:open={prompts}>
-                                    <summary class="t2 cursor-pointer"
-                                        >Prompts the platform adds ({added.length})</summary
-                                    >
-                                    <div class="mt-2 stack">
-                                        {#if added.length === 0}
-                                            <p class="t3">
-                                                Turn on knowledge, notify or memory and the paragraph the platform adds
-                                                to the system prompt shows here.
-                                            </p>
-                                        {/if}
-                                        {#each added as a (a.title)}
-                                            <div class="code">
-                                                <pre class="whitespace-pre-wrap"><span class="c"
-                                                        ># {a.title} prompt from the platform catalog</span
-                                                    >{'\n' + a.text}</pre>
-                                            </div>
-                                        {/each}
-                                    </div>
-                                </details>
-                            {/if}
                         </div>
-                    </div>
 
-                    <div class="stack">
-                        <div class="panel">
-                            <div class="hd"><h2>Model and capabilities</h2></div>
-                            <div class="bd">
-                                {#if !platform}
-                                    <div class="stack">
-                                        <Skeleton class="w-[50%]" /><Skeleton class="w-full" /><Skeleton
-                                            class="w-[70%]"
-                                        />
-                                    </div>
-                                {:else}
-                                    <div class="cap">
-                                        <div class="cx">
-                                            <SelectField
-                                                label="Model"
-                                                id="f-model"
-                                                bind:value={draft.model}
-                                                disabled={readOnly}
-                                                error={msg('model')}
-                                                hint="Gateway models the platform policy allows. The catalog has {platform
-                                                    .models.length}."
-                                                options={modelOptions(platform)}
-                                            />
-                                            <SelectField
-                                                label="Tool profile"
-                                                id="f-prof"
-                                                bind:value={draft.toolProfile}
-                                                disabled={readOnly}
-                                                error={msg('toolProfile')}
-                                                onchange={setProfile}
-                                                hint={profileTools
-                                                    ? `Served by ${profileTools.toolServer}${profileTools.codeMode ? ' · code mode on' : ''}`
-                                                    : 'No tool profile: the agent gets no tools of its own.'}
-                                                options={profileOptions(platform)}
+                        <div class="stack">
+                            <div class="panel">
+                                <div class="hd"><h2>Model and capabilities</h2></div>
+                                <div class="bd">
+                                    {#if !platform}
+                                        <div class="stack">
+                                            <Skeleton class="w-[50%]" /><Skeleton class="w-full" /><Skeleton
+                                                class="w-[70%]"
                                             />
                                         </div>
-                                    </div>
-                                    {#if draft.toolProfile || tools.length}
+                                    {:else}
+                                        <div class="cap">
+                                            <div class="cx">
+                                                <SelectField
+                                                    label="Model"
+                                                    id="f-model"
+                                                    bind:value={draft.model}
+                                                    disabled={readOnly}
+                                                    error={msg('model')}
+                                                    hint="Gateway models the platform policy allows. The catalog has {platform
+                                                        .models.length}."
+                                                    options={modelOptions(platform)}
+                                                />
+                                                <SelectField
+                                                    label="Tool profile"
+                                                    id="f-prof"
+                                                    bind:value={draft.toolProfile}
+                                                    disabled={readOnly}
+                                                    error={msg('toolProfile')}
+                                                    onchange={setProfile}
+                                                    hint={profileTools
+                                                        ? `Served by ${profileTools.toolServer}${profileTools.codeMode ? ' · code mode on' : ''}`
+                                                        : 'No tool profile: the agent gets no tools of its own.'}
+                                                    options={profileOptions(platform)}
+                                                />
+                                            </div>
+                                        </div>
+                                        {#if draft.toolProfile || tools.length}
+                                            <div class="cap">
+                                                <fieldset class="cx">
+                                                    <legend class="flabel"
+                                                        >Tools offered by <code
+                                                            >{draft.toolProfile || 'no profile'}</code
+                                                        ></legend
+                                                    >
+                                                    {#each tools as t (t.name)}
+                                                        <Checkbox
+                                                            checked={draft.tools.includes(t.name)}
+                                                            disabled={readOnly}
+                                                            bad={t.foreign}
+                                                            onchange={(v) => toggleTool(t.name, v)}
+                                                            reason={t.foreign
+                                                                ? `not offered by ${draft.toolProfile || 'any profile'}`
+                                                                : undefined}
+                                                        >
+                                                            {#if t.code}
+                                                                <code>execute_tool_script</code>
+                                                                <span class="sm t3"
+                                                                    >Code mode: the model writes a short script that
+                                                                    calls several tools in one step</span
+                                                                >
+                                                            {:else}
+                                                                <code><span class="dim">{t.prefix}</span>{t.rest}</code>
+                                                            {/if}
+                                                        </Checkbox>
+                                                    {:else}
+                                                        <span class="sm t3">The profile offers no tools.</span>
+                                                    {/each}
+                                                    {#if msg('tools')}<div class="prev">
+                                                            <Icon name="s-refused" size={13} /><span
+                                                                >{msg('tools')}</span
+                                                            >
+                                                        </div>{/if}
+                                                </fieldset>
+                                            </div>
+                                        {/if}
+                                        <div class="cap">
+                                            <div class="cx">
+                                                <span class="flabel" id="lk">Knowledge</span>
+                                                <span class="sm t3" id="lk-d">
+                                                    {#if knState.disabled}{knState.reason}.{:else}Adds {platform
+                                                            .knowledge.tools.length} knowledge tools and a prompt to search
+                                                        the knowledge base and cite documents.{/if}
+                                                </span>
+                                                {#if draft.knowledge}<span class="sm t3" data-testid="collections"
+                                                        >Collections: {draft.knowledgeCollections.length
+                                                            ? draft.knowledgeCollections.join(', ')
+                                                            : 'none (collections come with their own kind)'}</span
+                                                    >{/if}
+                                                {#if msg('knowledge')}<div class="prev">
+                                                        <Icon name="s-refused" size={13} /><span
+                                                            >{msg('knowledge')}</span
+                                                        >
+                                                    </div>{/if}
+                                            </div>
+                                            <Switch
+                                                labelledby="lk"
+                                                describedby="lk-d"
+                                                bind:checked={draft.knowledge}
+                                                disabled={readOnly || (knState.disabled && !draft.knowledge)}
+                                            />
+                                        </div>
+                                        <div class="cap">
+                                            <div class="cx">
+                                                <span class="flabel" id="ln">Notify</span>
+                                                <span class="sm t3" id="ln-d">
+                                                    {#if noState.disabled}{noState.reason}.{:else}The agent can send a
+                                                        message to a named destination when a task asks it to.{/if}
+                                                </span>
+                                                {#if draft.notify}<span class="sm t3" data-testid="destinations"
+                                                        >Destinations: {draft.notifyDestinations.length
+                                                            ? draft.notifyDestinations.join(', ')
+                                                            : 'none (destinations come with their own kind)'}</span
+                                                    >{/if}
+                                                {#if msg('notify')}<div class="prev">
+                                                        <Icon name="s-refused" size={13} /><span>{msg('notify')}</span>
+                                                    </div>{/if}
+                                            </div>
+                                            <Switch
+                                                labelledby="ln"
+                                                describedby="ln-d"
+                                                bind:checked={draft.notify}
+                                                disabled={readOnly || (noState.disabled && !draft.notify)}
+                                            />
+                                        </div>
+                                        <div class="cap">
+                                            <div class="cx">
+                                                <span class="flabel" id="lm">Memory</span>
+                                                <span class="sm t3" id="lm-d">
+                                                    {#if memState.disabled}{memState.reason}.{:else}Remembers facts per
+                                                        user across conversations.{/if}
+                                                </span>
+                                                {#if draft.memoryEnabled}
+                                                    <div class="mt-1 max-w-[260px]">
+                                                        <label for="f-ttl" class="sm font-semibold"
+                                                            >Keep memories for</label
+                                                        >
+                                                        <div class="flex items-center gap-2">
+                                                            <input
+                                                                id="f-ttl"
+                                                                class="input !w-20"
+                                                                type="number"
+                                                                min="1"
+                                                                max={memoryMax(platform)}
+                                                                bind:value={draft.memoryTtl}
+                                                                readonly={readOnly}
+                                                                aria-describedby="f-ttl-h"
+                                                                aria-invalid={msg('memory.ttlDays')
+                                                                    ? 'true'
+                                                                    : undefined}
+                                                            />
+                                                            <span class="sm t2">days</span>
+                                                        </div>
+                                                        <div class="hint mt-1" id="f-ttl-h">
+                                                            <span
+                                                                >1 to {memoryMax(platform)} days, platform maximum. {draft.memoryTtl ===
+                                                                ''
+                                                                    ? `Empty means the catalog default (${platform.memory.defaultTtlDays}).`
+                                                                    : ''}{Number.isFinite(ttlNumber) &&
+                                                                ttlNumber > memoryMax(platform)
+                                                                    ? ' Above the maximum.'
+                                                                    : ''}</span
+                                                            >
+                                                        </div>
+                                                    </div>
+                                                {/if}
+                                                {#if msg('memory') || msg('memory.ttlDays')}<div class="prev">
+                                                        <Icon name="s-refused" size={13} /><span
+                                                            >{[msg('memory'), msg('memory.ttlDays')]
+                                                                .filter(Boolean)
+                                                                .join(' ')}</span
+                                                        >
+                                                    </div>{/if}
+                                            </div>
+                                            <Switch
+                                                labelledby="lm"
+                                                describedby="lm-d"
+                                                bind:checked={draft.memoryEnabled}
+                                                disabled={readOnly || (memState.disabled && !draft.memoryEnabled)}
+                                            />
+                                        </div>
                                         <div class="cap">
                                             <fieldset class="cx">
-                                                <legend class="flabel"
-                                                    >Tools offered by <code>{draft.toolProfile || 'no profile'}</code
-                                                    ></legend
-                                                >
-                                                {#each tools as t (t.name)}
+                                                <legend class="flabel">Skills</legend>
+                                                {#each skillStates(platform) as s (s.name)}
                                                     <Checkbox
-                                                        checked={draft.tools.includes(t.name)}
-                                                        disabled={readOnly}
-                                                        bad={t.foreign}
-                                                        onchange={(v) => toggleTool(t.name, v)}
-                                                        reason={t.foreign
-                                                            ? `not offered by ${draft.toolProfile || 'any profile'}`
-                                                            : undefined}
+                                                        checked={draft.skills.includes(s.name)}
+                                                        disabled={readOnly ||
+                                                            (s.disabled && !draft.skills.includes(s.name))}
+                                                        reason={s.reason}
+                                                        onchange={(v) => toggleSkill(s.name, v)}
                                                     >
-                                                        {#if t.code}
-                                                            <code>execute_tool_script</code>
-                                                            <span class="sm t3"
-                                                                >Code mode: the model writes a short script that calls
-                                                                several tools in one step</span
-                                                            >
-                                                        {:else}
-                                                            <code><span class="dim">{t.prefix}</span>{t.rest}</code>
-                                                        {/if}
+                                                        <code>{s.name}</code>
+                                                        <span class="sm t3">{s.disabled ? '' : 'approved'}</span>
                                                     </Checkbox>
                                                 {:else}
-                                                    <span class="sm t3">The profile offers no tools.</span>
+                                                    <span class="sm t3">The platform catalog has no skills.</span>
                                                 {/each}
-                                                {#if msg('tools')}<div class="prev">
-                                                        <Icon name="s-refused" size={13} /><span>{msg('tools')}</span>
+                                                {#if draft.skills.length > MAX_SKILLS}<div class="prev">
+                                                        <Icon name="s-refused" size={13} /><span
+                                                            >At most {MAX_SKILLS} skills.</span
+                                                        >
+                                                    </div>{/if}
+                                                {#if msg('skills')}<div class="prev">
+                                                        <Icon name="s-refused" size={13} /><span>{msg('skills')}</span>
                                                     </div>{/if}
                                             </fieldset>
                                         </div>
-                                    {/if}
-                                    <div class="cap">
-                                        <div class="cx">
-                                            <span class="flabel" id="lk">Knowledge</span>
-                                            <span class="sm t3" id="lk-d">
-                                                {#if knState.disabled}{knState.reason}.{:else}Adds {platform.knowledge
-                                                        .tools.length} knowledge tools and a prompt to search the knowledge
-                                                    base and cite documents.{/if}
-                                            </span>
-                                            {#if draft.knowledge}<span class="sm t3" data-testid="collections"
-                                                    >Collections: {draft.knowledgeCollections.length
-                                                        ? draft.knowledgeCollections.join(', ')
-                                                        : 'none (collections come with their own kind)'}</span
-                                                >{/if}
-                                            {#if msg('knowledge')}<div class="prev">
-                                                    <Icon name="s-refused" size={13} /><span>{msg('knowledge')}</span>
-                                                </div>{/if}
-                                        </div>
-                                        <Switch
-                                            labelledby="lk"
-                                            describedby="lk-d"
-                                            bind:checked={draft.knowledge}
-                                            disabled={readOnly || (knState.disabled && !draft.knowledge)}
-                                        />
-                                    </div>
-                                    <div class="cap">
-                                        <div class="cx">
-                                            <span class="flabel" id="ln">Notify</span>
-                                            <span class="sm t3" id="ln-d">
-                                                {#if noState.disabled}{noState.reason}.{:else}The agent can send a
-                                                    message to a named destination when a task asks it to.{/if}
-                                            </span>
-                                            {#if draft.notify}<span class="sm t3" data-testid="destinations"
-                                                    >Destinations: {draft.notifyDestinations.length
-                                                        ? draft.notifyDestinations.join(', ')
-                                                        : 'none (destinations come with their own kind)'}</span
-                                                >{/if}
-                                            {#if msg('notify')}<div class="prev">
-                                                    <Icon name="s-refused" size={13} /><span>{msg('notify')}</span>
-                                                </div>{/if}
-                                        </div>
-                                        <Switch
-                                            labelledby="ln"
-                                            describedby="ln-d"
-                                            bind:checked={draft.notify}
-                                            disabled={readOnly || (noState.disabled && !draft.notify)}
-                                        />
-                                    </div>
-                                    <div class="cap">
-                                        <div class="cx">
-                                            <span class="flabel" id="lm">Memory</span>
-                                            <span class="sm t3" id="lm-d">
-                                                {#if memState.disabled}{memState.reason}.{:else}Remembers facts per user
-                                                    across conversations.{/if}
-                                            </span>
-                                            {#if draft.memoryEnabled}
-                                                <div class="mt-1 max-w-[260px]">
-                                                    <label for="f-ttl" class="sm font-semibold">Keep memories for</label
-                                                    >
-                                                    <div class="flex items-center gap-2">
+                                        <div class="cap">
+                                            <div class="cx gap-1.5">
+                                                <span class="flabel" id="le">Egress</span>
+                                                {#if draft.egress.length}
+                                                    <div class="tags" role="list" aria-labelledby="le">
+                                                        {#each draft.egress as o (o)}
+                                                            <span role="listitem">
+                                                                <Tag
+                                                                    variant={refusedOrigins.has(o)
+                                                                        ? 'refused'
+                                                                        : 'neutral'}
+                                                                    removeLabel="Remove {o}"
+                                                                    onremove={readOnly
+                                                                        ? undefined
+                                                                        : () =>
+                                                                              (draft.egress = draft.egress.filter(
+                                                                                  (x) => x !== o,
+                                                                              ))}>{o}</Tag
+                                                                >
+                                                            </span>
+                                                        {/each}
+                                                    </div>
+                                                {:else}
+                                                    <span class="sm t3">No outbound access</span>
+                                                {/if}
+                                                {#if !readOnly}
+                                                    <div class="tag-input">
                                                         <input
-                                                            id="f-ttl"
-                                                            class="input !w-20"
-                                                            type="number"
-                                                            min="1"
-                                                            max={memoryMax(platform)}
-                                                            bind:value={draft.memoryTtl}
-                                                            readonly={readOnly}
-                                                            aria-describedby="f-ttl-h"
-                                                            aria-invalid={msg('memory.ttlDays') ? 'true' : undefined}
+                                                            class="input !h-7 grow"
+                                                            placeholder="https://host[:port]"
+                                                            aria-label="Add an origin"
+                                                            bind:value={egressInput}
+                                                            onkeydown={originKey}
+                                                            aria-invalid={egressError ? 'true' : undefined}
+                                                            aria-describedby={egressError ? 'f-eg-err' : undefined}
+                                                            autocomplete="off"
+                                                            spellcheck="false"
                                                         />
-                                                        <span class="sm t2">days</span>
+                                                        <Button small onclick={addOrigin}>Add</Button>
                                                     </div>
-                                                    <div class="hint mt-1" id="f-ttl-h">
-                                                        <span
-                                                            >1 to {memoryMax(platform)} days, platform maximum. {draft.memoryTtl ===
-                                                            ''
-                                                                ? `Empty means the catalog default (${platform.memory.defaultTtlDays}).`
-                                                                : ''}{Number.isFinite(ttlNumber) &&
-                                                            ttlNumber > memoryMax(platform)
-                                                                ? ' Above the maximum.'
-                                                                : ''}</span
-                                                        >
-                                                    </div>
-                                                </div>
-                                            {/if}
-                                            {#if msg('memory') || msg('memory.ttlDays')}<div class="prev">
-                                                    <Icon name="s-refused" size={13} /><span
-                                                        >{[msg('memory'), msg('memory.ttlDays')]
-                                                            .filter(Boolean)
-                                                            .join(' ')}</span
-                                                    >
-                                                </div>{/if}
-                                        </div>
-                                        <Switch
-                                            labelledby="lm"
-                                            describedby="lm-d"
-                                            bind:checked={draft.memoryEnabled}
-                                            disabled={readOnly || (memState.disabled && !draft.memoryEnabled)}
-                                        />
-                                    </div>
-                                    <div class="cap">
-                                        <fieldset class="cx">
-                                            <legend class="flabel">Skills</legend>
-                                            {#each skillStates(platform) as s (s.name)}
-                                                <Checkbox
-                                                    checked={draft.skills.includes(s.name)}
-                                                    disabled={readOnly ||
-                                                        (s.disabled && !draft.skills.includes(s.name))}
-                                                    reason={s.reason}
-                                                    onchange={(v) => toggleSkill(s.name, v)}
-                                                >
-                                                    <code>{s.name}</code>
-                                                    <span class="sm t3">{s.disabled ? '' : 'approved'}</span>
-                                                </Checkbox>
-                                            {:else}
-                                                <span class="sm t3">The platform catalog has no skills.</span>
-                                            {/each}
-                                            {#if draft.skills.length > MAX_SKILLS}<div class="prev">
-                                                    <Icon name="s-refused" size={13} /><span
-                                                        >At most {MAX_SKILLS} skills.</span
-                                                    >
-                                                </div>{/if}
-                                            {#if msg('skills')}<div class="prev">
-                                                    <Icon name="s-refused" size={13} /><span>{msg('skills')}</span>
-                                                </div>{/if}
-                                        </fieldset>
-                                    </div>
-                                    <div class="cap">
-                                        <div class="cx gap-1.5">
-                                            <span class="flabel" id="le">Egress</span>
-                                            {#if draft.egress.length}
-                                                <div class="tags" role="list" aria-labelledby="le">
-                                                    {#each draft.egress as o (o)}
-                                                        <span role="listitem">
-                                                            <Tag
-                                                                variant={refusedOrigins.has(o) ? 'refused' : 'neutral'}
-                                                                removeLabel="Remove {o}"
-                                                                onremove={readOnly
-                                                                    ? undefined
-                                                                    : () =>
-                                                                          (draft.egress = draft.egress.filter(
-                                                                              (x) => x !== o,
-                                                                          ))}>{o}</Tag
+                                                {/if}
+                                                {#if egressError}<div class="field">
+                                                        <div class="err" id="f-eg-err">
+                                                            <Icon name="s-refused" size={13} /><span>{egressError}</span
                                                             >
-                                                        </span>
-                                                    {/each}
-                                                </div>
-                                            {:else}
-                                                <span class="sm t3">No outbound access</span>
-                                            {/if}
-                                            {#if !readOnly}
-                                                <div class="tag-input">
-                                                    <input
-                                                        class="input !h-7 grow"
-                                                        placeholder="https://host[:port]"
-                                                        aria-label="Add an origin"
-                                                        bind:value={egressInput}
-                                                        onkeydown={originKey}
-                                                        aria-invalid={egressError ? 'true' : undefined}
-                                                        aria-describedby={egressError ? 'f-eg-err' : undefined}
-                                                        autocomplete="off"
-                                                        spellcheck="false"
-                                                    />
-                                                    <Button small onclick={addOrigin}>Add</Button>
-                                                </div>
-                                            {/if}
-                                            {#if egressError}<div class="field">
-                                                    <div class="err" id="f-eg-err">
-                                                        <Icon name="s-refused" size={13} /><span>{egressError}</span>
-                                                    </div>
-                                                </div>{/if}
-                                            <span class="sm t3"
-                                                >The policy allows {#each platform.policy.egress.allowedOrigins as o, i (o)}{#if i > 0}{i ===
-                                                        platform.policy.egress.allowedOrigins.length - 1
-                                                            ? ' and '
-                                                            : ', '}{/if}<code>{o}</code>{:else}no origin{/each}. Nothing
-                                                else is reachable.</span
-                                            >
-                                            {#if msg('egress.allow')}<div class="prev">
-                                                    <Icon name="s-refused" size={13} /><span>{msg('egress.allow')}</span
-                                                    >
-                                                </div>{/if}
+                                                        </div>
+                                                    </div>{/if}
+                                                <span class="sm t3"
+                                                    >The policy allows {#each platform.policy.egress.allowedOrigins as o, i (o)}{#if i > 0}{i ===
+                                                            platform.policy.egress.allowedOrigins.length - 1
+                                                                ? ' and '
+                                                                : ', '}{/if}<code>{o}</code>{:else}no origin{/each}.
+                                                    Nothing else is reachable.</span
+                                                >
+                                                {#if msg('egress.allow')}<div class="prev">
+                                                        <Icon name="s-refused" size={13} /><span
+                                                            >{msg('egress.allow')}</span
+                                                        >
+                                                    </div>{/if}
+                                            </div>
                                         </div>
-                                    </div>
-                                    <p class="sm t3 border-t border-border pt-3">
-                                        Model access, image, tool server and budget come from the platform. Callers are
-                                        set by an operator in the gate rules.
-                                    </p>
-                                {/if}
+                                        <p class="sm t3 border-t border-border pt-3">
+                                            Model access, image, tool server and budget come from the platform. Callers
+                                            are set by an operator in the gate rules.
+                                        </p>
+                                    {/if}
+                                </div>
                             </div>
-                        </div>
 
-                        <div class="panel">
-                            <div class="hd">
-                                <h2>Platform policy</h2>
-                                <a class="sm ml-auto" href="/governance">Governance</a>
-                            </div>
-                            <div class="bd">
-                                {#if platform}
-                                    <dl class="kv sm" data-testid="policy">
-                                        <dt>Models</dt>
-                                        <dd class="commas">
-                                            {#each platform.policy.allowedModels as m (m)}<code>{m}</code>{/each}
-                                        </dd>
-                                        <dt>Tool profiles</dt>
-                                        <dd class="commas">
-                                            {#each platform.policy.allowedProfiles as m (m)}<code>{m}</code
-                                                >{/each}{platform.policy.requireToolProfile ? ' (required)' : ''}
-                                        </dd>
-                                        <dt>Knowledge, notify</dt>
-                                        <dd>
-                                            {platform.policy.allowKnowledge
-                                                ? 'knowledge allowed'
-                                                : 'knowledge not allowed'}, {platform.policy.allowNotify
-                                                ? 'notify allowed'
-                                                : 'notify not allowed'}
-                                        </dd>
-                                        <dt>Memory</dt>
-                                        <dd>
-                                            {platform.policy.memory.allowed
-                                                ? `allowed, at most ${platform.policy.memory.maxTtlDays} days${platform.policy.memory.requireExpiry ? ', expiry required' : ''}`
-                                                : 'not allowed'}
-                                        </dd>
-                                        <dt>Skills</dt>
-                                        <dd class="commas">
-                                            {#each platform.policy.allowedSkills as m (m)}<code>{m}</code
-                                                >{:else}none{/each}
-                                        </dd>
-                                        <dt>Egress</dt>
-                                        <dd class="commas">
-                                            {#each platform.policy.egress.allowedOrigins as m (m)}<code>{m}</code
-                                                >{:else}none{/each}
-                                        </dd>
-                                        {#if platform.policy.egress.inClusterDestinations?.length}
-                                            <dt>In-cluster</dt>
+                            <div class="panel">
+                                <div class="hd">
+                                    <h2>Platform policy</h2>
+                                    <a class="sm ml-auto" href="/governance">Governance</a>
+                                </div>
+                                <div class="bd">
+                                    {#if platform}
+                                        <dl class="kv sm" data-testid="policy">
+                                            <dt>Models</dt>
                                             <dd class="commas">
-                                                {#each platform.policy.egress.inClusterDestinations as d (d)}<code
-                                                        >{d}</code
-                                                    >{/each}
+                                                {#each platform.policy.allowedModels as m (m)}<code>{m}</code>{/each}
                                             </dd>
-                                        {/if}
-                                        <dt>Agents</dt>
-                                        <dd>up to {platform.policy.maxAgents} definitions</dd>
-                                    </dl>
-                                {:else}
-                                    <p class="sm t3">{ctx.platformError ?? 'Loading the platform policy.'}</p>
-                                {/if}
+                                            <dt>Tool profiles</dt>
+                                            <dd class="commas">
+                                                {#each platform.policy.allowedProfiles as m (m)}<code>{m}</code
+                                                    >{/each}{platform.policy.requireToolProfile ? ' (required)' : ''}
+                                            </dd>
+                                            <dt>Knowledge, notify</dt>
+                                            <dd>
+                                                {platform.policy.allowKnowledge
+                                                    ? 'knowledge allowed'
+                                                    : 'knowledge not allowed'}, {platform.policy.allowNotify
+                                                    ? 'notify allowed'
+                                                    : 'notify not allowed'}
+                                            </dd>
+                                            <dt>Memory</dt>
+                                            <dd>
+                                                {platform.policy.memory.allowed
+                                                    ? `allowed, at most ${platform.policy.memory.maxTtlDays} days${platform.policy.memory.requireExpiry ? ', expiry required' : ''}`
+                                                    : 'not allowed'}
+                                            </dd>
+                                            <dt>Skills</dt>
+                                            <dd class="commas">
+                                                {#each platform.policy.allowedSkills as m (m)}<code>{m}</code
+                                                    >{:else}none{/each}
+                                            </dd>
+                                            <dt>Egress</dt>
+                                            <dd class="commas">
+                                                {#each platform.policy.egress.allowedOrigins as m (m)}<code>{m}</code
+                                                    >{:else}none{/each}
+                                            </dd>
+                                            {#if platform.policy.egress.inClusterDestinations?.length}
+                                                <dt>In-cluster</dt>
+                                                <dd class="commas">
+                                                    {#each platform.policy.egress.inClusterDestinations as d (d)}<code
+                                                            >{d}</code
+                                                        >{/each}
+                                                </dd>
+                                            {/if}
+                                            <dt>Agents</dt>
+                                            <dd>up to {platform.policy.maxAgents} definitions</dd>
+                                        </dl>
+                                    {:else}
+                                        <p class="sm t3">{ctx.platformError ?? 'Loading the platform policy.'}</p>
+                                    {/if}
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
+                {/if}
 
                 {#if detail && detail.status}
                     <div class="panel" id="status-panel">

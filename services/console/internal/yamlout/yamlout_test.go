@@ -116,3 +116,14 @@ func TestBlockScalarKeepsTrailingSpaces(t *testing.T) {
 		t.Fatalf("trailing spaces were trimmed:\n%q", out)
 	}
 }
+
+func TestRenderShowsTheRuntimeOfAContainerAgentAndNoEmptyInstructions(t *testing.T) {
+	spec := model.Spec{Model: "m", Runtime: map[string]any{"type": "container", "container": map[string]any{
+		"image": "registry.example.com/a/b@sha256:abc", "port": float64(8080),
+		"env": []any{map[string]any{"name": "LOG_LEVEL", "value": "info"}, map[string]any{"name": "MODE", "value": "yes"}}}}}
+	got := Render(Meta{Name: "echo"}, spec, nil)
+	want := "spec:\n  model: m\n  runtime:\n    container:\n      env:\n        - name: LOG_LEVEL\n          value: info\n        - name: MODE\n          value: \"yes\"\n      image: \"registry.example.com/a/b@sha256:abc\"\n      port: 8080\n    type: container\n"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("got:\n%s\nwant suffix:\n%s", got, want)
+	}
+}

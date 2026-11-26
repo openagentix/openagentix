@@ -571,7 +571,26 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request, c *call) {
 		writeErr(w, http.StatusUnprocessableEntity, "invalid", "The name is not valid: "+p+".")
 		return
 	}
-	if !s.authorizeSpec(w, r, c, req.Name, summary(req.Spec, "", "")) || !s.preWrite(w, r, c) {
+	if !s.authorizeSpec(w, r, c, req.Name, summary(req.Spec, "", "")) {
+		return
+	}
+	// A container agent is created only when the checks of the validate route pass: it runs a user's image, so the console
+	// does not hand the cluster a definition it already knows the platform refuses. The controller still decides.
+	if predict.IsContainer(req.Spec) || req.Spec.Runtime != nil {
+		b, ok := s.both(w)
+		if !ok {
+			return
+		}
+		if ps := s.predictions(r.Context(), req.Name, req.Spec, b); len(ps) > 0 {
+			msgs := make([]string, len(ps))
+			for i, p := range ps {
+				msgs[i] = p.Message
+			}
+			writeErr(w, http.StatusUnprocessableEntity, "invalid", "The platform would refuse this agent, so it was not created: "+strings.Join(msgs, "; ")+".")
+			return
+		}
+	}
+	if !s.preWrite(w, r, c) {
 		return
 	}
 	d, err := s.o.Backend.Create(r.Context(), req.Name, req.Spec)
@@ -659,17 +678,28 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request, c *call) {
 		}
 		res.Schema = sr
 	}
-	others := 0
-	if l, err := s.o.Backend.List(r.Context()); err == nil {
+	res.Predicted = append(res.Predicted, s.predictions(r.Context(), req.Name, req.Spec, b)...)
+	writeJSON(w, 200, res)
+}
+
+// predictions runs the console's rules over a definition, with the counts of the other definitions that the limits need.
+func (s *Server) predictions(ctx context.Context, name string, spec model.Spec, b platform.Both) []model.Prediction {
+	others, otherContainers := 0, 0
+	if l, err := s.o.Backend.List(ctx); err == nil {
 		others = l.Used
 		for _, a := range l.Items {
-			if a.Source == "built" && a.Name == req.Name {
-				others--
+			if a.Source != "built" || a.Name == name {
+				if a.Source == "built" {
+					others--
+				}
+				continue
+			}
+			if a.RuntimeType == "container" {
+				otherContainers++
 			}
 		}
 	}
-	res.Predicted = append(res.Predicted, predict.Check(predict.Input{Name: req.Name, Spec: req.Spec, Others: others, P: b})...)
-	writeJSON(w, 200, res)
+	return predict.Check(predict.Input{Name: name, Spec: spec, Others: others, OthersContainer: otherContainers, P: b})
 }
 
 // --- static files ---

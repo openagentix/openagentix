@@ -19,6 +19,7 @@ export function platform(): Platform {
                     'osv_get_vulnerability',
                     'execute_tool_script',
                 ],
+                containerAccess: true,
             },
         ],
         knowledge: { available: true, tools: ['knowledge_kb_search', 'knowledge_kb_get_document'], prompt: 'K prompt' },
@@ -38,7 +39,9 @@ export function platform(): Platform {
             egress: { allowedOrigins: ['https://api.osv.dev'] },
             reservedNames: [],
             suspendAll: false,
+            allowedRuntimes: ['builtin', 'container'],
         },
+        container: { available: true, allowed: true, images: ['registry.example.com/agents/'], maxAgents: 3 },
     };
 }
 

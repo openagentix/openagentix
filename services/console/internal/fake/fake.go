@@ -272,7 +272,7 @@ func crd(name string, s model.Spec) []string {
 	if s.Model == "" {
 		m = append(m, "spec.model: Required value")
 	}
-	if s.Instructions == "" {
+	if s.Instructions == "" && !predict.IsContainer(s) {
 		m = append(m, "spec.instructions: Required value")
 	}
 	if len([]rune(s.Instructions)) > 16384 {

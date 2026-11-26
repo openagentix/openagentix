@@ -2,7 +2,11 @@
   "adapters": {
     "runtime": "kagent",
     "modelGateway": "agentgateway",
-    "tools": "toolhive"
+    "tools": "toolhive",
+    "runtimes": {
+      "builtin": "kagent",
+      "container": "container"
+    }
   },
   "namespaces": {
     "agents": "kagent",
@@ -36,7 +40,11 @@
             "osv_query_vulnerability",
             "osv_get_vulnerability",
             "execute_tool_script"
-          ]
+          ],
+          "workload": {
+            "url": "http://toolhive-vmcp-lookup-workload.mcp-tools.svc:4483/mcp",
+            "audience": "openagentix-tools-lookup"
+          }
         },
         {
           "name": "browse",

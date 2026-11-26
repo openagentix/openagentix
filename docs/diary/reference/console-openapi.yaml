@@ -460,13 +460,34 @@ components:
       type: object
       properties:
         allow: {type: array, items: {type: string}}
+    ContainerEnvVar:
+      type: object
+      required: [name, value]
+      properties:
+        name: {type: string, description: "Upper case; never starts with OPENAGENTIX_, OPENAI_, OTEL_ or KUBERNETES_."}
+        value: {type: string, description: "A plain value, at most 4096 bytes. A value shaped like a secret is refused."}
+    ContainerRuntime:
+      type: object
+      required: [image, port]
+      properties:
+        image: {type: string, description: "registry/path@sha256:<64 hex>, no tag, under a registry prefix the policy allows."}
+        port: {type: integer, minimum: 1024, maximum: 65535}
+        env: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/ContainerEnvVar"}}
+    Runtime:
+      type: object
+      description: How the agent is made. Absent means builtin. The console creates type container (bring your own agent); it keeps every other value as it is on a save.
+      properties:
+        type: {type: string, enum: [builtin, container]}
+        container: {$ref: "#/components/schemas/ContainerRuntime"}
     Spec:
       type: object
-      required: [model, instructions]
+      required: [model]
+      description: A builtin agent needs instructions. A container agent (runtime.type container) sets none, and the create route refuses a container definition that the validate rules refuse, before it writes anything.
       properties:
         description: {type: string}
         model: {type: string}
-        instructions: {type: string}
+        instructions: {type: string, description: "Required unless runtime.type is container."}
+        runtime: {$ref: "#/components/schemas/Runtime"}
         toolProfile: {type: string}
         tools: {type: array, items: {type: string}}
         knowledge: {$ref: "#/components/schemas/Feature"}
@@ -612,6 +633,7 @@ components:
         toolServer: {type: string}
         codeMode: {type: boolean}
         tools: {type: array, items: {type: string}}
+        containerAccess: {type: boolean, description: "The operator opened this profile to container agents. The URL and audience behind it are never sent."}
     Platform:
       type: object
       properties:
@@ -650,6 +672,14 @@ components:
               ref: {type: string}
         reservedNames: {type: array, items: {type: string}}
         policy: {$ref: "#/components/schemas/Policy"}
+        container:
+          type: object
+          description: What the builder needs for bring your own agent.
+          properties:
+            available: {type: boolean, description: "The platform has the container runtime installed."}
+            allowed: {type: boolean, description: "The policy lists the container runtime in allowedRuntimes."}
+            images: {type: array, items: {type: string}, description: "Registry prefixes an image must start with."}
+            maxAgents: {type: integer, description: "Most container agents in the namespace; 0 means no extra limit."}
         metrics: {$ref: "#/components/schemas/Availability"}
         traces: {$ref: "#/components/schemas/Availability"}
     PlatformFeature:
@@ -686,6 +716,7 @@ components:
             inClusterDestinations: {type: array, items: {type: string}}
         reservedNames: {type: array, items: {type: string}}
         suspendAll: {type: boolean}
+        allowedRuntimes: {type: array, items: {type: string}}
     MetricsSummary:
       type: object
       required: [window, spendUsd, spendTodayUsd, tokensIn, tokensOut, requests, byUser, series, generatedAt]

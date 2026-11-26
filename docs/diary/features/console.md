@@ -88,6 +88,22 @@ All from the console in demo mode, which holds fake data only. They are made by 
 
 *Console in demo mode.*
 
+### Bring your own agent
+
+Open **New agent**, then **Bring your own agent** (`/agents/new/container`). The link shows only when the platform has container agents installed (`controlPlane.containerAgents.enabled`) and the policy lists `container` in `allowedRuntimes`. If one of those is missing, the page says which.
+
+The form asks for:
+
+- **Image.** A digest, not a tag: `registry/path@sha256:<64 hex digits>`, under a registry prefix the policy allows (`controlPlane.policy.runtimes.container.images`). The hint shows an example built from the first allowed prefix. A tag, a tag next to a digest, a short digest and a registry that is not allowed each get their own plain sentence.
+- **Port**, 1024 to 65535, and up to 32 **environment variables**. A name that is not upper case, starts with `OPENAGENTIX_`, `OPENAI_`, `OTEL_` or `KUBERNETES_`, or is set twice is refused. A value shaped like a secret is refused, and the message names the kind of secret and never repeats the value.
+- **Model** from the allowed models, and an optional **tool profile** from the profiles that are both allowed and opened to container agents.
+
+There is no instructions field, and no field for memory, knowledge, notify, skills or egress, because the controller refuses them for a container agent. Resource limits are not in the form (the policy defaults apply).
+
+The form checks the draft in the browser with the same rules as the admission policy and the controller. When it has no problem it calls the validate route, which runs the Kubernetes dry run and the console's prediction rules. **Create stays off until that check passes.** The create route runs the prediction rules again for a container definition and answers 422 before it writes anything, so a script cannot skip the check either. The controller still decides after the create. A container agent opens in the builder read-only, with its image, port and variable names, so a save cannot drop the image.
+
+The page shows the isolation facts of ADR 0015 before you create: a container agent is less isolated than a built-in one, and where the network plugin does not enforce network policy it can reach any host.
+
 ### Costs
 
 ![Console Costs page](../../assets/console/costs-light.webp)
@@ -141,9 +157,11 @@ On the kind demo cluster, 2026-11-25:
 
 Tests: Go tests with `-race`, 116 component tests including accessibility checks, and 15 Playwright flows. The Playwright flows run in a demo mode with an in-memory backend.
 
+Bring your own agent (issue #107) was tested only offline and in demo mode, on 2026-11-26: Go tests of the container rules (`internal/predict`), of the platform summary (no workload URL or audience in it), of the create route refusing a bad container definition before any write, and of the YAML of a container agent; 219 vitest tests in total, among them 23 for the draft and its rules and 15 for the form (with an accessibility check); and a Playwright flow in demo mode that types a tag (refused in plain English), another registry (refused, allowed one named), a secret-shaped value (refused, not echoed), then a good digest, waits for the check to pass, creates the agent and sees it Pending as a container agent. 23 Playwright flows passed. It has not been run against a cluster with container agents on.
+
 The Schedules and Access pages (issue #5) were tested only offline, on 2026-11-26: Go tests of the CronJob and ConfigMap readers against a fake Kubernetes API (no secret, prompt or user id in the answer), route and auth tests, 181 vitest tests in total with accessibility checks, 22 Playwright flows in demo mode (one new, for these two pages), and chart render tests for the two extra Roles. They were not run against a cluster, so the Roles and the real CronJob and ConfigMap shapes are not proven live.
 
-A bug found on a live install, 2026-11-26: the builder's Tool profile list was empty, so with `requireToolProfile: true` no agent could be created. The console read `toolServer` and `profiles` at the top of the catalog, the shape of its own demo fixtures, but the control plane writes the profiles under `tools.toolhive.profiles`, and the demo mode and the tests used the fixture shape, so nothing caught it. The console now reads the real shape, from a golden catalog shared with the control plane tests and the chart tests, and the demo fixtures use it. The same review found that the policy entry `"*"` ("everything the catalog has") was read as a literal name; that is fixed too. When the policy requires a tool profile and none is available, the builder now shows a message naming the chart value `mcp.profiles` and disables Create with that reason. Checked offline: Go tests (the golden catalog gives the profile, knowledge, notify, memory, skills and adapters; the control plane copy test fails on drift, which was shown by changing the copy), 189 vitest tests, and 23 Playwright flows in demo mode (one new, for the empty case). The CI smoke test now also reads `GET /api/v1/platform` on the quick start and expects its profile; that check has not run on a cluster yet.
+A bug found on a live install, 2026-11-26: the builder's Tool profile list was empty, so with `requireToolProfile: true` no agent could be created. The console read `toolServer` and `profiles` at the top of the catalog, the shape of its own demo fixtures, but the control plane writes the profiles under `tools.toolhive.profiles`, and the demo mode and the tests used the fixture shape, so nothing caught it. The console now reads the real shape, from a golden catalog shared with the control plane tests and the chart tests, and the demo fixtures use it. The same review found that the policy entry `"*"` ("everything the catalog has") was read as a literal name; that is fixed too. When the policy requires a tool profile and none is available, the builder now shows a message naming the chart value `mcp.profiles` and disables Create with that reason. Checked offline: Go tests (the golden catalog gives the profile, knowledge, notify, memory, skills and adapters; the control plane copy test fails on drift, which was shown by changing the copy), 227 vitest tests, and 24 Playwright flows in demo mode (one new, for the empty case). The CI smoke test now also reads `GET /api/v1/platform` on the quick start and expects its profile; that check has not run on a cluster yet.
 
 The second review of the control plane ran after the console was built. Its console findings were fixed (token strength, Host allowlist, no upstream error text in answers).
 
@@ -151,6 +169,7 @@ The second review of the control plane ran after the console was built. Its cons
 
 - The browser UI was not driven against the real cluster. In the live run only the API was used. The UI was exercised in demo mode.
 - The Playground (a chat with the agent inside the console) does not exist yet.
+- A container agent can be created in the builder but not edited there: it opens read-only. To change its image, port or variables create a new agent, or edit the definition with kubectl. The form has no resource limits, and a private registry is not supported (ADR 0015). The builder's rules are a copy of the controller's; the controller stays the authority.
 - Chart agents are read-only. Areas without a data source show "not available yet".
 - Schedules shows the CronJob's own times, not the result of single runs. Access shows the kind of user id rule, never its value. Neither reads `Schedule` or `AgentAccess` resources, which do not exist yet.
 - One shared operator identity. No login by user, no per-user audit yet.

@@ -1,5 +1,17 @@
 {
   "maxAgents": 5,
+  "allowedRuntimes": [
+    "builtin",
+    "container"
+  ],
+  "runtimes": {
+    "container": {
+      "images": [
+        "registry.example.com/agents/"
+      ],
+      "maxAgents": 3
+    }
+  },
   "allowedModels": [
     "claude-haiku"
   ],

@@ -20,7 +20,9 @@ type Input struct {
 	Name   string
 	Spec   model.Spec
 	Others int
-	P      platform.Both
+	// OthersContainer is how many of the other definitions use the container runtime.
+	OthersContainer int
+	P               platform.Both
 }
 
 // Check returns the predicted refusals in a fixed order. Empty means nothing obvious.
@@ -43,6 +45,11 @@ func Check(in Input) []model.Prediction {
 		add("model", "model %q is not in the platform catalog (%s)", s.Model, strings.Join(c.Models, ", "))
 	case !p.ModelAllowed(s.Model):
 		add("model", "model %q is not allowed by the platform policy", s.Model)
+	}
+
+	if runtimeRules(in, add) {
+		containerRules(in, add)
+		return out
 	}
 
 	prof, haveProf := platform.Profile{}, false
