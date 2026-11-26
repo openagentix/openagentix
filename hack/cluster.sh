@@ -55,6 +55,10 @@ cluster_exists(){
     remote) ${KUBECTL:-kubectl} --context "${KUBE_CONTEXT:-}" get --raw /version >/dev/null 2>&1;;
   esac
 }
+# cluster_create <repo root>: for k3d it also mounts hack/k3s-authn.yaml read-only into the server and starts the API server with
+# --authentication-config=<that file>. Without it k3s sets --anonymous-auth=false, and the workload tool server (ADR 0019) cannot fetch the
+# public signing keys. The config admits anonymous callers on /.well-known/openid-configuration and /openid/v1/jwks only. A k3d cluster made
+# before this change has no such config: delete it and let the installer make it again.
 cluster_create(){
   case "$CLUSTER_TYPE" in
     kind) kind create cluster --name "$CLUSTER" --config "${1:-.}/hack/kind-config.yaml";;
@@ -62,9 +66,14 @@ cluster_create(){
     # /var/lib/ate is a Docker volume: the runtime builds a sandbox root file system there and makes overlay whiteouts (mknod c 0 0), which the
     # container's own overlay root refuses ("operation not permitted", even with --privileged). kind mounts /var as a volume, k3d does not.
     # The k3s network policy controller stays ON (it is the point of the test: k3s enforces NetworkPolicy).
-    k3d) k3d cluster create "$CLUSTER" --image "$K3D_NODE_IMAGE" --servers 1 --agents 0 --no-lb --wait --timeout 300s \
+    # hack/k3s-authn.yaml: k3s sets --anonymous-auth=false unless an authentication config is given; this one admits anonymous callers on
+    # the issuer document and the public signing keys only, which the workload tool server needs (ADR 0019). The mount needs an absolute path.
+    k3d) local root; root=$(cd "${1:-.}" && pwd) || return 1
+         k3d cluster create "$CLUSTER" --image "$K3D_NODE_IMAGE" --servers 1 --agents 0 --no-lb --wait --timeout 300s \
            --volume "k3d-$CLUSTER-ate:/var/lib/ate@server:0" \
-           --k3s-arg "--disable=traefik@server:0" --k3s-arg "--disable=servicelb@server:0";;
+           --volume "$root/hack/k3s-authn.yaml:/etc/openagentix/k3s-authn.yaml:ro@server:0" \
+           --k3s-arg "--disable=traefik@server:0" --k3s-arg "--disable=servicelb@server:0" \
+           --k3s-arg "--kube-apiserver-arg=authentication-config=/etc/openagentix/k3s-authn.yaml@server:0";;
     remote) echo "ERROR: CLUSTER_TYPE=remote never creates a cluster. Create it with the cloud's own tool (GKE: gcloud container clusters create, see docs/diary/guide/install-gke.md) and set KUBE_CONTEXT to its context." >&2; return 1;;
   esac
 }
