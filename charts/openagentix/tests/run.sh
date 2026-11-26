@@ -33,7 +33,10 @@ eq "bridge token env has no literal value"             "$(q "$D" '.[]|select(.ki
 eq "allowlist env present by default, optional"        "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].env[]|select(.name=="TELEGRAM_ALLOWED_CHAT_IDS")|.valueFrom.secretKeyRef.optional')" true
 eq "bot is not open to everyone by default"            "$(q "$D" '[.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].env[]|select(.name=="TELEGRAM_ALLOW_ALL")]|length')" 0
 eq "bridge liveness probe hits /healthz"               "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].livenessProbe.httpGet|.path+":"+(.port|tostring)')" /healthz:health
-eq "bridge exposes health port 8080"                   "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].ports[]|select(.name=="health")|.containerPort')" 8080
+BRG='.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0]'
+eq "bridge readiness probe hits /readyz (ready after the first poll)" "$(q "$D" "$BRG|.readinessProbe.httpGet|.path+\":\"+(.port|tostring)")" /readyz:health
+eq "bridge startup probe hits /readyz, 5 s period, 24 tries (the first long poll can take 30 s)" "$(q "$D" "$BRG|.startupProbe|[.httpGet.path,.periodSeconds,.failureThreshold]|join(\" \")")" "/readyz 5 24"
+eq "bridge exposes health port 8080"                  "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].ports[]|select(.name=="health")|.containerPort')" 8080
 
 echo "# bridge toggles"
 D=$(docs --set bridge.enabled=false)
@@ -2224,9 +2227,6 @@ echo "# every container of our workloads has probes and requests and limits (iss
 # this chart, so nothing needs an allowlist except the entries below (an entry is "kind/name/container/missing", with the reason).
 # Issue #211 tracks anything we cannot fix because the image is not ours.
 PROBE_ALLOW=(
-  # The Telegram bridge has a liveness probe only. Issue #200 adds the other two and removes these two lines.
-  Deployment/telegram-bridge/bridge/readinessProbe
-  Deployment/telegram-bridge/bridge/startupProbe
 )
 RC="$REPO/components"
 RCDEMO=(-f "$RC/channels/demo-values.yaml" -f "$RC/schedules/demo-values.yaml" -f "$RC/notify/demo-values.yaml" -f "$RC/observability/demo-values.yaml" -f "$RC/knowledge/graph-demo-values.yaml" -f "$RC/governance/demo-values.yaml" -f "$RC/governance/profiles-demo-values.yaml" -f "$RC/governance/memory-demo-values.yaml" -f "$RC/control-plane/demo-values.yaml" -f "$RC/console/demo-values.yaml" --set gateway.stubModel.enabled=true)

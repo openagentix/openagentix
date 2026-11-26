@@ -81,8 +81,19 @@ spec:
             {{- end }}
           ports:
             - {name: health, containerPort: 8080}
+          # /readyz is 503 until the first getUpdates succeeds, so a rollout waits
+          # for a bridge that really polls. The first long poll can take 30 s, so
+          # the startup probe allows 2 minutes.
+          startupProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+            failureThreshold: 3
           # /healthz turns 503 when no Telegram poll has succeeded recently, so a
-          # stalled poller gets restarted.
+          # stalled poller gets restarted. It counts the start-up moment as fresh.
           livenessProbe:
             httpGet: {path: /healthz, port: health}
             initialDelaySeconds: 20

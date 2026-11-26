@@ -48,6 +48,7 @@ type Bridge struct {
 	Now                func() time.Time // clock for health checks; nil means time.Now
 	username           string           // the bot's own username, lowercased; set once by Run
 	lastPoll           atomic.Int64     // unix nanos of the last successful getUpdates
+	polled             atomic.Bool      // true after the first successful getUpdates (readiness)
 	AllowAll           bool             // explicit opt-in: accept every chat; otherwise empty Allowed rejects all
 	Memory             Memories         // nil: /memories and /forget are ordinary text for the agent (ADR 0006, round 3)
 	RetryOnWakeup      bool             // send the same message once more when the agent answers -32004 (input not accepted)
@@ -155,6 +156,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 		failures = 0
 		b.markPoll()
+		b.markPolled()
 		for _, u := range ups {
 			if ctx.Err() != nil {
 				break // shutting down: leave the rest of the batch unprocessed
