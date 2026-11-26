@@ -44,7 +44,8 @@ The installer ends with a summary: how long it took, which model is active, and 
 
 - Early project with one maintainer. Not production ready. Last release `v0.2.0`; the control plane, console, quick start and bring your own agent are on `main` and not yet in a release.
 - Proven on one single-node kind cluster, and the keyless quick start in CI on hosted runners: first answer about 5 minutes after the start of `./install.sh` on kind (301 to 320 s, three runs, empty cache, stub model). The quick start and smoke test also passed on k3s (k3d) in CI, one node. A laptop was not timed.
-- Not run yet: a managed cloud (GKE, EKS, AKS), OpenShift, several nodes, load. `CLUSTER_TYPE=remote` and the `platform: openshift` manifests are built and tested offline only ([Install on GKE, draft](docs/diary/guide/install-gke.md), [OpenShift](docs/diary/guide/openshift.md)).
+- GKE: the quick start ran once on a GKE Standard cluster (one node, stub model), with the images built by hand in Cloud Build and one manual StorageClass patch; smoke test passed ([Install on GKE](docs/diary/guide/install-gke.md)). The model gateway got a public IP there (issue #165).
+- Not run yet: EKS, AKS, OpenShift, several nodes, load. The `platform: openshift` manifests are built and tested offline only ([OpenShift](docs/diary/guide/openshift.md)).
 - Agents run on kagent with Agent Substrate (gVisor sandboxes). Bring your own A2A agent (a digest-pinned container) is proven in CI on kind only, off by default.
 - Release signing, SBOM and provenance are built but unproven until a real tag runs.
 - Not built yet: human approval, one identity per agent for every call, budgets in money (budgets are in tokens), a Slack channel proven on a real workspace.
