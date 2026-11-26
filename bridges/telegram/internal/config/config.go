@@ -24,6 +24,8 @@ type Config struct {
 	MaxConcurrentTurns int
 	ShutdownGrace      time.Duration
 	HealthAddr         string
+	RetryOnWakeup      bool          // RETRY_ON_WAKEUP, default true: retry once when the agent answers -32004
+	WakeupDelay        time.Duration // WAKEUP_RETRY_DELAY, default 20s: the wait before that retry
 }
 
 // Load reads configuration using getenv (e.g. os.Getenv).
@@ -39,6 +41,8 @@ func Load(getenv func(string) string) (Config, error) {
 		MaxConcurrentTurns: 8,
 		ShutdownGrace:      25 * time.Second,
 		HealthAddr:         getenv("HEALTH_ADDR"),
+		RetryOnWakeup:      true,
+		WakeupDelay:        20 * time.Second,
 	}
 	c.UserIDPrefix = "telegram:"
 	if v, set := lookup(getenv, "A2A_USER_ID_PREFIX"); set {
@@ -80,6 +84,22 @@ func Load(getenv func(string) string) (Config, error) {
 			return c, fmt.Errorf("AGENT_TIMEOUT: invalid duration %q", v)
 		}
 		c.AgentTimeout = d
+	}
+	switch v := getenv("RETRY_ON_WAKEUP"); v {
+	case "":
+	case "true":
+		c.RetryOnWakeup = true
+	case "false":
+		c.RetryOnWakeup = false
+	default:
+		return c, fmt.Errorf("RETRY_ON_WAKEUP: must be true or false, got %q", v)
+	}
+	if v := getenv("WAKEUP_RETRY_DELAY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return c, fmt.Errorf("WAKEUP_RETRY_DELAY: invalid duration %q", v)
+		}
+		c.WakeupDelay = d
 	}
 	if v := getenv("MAX_CONCURRENT_TURNS"); v != "" {
 		n, err := strconv.Atoi(v)

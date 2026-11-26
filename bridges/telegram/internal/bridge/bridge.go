@@ -50,6 +50,8 @@ type Bridge struct {
 	lastPoll           atomic.Int64     // unix nanos of the last successful getUpdates
 	AllowAll           bool             // explicit opt-in: accept every chat; otherwise empty Allowed rejects all
 	Memory             Memories         // nil: /memories and /forget are ordinary text for the agent (ADR 0006, round 3)
+	RetryOnWakeup      bool             // send the same message once more when the agent answers -32004 (input not accepted)
+	WakeupDelay        time.Duration    // wait before that retry; it counts against AgentTimeout
 	UserIDPrefix       string           // prepended to the chat id to form the agent-side user id (X-User-Id); empty sends no user id
 	saltOnce           sync.Once
 	salt               []byte // per process: chat ids appear in logs only as a short hash salted with this
@@ -227,9 +229,23 @@ func (b *Bridge) handle(ctx context.Context, u telegram.Update) {
 	}
 	agentStart := time.Now()
 	reply, newCtx, err := b.Agent.Send(actx, b.Store.Get(chat), text)
+	if a2a.IsWaking(err) && b.RetryOnWakeup {
+		// -32004 means the agent did not accept the message (its session is not ready yet), so one more send cannot
+		// duplicate it. Only this error is retried, once, and the wait stays inside the turn deadline.
+		b.Log.Warn("agent is waking up, retrying once", "chat_hash", ch, "trace_id", tc.TraceID, "delay_ms", b.WakeupDelay.Milliseconds())
+		select {
+		case <-time.After(b.WakeupDelay):
+			reply, newCtx, err = b.Agent.Send(actx, b.Store.Get(chat), text)
+		case <-actx.Done():
+		}
+	}
 	agentMs := time.Since(agentStart).Milliseconds()
 	outcome := "ok"
-	if err != nil {
+	if a2a.IsWaking(err) {
+		b.Log.Warn("agent is waking up", "chat_hash", ch, "trace_id", tc.TraceID, "err", err)
+		outcome = "agent_waking"
+		reply = wakingMessage
+	} else if err != nil {
 		b.Log.Error("agent call failed", "chat_hash", ch, "trace_id", tc.TraceID, "err", err)
 		outcome = "agent_error"
 		reply = genericFailure
@@ -248,6 +264,8 @@ func (b *Bridge) handle(ctx context.Context, u telegram.Update) {
 }
 
 const typingTimeout = 3 * time.Second
+
+const wakingMessage = "The agent is waking up. Please send your message again in a minute."
 
 const genericFailure = "Sorry, something went wrong. Please try again."
 
