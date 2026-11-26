@@ -131,7 +131,7 @@ t "a default StorageClass exists: no patch" "$(calls | grep -c ' patch ')" 0
 inst FAKE_SC="$D/sc-none.json" GKE_KEEP_STORAGECLASS=1 >/dev/null
 t "GKE_KEEP_STORAGECLASS=1: no patch" "$(calls | grep -c ' patch ')" 0
 inst FAKE_SC="$D/sc-ok.json" NODE_SETTINGS=none >/dev/null
-t "NODE_SETTINGS can be changed (for the A/B run)" "$(grep -cx NODE_SETTINGS=none "$D/install-env")" 1
+t "NODE_SETTINGS=none reaches install.sh as empty (the installer skips the DaemonSet; for the A/B run)" "$(grep -cx NODE_SETTINGS= "$D/install-env")" 1
 cp "$STATE" "$D/past.env"; sed -i.bak 's/^DEADLINE=.*/DEADLINE=1000/' "$D/past.env"
 OUT=$(: > "$D/calls"; rm -f "$D/install-env"; env -i PATH="$D/bin:$PATH" HOME="$D/home" OA_INSTALL_SH="$D/fake-install.sh" bash hack/gke/install.sh "$D/past.env" 2>&1; echo "exit=$?")
 t "past the deadline: refused, teardown printed, install not run" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'hack/gke/down.sh' <<<"$OUT")/$([ -f "$D/install-env" ] && echo ran || echo no)" 1/1/no

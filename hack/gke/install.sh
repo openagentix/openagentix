@@ -37,8 +37,9 @@ if [ -z "$DEF" ] && [ "${GKE_KEEP_STORAGECLASS:-0}" != 1 ]; then
   fi
 fi
 
-export CLUSTER_TYPE=remote KUBE_CONTEXT="$CTX" PROFILE=quickstart NODE_SETTINGS="${NODE_SETTINGS:-daemonset}" SKIP_SKILL=1 \
+NS=${NODE_SETTINGS:-daemonset}; [ "$NS" = none ] && NS=""   # none: the installer skips the node settings (its default on remote)
+export CLUSTER_TYPE=remote KUBE_CONTEXT="$CTX" PROFILE=quickstart NODE_SETTINGS="$NS" SKIP_SKILL=1 \
   SKIP_A2A_GATE_IMAGE=1 SKIP_STUB_MODEL_IMAGE=1 SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 \
   VALUES_FILE="$VALUES_FILE_GKE${VALUES_FILE:+ $VALUES_FILE}"
-echo "== ./install.sh on $CTX (NODE_SETTINGS=$NODE_SETTINGS)"
+echo "== ./install.sh on $CTX (NODE_SETTINGS=${NODE_SETTINGS:-none})"
 exec "${OA_INSTALL_SH:-./install.sh}"   # OA_INSTALL_SH exists for the offline tests
