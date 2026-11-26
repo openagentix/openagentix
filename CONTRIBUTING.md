@@ -6,6 +6,8 @@ By taking part you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md). Ho
 
 ## Where to start
 
+New here? Follow [Your first contribution in an hour](docs/diary/guide/first-contribution.md): tools, offline tests, picking an issue, the DCO sign-off, and what review to expect. Ready-made starter tasks are listed in [docs/contributing/good-first-issues.md](docs/contributing/good-first-issues.md).
+
 Good first contributions, from easiest to hardest:
 
 - **Documentation.** Fix a wrong or unclear sentence in the README, the diary (`docs/diary`) or an ADR. Add a missing step to a how-to.
