@@ -9,6 +9,7 @@ on:
     paths:
       - .github/workflows/e2e-k3s.yml
       - hack/cluster.sh
+      - hack/images.sh
       - hack/k3s-authn.yaml
       - install.sh
       - hack/kind-image-digest.sh

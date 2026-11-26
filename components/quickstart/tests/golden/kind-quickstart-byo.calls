@@ -1,0 +1,304 @@
+docker build -q -t openagentix/a2a-gate:dev-HASH services/a2a-gate
+docker build -q -t openagentix/console:dev-HASH -f services/console/Dockerfile .
+docker build -q -t openagentix/control-plane:dev-HASH services/control-plane
+docker build -q -t openagentix/stub-model:dev-HASH services/stub-model
+docker build -q -t registry.local/oa/echo-a2a:dev-HASH examples/agents/echo-a2a
+docker exec openagentix-control-plane sysctl -e -w net.ipv6.conf.all.proxy_ndp=1
+docker exec openagentix-control-plane sysctl -w net.ipv4.conf.all.proxy_arp=1
+docker image inspect openagentix/a2a-gate:dev-HASH
+docker image inspect openagentix/console:dev-HASH
+docker image inspect openagentix/control-plane:dev-HASH
+docker image inspect openagentix/stub-model:dev-HASH
+docker image inspect registry.local/oa/echo-a2a:dev-HASH
+helm status agent-kourier -n agent-kourier
+helm upgrade --install openagentix charts/openagentix -n openagentix-system --create-namespace -f components/quickstart/values.yaml -f components/quickstart/byo-values.yaml --set-string governance.a2a.image.tag=dev-HASH --set-string gateway.stubModel.image.tag=dev-HASH --set-string controlPlane.image.tag=dev-HASH --set-string console.image.tag=dev-HASH --set-string gateway.stubModel.sourceHash=HASH --set-string governance.a2a.sourceHash=HASH --set-string controlPlane.sourceHash=HASH --set-json controlPlane.apiServerCIDRs=["10.0.0.1/32"] --set-string console.sourceHash=HASH --set-json console.apiServerCIDRs=["10.0.0.1/32"] --wait --timeout 5m
+kind get clusters
+kind load docker-image openagentix/a2a-gate:dev-HASH openagentix/stub-model:dev-HASH openagentix/control-plane:dev-HASH openagentix/console:dev-HASH registry.local/oa/echo-a2a:dev-HASH --name openagentix
+kubectl --context=kind-openagentix get --raw /.well-known/openid-configuration
+kubectl --context=kind-openagentix get pods -n kube-system -l component=kube-apiserver -o json
+kubectl annotate agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap a2a-gate-routes -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap a2a-gate-rules -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap jaeger-config -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap llm-api-keys-control-plane -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap openagentix-control-plane-catalog -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap openagentix-control-plane-policy -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap openagentix-observability -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate configmap victoria-metrics-scrape -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate crd agentdefinitions.openagentix.io meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate deployment.apps a2a-gate -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate deployment.apps jaeger -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate deployment.apps openagentix-console -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate deployment.apps openagentix-control-plane -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate deployment.apps stub-model -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate deployment.apps victoria-metrics -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate gateway.gateway.networking.k8s.io model-gateway -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate mcpgroup.toolhive.stacklok.dev tools -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate mcpoidcconfig.toolhive.stacklok.dev openagentix-workload-sa -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate mcpoidcconfig.toolhive.stacklok.dev substrate-actor-jwt -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate mcpserver.toolhive.stacklok.dev osv -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate mcptelemetryconfig.toolhive.stacklok.dev openagentix-telemetry -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io a2a-gate-ingress -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io default-deny -n openagentix-workloads meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io jaeger-ingress -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-console -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-control-plane -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-kagent-controller -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-kagent-ui -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-mcp-tools-default -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-vmcp-ingress -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup-workload -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-vmcp-metrics -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io openagentix-vmcp-metrics-lookup -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io stub-model -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate networkpolicy.networking.k8s.io victoria-metrics-ingress -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate persistentvolumeclaim victoria-metrics -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate remotemcpserver.api.kagent.dev toolhive-vmcp -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate remotemcpserver.api.kagent.dev toolhive-vmcp-lookup -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate resourcequota openagentix-agentdefinitions -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-agent-builder -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-agent-viewer -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-console -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-control-plane -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate role.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate rolebinding.rbac.authorization.k8s.io openagentix-console -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate rolebinding.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n kagent meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate rolebinding.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate service a2a-gate -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate service jaeger -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate service openagentix-console -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate service stub-model -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate service victoria-metrics -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate serviceaccount a2a-gate -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate serviceaccount openagentix-console -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate serviceaccount openagentix-control-plane -n openagentix-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate serviceaccount victoria-metrics -n openagentix-observability meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate virtualmcpserver.toolhive.stacklok.dev tools -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate virtualmcpserver.toolhive.stacklok.dev tools-lookup -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate virtualmcpserver.toolhive.stacklok.dev tools-lookup-workload -n mcp-tools meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl apply -f -
+kubectl config use-context kind-openagentix
+kubectl config use-context kind-openagentix
+kubectl create configmap substrate-idp-ca -n mcp-tools --from-file=ca.crt=/dev/fd/63 --dry-run=client -o yaml
+kubectl create secret generic console-token -n openagentix-system --from-file=token=/dev/fd/63
+kubectl get agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system
+kubectl get agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system
+kubectl get agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get clustertrustbundle servicedns.podcert.ate.dev:identity:primary-bundle -o jsonpath={.spec.trustBundle}
+kubectl get configmap a2a-gate-routes -n openagentix-gateway
+kubectl get configmap a2a-gate-routes -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap a2a-gate-rules -n openagentix-gateway
+kubectl get configmap a2a-gate-rules -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap jaeger-config -n openagentix-observability
+kubectl get configmap jaeger-config -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap llm-api-keys-control-plane -n agentgateway-system
+kubectl get configmap llm-api-keys-control-plane -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap openagentix-control-plane-catalog -n openagentix-system
+kubectl get configmap openagentix-control-plane-catalog -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap openagentix-control-plane-policy -n openagentix-system
+kubectl get configmap openagentix-control-plane-policy -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap openagentix-observability -n openagentix-observability
+kubectl get configmap openagentix-observability -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get configmap victoria-metrics-scrape -n openagentix-observability
+kubectl get configmap victoria-metrics-scrape -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get crd agentdefinitions.openagentix.io
+kubectl get crd agentdefinitions.openagentix.io -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get deployment.apps a2a-gate -n openagentix-gateway
+kubectl get deployment.apps a2a-gate -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get deployment.apps jaeger -n openagentix-observability
+kubectl get deployment.apps jaeger -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get deployment.apps openagentix-console -n openagentix-system
+kubectl get deployment.apps openagentix-console -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get deployment.apps openagentix-control-plane -n openagentix-system
+kubectl get deployment.apps openagentix-control-plane -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get deployment.apps stub-model -n agentgateway-system
+kubectl get deployment.apps stub-model -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get deployment.apps victoria-metrics -n openagentix-observability
+kubectl get deployment.apps victoria-metrics -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get gateway.gateway.networking.k8s.io model-gateway -n agentgateway-system
+kubectl get gateway.gateway.networking.k8s.io model-gateway -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get mcpgroup.toolhive.stacklok.dev tools -n mcp-tools
+kubectl get mcpgroup.toolhive.stacklok.dev tools -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get mcpoidcconfig.toolhive.stacklok.dev openagentix-workload-sa -n mcp-tools
+kubectl get mcpoidcconfig.toolhive.stacklok.dev openagentix-workload-sa -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get mcpoidcconfig.toolhive.stacklok.dev substrate-actor-jwt -n mcp-tools
+kubectl get mcpoidcconfig.toolhive.stacklok.dev substrate-actor-jwt -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get mcpserver.toolhive.stacklok.dev osv -n mcp-tools
+kubectl get mcpserver.toolhive.stacklok.dev osv -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get mcptelemetryconfig.toolhive.stacklok.dev openagentix-telemetry -n mcp-tools
+kubectl get mcptelemetryconfig.toolhive.stacklok.dev openagentix-telemetry -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get namespace agentgateway-system
+kubectl get namespace kagent
+kubectl get namespace mcp-tools
+kubectl get namespace openagentix-gateway
+kubectl get namespace openagentix-observability
+kubectl get namespace openagentix-system
+kubectl get namespace openagentix-system
+kubectl get networkpolicy.networking.k8s.io a2a-gate-ingress -n openagentix-gateway
+kubectl get networkpolicy.networking.k8s.io a2a-gate-ingress -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io default-deny -n openagentix-workloads
+kubectl get networkpolicy.networking.k8s.io default-deny -n openagentix-workloads -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io jaeger-ingress -n openagentix-observability
+kubectl get networkpolicy.networking.k8s.io jaeger-ingress -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-console -n openagentix-system
+kubectl get networkpolicy.networking.k8s.io openagentix-console -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-control-plane -n openagentix-system
+kubectl get networkpolicy.networking.k8s.io openagentix-control-plane -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-kagent-controller -n kagent
+kubectl get networkpolicy.networking.k8s.io openagentix-kagent-controller -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-kagent-ui -n kagent
+kubectl get networkpolicy.networking.k8s.io openagentix-kagent-ui -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-mcp-tools-default -n mcp-tools
+kubectl get networkpolicy.networking.k8s.io openagentix-mcp-tools-default -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-ingress -n mcp-tools
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-ingress -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup -n mcp-tools
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup-workload -n mcp-tools
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup-workload -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-metrics -n mcp-tools
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-metrics -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-metrics-lookup -n mcp-tools
+kubectl get networkpolicy.networking.k8s.io openagentix-vmcp-metrics-lookup -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io stub-model -n agentgateway-system
+kubectl get networkpolicy.networking.k8s.io stub-model -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get networkpolicy.networking.k8s.io victoria-metrics-ingress -n openagentix-observability
+kubectl get networkpolicy.networking.k8s.io victoria-metrics-ingress -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get persistentvolumeclaim victoria-metrics -n openagentix-observability
+kubectl get persistentvolumeclaim victoria-metrics -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get remotemcpserver.api.kagent.dev toolhive-vmcp -n kagent
+kubectl get remotemcpserver.api.kagent.dev toolhive-vmcp -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get remotemcpserver.api.kagent.dev toolhive-vmcp-lookup -n kagent
+kubectl get remotemcpserver.api.kagent.dev toolhive-vmcp-lookup -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get resourcequota openagentix-agentdefinitions -n kagent
+kubectl get resourcequota openagentix-agentdefinitions -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-agent-builder -n kagent
+kubectl get role.rbac.authorization.k8s.io openagentix-agent-builder -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-agent-viewer -n kagent
+kubectl get role.rbac.authorization.k8s.io openagentix-agent-viewer -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-console -n kagent
+kubectl get role.rbac.authorization.k8s.io openagentix-console -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway
+kubectl get role.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane -n kagent
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway
+kubectl get role.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-console -n kagent
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-console -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n kagent
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n kagent -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway
+kubectl get rolebinding.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get secret -n openagentix-system console-token
+kubectl get service a2a-gate -n openagentix-gateway
+kubectl get service a2a-gate -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get service jaeger -n openagentix-observability
+kubectl get service jaeger -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get service openagentix-console -n openagentix-system
+kubectl get service openagentix-console -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get service stub-model -n agentgateway-system
+kubectl get service stub-model -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get service victoria-metrics -n openagentix-observability
+kubectl get service victoria-metrics -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get serviceaccount a2a-gate -n openagentix-gateway
+kubectl get serviceaccount a2a-gate -n openagentix-gateway -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get serviceaccount openagentix-console -n openagentix-system
+kubectl get serviceaccount openagentix-console -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get serviceaccount openagentix-control-plane -n openagentix-system
+kubectl get serviceaccount openagentix-control-plane -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get serviceaccount victoria-metrics -n openagentix-observability
+kubectl get serviceaccount victoria-metrics -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get virtualmcpserver.toolhive.stacklok.dev tools -n mcp-tools
+kubectl get virtualmcpserver.toolhive.stacklok.dev tools -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup -n mcp-tools
+kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup-workload -n mcp-tools
+kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup-workload -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl label agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap a2a-gate-routes -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap a2a-gate-rules -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap jaeger-config -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap llm-api-keys-control-plane -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap openagentix-control-plane-catalog -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap openagentix-control-plane-policy -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap openagentix-observability -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label configmap victoria-metrics-scrape -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label crd agentdefinitions.openagentix.io app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label deployment.apps a2a-gate -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label deployment.apps jaeger -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label deployment.apps openagentix-console -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label deployment.apps openagentix-control-plane -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label deployment.apps stub-model -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label deployment.apps victoria-metrics -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label gateway.gateway.networking.k8s.io model-gateway -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label mcpgroup.toolhive.stacklok.dev tools -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label mcpoidcconfig.toolhive.stacklok.dev openagentix-workload-sa -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label mcpoidcconfig.toolhive.stacklok.dev substrate-actor-jwt -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label mcpserver.toolhive.stacklok.dev osv -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label mcptelemetryconfig.toolhive.stacklok.dev openagentix-telemetry -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io a2a-gate-ingress -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io default-deny -n openagentix-workloads app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io jaeger-ingress -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-console -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-control-plane -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-kagent-controller -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-kagent-ui -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-mcp-tools-default -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-vmcp-ingress -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-vmcp-ingress-lookup-workload -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-vmcp-metrics -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io openagentix-vmcp-metrics-lookup -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io stub-model -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label networkpolicy.networking.k8s.io victoria-metrics-ingress -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label persistentvolumeclaim victoria-metrics -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label remotemcpserver.api.kagent.dev toolhive-vmcp -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label remotemcpserver.api.kagent.dev toolhive-vmcp-lookup -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label resourcequota openagentix-agentdefinitions -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-agent-builder -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-agent-viewer -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-console -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-control-plane -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label role.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label rolebinding.rbac.authorization.k8s.io openagentix-console -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label rolebinding.rbac.authorization.k8s.io openagentix-console-gate -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n kagent app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label rolebinding.rbac.authorization.k8s.io openagentix-control-plane -n openagentix-workloads app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label rolebinding.rbac.authorization.k8s.io openagentix-control-plane-routes -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label service a2a-gate -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label service jaeger -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label service openagentix-console -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label service stub-model -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label service victoria-metrics -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label serviceaccount a2a-gate -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label serviceaccount openagentix-console -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label serviceaccount openagentix-control-plane -n openagentix-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label serviceaccount victoria-metrics -n openagentix-observability app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label virtualmcpserver.toolhive.stacklok.dev tools -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label virtualmcpserver.toolhive.stacklok.dev tools-lookup -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label virtualmcpserver.toolhive.stacklok.dev tools-lookup-workload -n mcp-tools app.kubernetes.io/managed-by=Helm --overwrite

@@ -113,6 +113,7 @@ bridge:
   image:
     repository: openagentix/telegram-bridge
     tag: dev                      # loaded into kind by install.sh; push to a registry for real clusters
+    digest: ""                   # ADR 0022: sha256:<64 hex> renders repository:tag@digest (install.sh sets it with CLUSTER_TYPE=remote)
     pullPolicy: IfNotPresent
   # Which kagent agent receives messages. a2aUrl wins when set.
   agent: assistant
@@ -162,6 +163,7 @@ scheduling:
   image:
     repository: openagentix/a2a-call
     tag: dev                              # built from tools/a2a-call and loaded into kind by install.sh (only when schedules exist)
+    digest: ""                   # ADR 0022: sha256:<64 hex> renders repository:tag@digest (install.sh sets it with CLUSTER_TYPE=remote)
     pullPolicy: IfNotPresent
   sourceHash: ""                          # install.sh sets it to a hash of tools/a2a-call, stamped on the pod template
   dns:                                    # the only other egress the schedule pods get
@@ -216,7 +218,7 @@ gateway:
   # baseURL http://stub-model.<gateway.namespace>.svc.cluster.local:8080/v1 (components/quickstart/values.yaml does). install.sh builds and loads the image.
   stubModel:
     enabled: false
-    image: {repository: openagentix/stub-model, tag: dev, pullPolicy: IfNotPresent}   # built from services/stub-model and loaded into kind by install.sh
+    image: {repository: openagentix/stub-model, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/stub-model and loaded into kind by install.sh
     sourceHash: ""                # install.sh sets it to a hash of services/stub-model (the tag stays "dev")
     resources:
       requests: {cpu: 5m, memory: 8Mi}
@@ -307,7 +309,7 @@ knowledge:
   namespace: openagentix-knowledge
 
   kb:
-    image: {repository: openagentix/kb, tag: dev, pullPolicy: IfNotPresent}   # built from services/kb and loaded into kind by install.sh
+    image: {repository: openagentix/kb, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/kb and loaded into kind by install.sh
     replicas: 1
     sourceHash: ""                                              # install.sh sets it to a hash of services/kb; see README
     adminSecret: {name: kb-admin, key: KB_ADMIN_TOKEN}          # bearer token of the ingest API; required
@@ -432,7 +434,7 @@ knowledge:
 notify:
   enabled: false
   namespace: openagentix-notify
-  image: {repository: openagentix/notify, tag: dev, pullPolicy: IfNotPresent}   # built from services/notify and loaded into kind by install.sh
+  image: {repository: openagentix/notify, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/notify and loaded into kind by install.sh
   sourceHash: ""                                  # install.sh sets it to a hash of services/notify; see README
   # Prometheus metrics, only while observability.enabled: /metrics on this port, a listener separate from the MCP port (:8080) with no
   # authentication, so the NetworkPolicy opens it only to the bundled VictoriaMetrics. Counts and timings by platform kind, never text,
@@ -479,7 +481,7 @@ governance:
   a2a:
     enabled: false
     namespace: openagentix-gateway
-    image: {repository: openagentix/a2a-gate, tag: dev, pullPolicy: IfNotPresent}   # built from services/a2a-gate and loaded into kind by install.sh
+    image: {repository: openagentix/a2a-gate, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/a2a-gate and loaded into kind by install.sh
     sourceHash: ""                    # install.sh sets it to a hash of services/a2a-gate (the tag stays "dev")
     audience: openagentix-a2a         # projected ServiceAccount tokens must carry this audience
     keysSecret: a2a-gate-keys         # SHA-256 hashes of the static keys, one key per caller (install.sh creates it; never rendered here)
@@ -510,7 +512,7 @@ governance:
 controlPlane:
   enabled: false
   namespace: ""                       # where the controller runs; empty = the release namespace
-  image: {repository: openagentix/control-plane, tag: dev, pullPolicy: IfNotPresent}   # built from services/control-plane and loaded into kind by install.sh
+  image: {repository: openagentix/control-plane, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/control-plane and loaded into kind by install.sh
   sourceHash: ""                      # install.sh sets it to a hash of services/control-plane (the tag stays "dev")
   # The API server addresses the controller may reach (NetworkPolicy egress). install.sh sets them the way it does for Agent Kourier
   # (components/channels/apiserver-cidrs.sh). Empty: the policy falls back to the API server ports (below) towards ANY address,
@@ -612,7 +614,7 @@ controlPlane:
 # Its ServiceAccount may read and write AgentDefinitions in the agents namespace (viewer: read only) and list four kagent kinds; no Secret.
 console:
   enabled: false
-  image: {repository: openagentix/console, tag: dev, pullPolicy: IfNotPresent}   # built from services/console (context: the repository root) by install.sh
+  image: {repository: openagentix/console, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/console (context: the repository root) by install.sh
   sourceHash: ""                      # install.sh sets it to a hash of services/console and console (the tag stays "dev")
   namespace: ""                       # empty = the release namespace. It must be the control plane's namespace: the console mounts the two ConfigMaps that live there
   tokenSecret: {name: console-token, key: token}   # the login token (at least 32 characters, the console refuses a weaker one); created by install.sh, mounted as a file

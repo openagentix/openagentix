@@ -2200,6 +2200,25 @@ eq "route: the console policy admits the router namespaces on 8080, and only the
 eq "no route: the console policy still admits no ingress" "$(q "$OD" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-console")|.spec.ingress|tostring')" '[]'
 eq "container agents on openshift fail the render, and say why" "$(render_err "${CP9[@]}" "${CA[@]}" --set platform=openshift | /usr/bin/grep -c 'containerAgents is not supported with platform: openshift')" 1
 
+echo "# image.digest (ADR 0022): repository:tag@digest when set, byte-identical when empty"
+IMGALL=(-f "$CHART/../../components/schedules/demo-values.yaml" -f "$CHART/../../components/notify/demo-values.yaml" -f "$CHART/../../components/governance/demo-values.yaml" -f "$CHART/../../components/governance/profiles-demo-values.yaml" -f "$CHART/../../components/control-plane/demo-values.yaml" -f "$CHART/../../components/console/demo-values.yaml" --set gateway.stubModel.enabled=true)
+DGST=sha256:$(printf 'a%.0s' $(seq 64))
+IMGS='[.[]|(.spec.template.spec.containers[0].image // .spec.jobTemplate.spec.template.spec.containers[0].image // empty)|select(test("^(oa|openagentix)/"))]|sort|join(" ")'
+eq "all eight installer-built images render (bridge, a2a-call, kb, notify, a2a-gate, stub-model, control-plane, console)" "$(q "$(docs "${IMGALL[@]}")" "$IMGS|split(\" \")|length")" 8
+for P in bridge scheduling gateway.stubModel knowledge.kb notify governance.a2a controlPlane console; do
+  ID=$(docs "${IMGALL[@]}" --set-string "$P.image.repository=reg.example/p/openagentix/x" --set-string "$P.image.tag=dev-1234" --set-string "$P.image.digest=$DGST")
+  eq "$P.image.digest renders repository:tag@digest" "$(q "$ID" '[.[]|(.spec.template.spec.containers[0].image // .spec.jobTemplate.spec.template.spec.containers[0].image // empty)|select(startswith("reg.example/"))]|unique|join(" ")')" "reg.example/p/openagentix/x:dev-1234@$DGST"
+  eq "$P.image.digest: a bad digest fails the render and names $P" "$(render_err "${IMGALL[@]}" --set-string "$P.image.digest=sha256:XYZ" | /usr/bin/grep -c "$P.image.digest")" 1
+  eq "$P.image.digest: a tag-only value (dev) fails the render" "$(render_err "${IMGALL[@]}" --set-string "$P.image.digest=dev" | /usr/bin/grep -c "$P.image.digest")" 1
+  ID=$(docs "${IMGALL[@]}" --set-string "$P.image.repository=reg.example/p/openagentix/x" --set-string "$P.image.tag=" --set-string "$P.image.digest=$DGST")
+  eq "$P: an empty tag with a digest renders repository@digest" "$(q "$ID" '[.[]|(.spec.template.spec.containers[0].image // .spec.jobTemplate.spec.template.spec.containers[0].image // empty)|select(startswith("reg.example/"))]|unique|join(" ")')" "reg.example/p/openagentix/x@$DGST"
+  eq "$P: an empty tag without a digest fails the render and names $P" "$(render_err "${IMGALL[@]}" --set-string "$P.image.tag=" | /usr/bin/grep -c "$P.image.tag")" 1
+done
+HI0=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" 2>&1 | shasum -a 256)
+HI1=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" --set-string bridge.image.digest= --set-string scheduling.image.digest= --set-string gateway.stubModel.image.digest= --set-string knowledge.kb.image.digest= --set-string notify.image.digest= --set-string governance.a2a.image.digest= --set-string controlPlane.image.digest= --set-string console.image.digest= 2>&1 | shasum -a 256)
+eq "every image.digest empty: byte-identical to the render without them" "$HI1" "$HI0"
+eq "default values: every installer-built image path has image.digest \"\"" "$(yq -r '[.bridge, .scheduling, .gateway.stubModel, .knowledge.kb, .notify, .governance.a2a, .controlPlane, .console]|map(.image.digest)|map(.=="")|all' "$CHART/values.yaml")" true
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

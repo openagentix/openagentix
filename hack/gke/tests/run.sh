@@ -39,7 +39,7 @@ exit 0
 EOS
 cat > "$D/fake-install.sh" <<EOS
 #!/usr/bin/env bash
-env | grep -E '^(CLUSTER_TYPE|PROFILE|KUBE_CONTEXT|KUBECONFIG|NODE_SETTINGS|SET_DEFAULT_STORAGECLASS|SKIP_[A-Z0-9_]+|VALUES_FILE)=' | sort > "$D/install-env"
+env | grep -E '^(CLUSTER_TYPE|PROFILE|KUBE_CONTEXT|KUBECONFIG|NODE_SETTINGS|SET_DEFAULT_STORAGECLASS|SKIP_[A-Z0-9_]+|VALUES_FILE|IMAGE_[A-Z]+)=' | sort > "$D/install-env"
 EOS
 chmod +x "$D/bin/"* "$D/fake-install.sh"
 calls(){ cat "$D/calls" 2>/dev/null; }
@@ -122,6 +122,10 @@ for k in .governance.a2a.image .gateway.stubModel.image .controlPlane.image .con
   t "values: $k from Artifact Registry, tag gke1" "$(yq -r "$k | .repository + \":\" + .tag" "$V" | grep -cE "^us-central1-docker.pkg.dev/$P/oa/[a-z0-9-]+:gke1$")" 1
 done
 t "next step printed" "$(grep -c "hack/gke/install.sh $STATE" <<<"$OUT")" 1
+OUT=$(up GKE_IMAGES=installer "${OK_ENV[@]}")
+t "GKE_IMAGES=installer: up.sh exit 0, no Cloud Build, cluster still created" "$(grep -c '^exit=0$' <<<"$OUT")/$(calls | grep -c '^gcloud builds submit ')/$(calls | grep -c '^gcloud container clusters create ')" 1/0/1
+OUT=$(up GKE_IMAGES=bogus "${OK_ENV[@]}")
+t "GKE_IMAGES=bogus: up.sh refuses before any call" "$(grep -c 'GKE_IMAGES must be' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
 OUT=$(up FAKE_CLUSTER_FAIL=1 "${OK_ENV[@]}")
 t "cluster create fails: exit 1 and the teardown is printed again" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'hack/gke/down.sh' <<<"$OUT")" 1/2
 
@@ -140,6 +144,11 @@ for kv in CLUSTER_TYPE=remote PROFILE=quickstart "KUBE_CONTEXT=$CTX" NODE_SETTIN
           SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 "VALUES_FILE=$V" "KUBECONFIG=$(dirname "$STATE")/kubeconfig"; do
   t "install env $kv" "$(grep -cx -- "$kv" "$D/install-env")" 1
 done
+t "install env: no IMAGE_REGISTRY by default (the Cloud Build images)" "$(grep -c '^IMAGE_REGISTRY=' "$D/install-env")" 0
+inst FAKE_SC="$D/sc-ok.json" GKE_IMAGES=installer >/dev/null
+t "GKE_IMAGES=installer: IMAGE_REGISTRY is the run's Artifact Registry repository, linux/amd64" "$(grep -cx "IMAGE_REGISTRY=us-central1-docker.pkg.dev/$P/oa" "$D/install-env")/$(grep -cx IMAGE_PLATFORM=linux/amd64 "$D/install-env")" 1/1
+t "GKE_IMAGES=installer: no SKIP_*_IMAGE and not the Cloud Build values file" "$(grep -c '^SKIP_[A-Z_]*_IMAGE=' "$D/install-env")/$(grep -c "^VALUES_FILE=.*gke-images.yaml" "$D/install-env")" 0/0
+OUT=$(inst FAKE_SC="$D/sc-ok.json" GKE_IMAGES=bogus); t "GKE_IMAGES=bogus is refused" "$(grep -c "GKE_IMAGES must be" <<<"$OUT")/$(grep -c '^exit=1$' <<<"$OUT")" 1/1
 inst FAKE_SC="$D/sc-ok.json" >/dev/null
 t "a default StorageClass exists: SET_DEFAULT_STORAGECLASS not set" "$(grep -c '^SET_DEFAULT_STORAGECLASS=' "$D/install-env")" 0
 inst FAKE_SC="$D/sc-none.json" GKE_KEEP_STORAGECLASS=1 >/dev/null

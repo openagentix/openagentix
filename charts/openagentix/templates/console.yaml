@@ -195,7 +195,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: console
-          image: {{ printf "%s:%s" $c.image.repository (toString $c.image.tag) | quote }}
+          image: {{ include "oa.image" (list $c.image "console") | quote }}
           imagePullPolicy: {{ $c.image.pullPolicy }}
           ports:
             - {name: http, containerPort: 8080}

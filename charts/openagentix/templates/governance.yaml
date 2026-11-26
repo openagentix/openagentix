@@ -83,7 +83,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: a2a-gate
-          image: {{ printf "%s:%s" $g.image.repository (toString $g.image.tag) | quote }}
+          image: {{ include "oa.image" (list $g.image "governance.a2a") | quote }}
           imagePullPolicy: {{ $g.image.pullPolicy }}
           ports:
             - {name: http, containerPort: 8080}

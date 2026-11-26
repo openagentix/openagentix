@@ -110,7 +110,7 @@ spec:
       {{- end }}
       containers:
         - name: kb
-          image: {{ printf "%s:%s" $kb.image.repository (toString $kb.image.tag) | quote }}
+          image: {{ include "oa.image" (list $kb.image "knowledge.kb") | quote }}
           imagePullPolicy: {{ $kb.image.pullPolicy }}
           ports:
             - {name: http, containerPort: 8080}
