@@ -1,0 +1,29 @@
+{
+  "maxAgents": 5,
+  "allowedModels": [
+    "claude-haiku"
+  ],
+  "requireToolProfile": true,
+  "allowedProfiles": [
+    "lookup"
+  ],
+  "allowKnowledge": true,
+  "allowNotify": true,
+  "allowedSkills": [
+    "openagentix-canary"
+  ],
+  "memory": {
+    "allowed": true,
+    "maxTtlDays": 30,
+    "requireExpiry": true
+  },
+  "egress": {
+    "allowedOrigins": [
+      "https://api.osv.dev",
+      "https://*.example.org"
+    ],
+    "inClusterDestinations": []
+  },
+  "reservedNames": [],
+  "suspendAll": false
+}

@@ -1,6 +1,7 @@
 <script lang="ts">
     // Tools (UI-SPEC 6.7), read-only: the tool profiles of the catalog with their tool server, code mode and tool list,
     // whether the policy allows each, and which agents use it. No call counts: the console does not read the metrics.
+    import { allows } from '$lib/draft';
     import { READONLY } from '$lib/planned';
     import { useAgents } from '$lib/useagents.svelte';
     import { usedBy } from '$lib/views';
@@ -35,7 +36,7 @@
                     <h2 class="sm t3 upper">Tool profiles</h2>
                     <div class="grid g2 cards">
                         {#each p.profiles as pr (pr.name)}
-                            {@const ok = p.policy.allowedProfiles.includes(pr.name)}
+                            {@const ok = allows(p.policy.allowedProfiles, pr.name)}
                             {@const users = usedBy(src.items, (a) => a.toolProfile === pr.name)}
                             <button
                                 class="card"
@@ -61,13 +62,11 @@
                     </div>
                 {/if}
                 <div class="panel">
-                    <div class="hd"><h2>Shared tool server</h2></div>
+                    <div class="hd"><h2>Tool adapter</h2></div>
                     <div class="bd">
                         <dl class="kv sm">
                             <dt>Tools</dt>
                             <dd><code>{p.adapters.tools}</code> in namespace <code>{p.namespaces.tools}</code></dd>
-                            <dt>Shared server</dt>
-                            <dd><code>{p.toolServer}</code></dd>
                         </dl>
                         <p class="sm t3 mt-3">
                             The shared server filters on the client side only, so built agents cannot use it: they use a
@@ -106,7 +105,7 @@
             </div>
             <aside class="panel detail" aria-labelledby="td-title">
                 {#if sel}
-                    {@const ok = p.policy.allowedProfiles.includes(sel.name)}
+                    {@const ok = allows(p.policy.allowedProfiles, sel.name)}
                     <div class="hd">
                         <h2 id="td-title" class="mono-title">{sel.name}</h2>
                         <StatusBadge state={ok ? 'ready' : 'paused'} word={ok ? 'Allowed' : 'Not allowed'} />

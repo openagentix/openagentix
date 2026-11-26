@@ -19,6 +19,7 @@
         memoryMax,
         modelOptions,
         nameProblem,
+        noProfileAvailable,
         nearLimit,
         originShapeProblem,
         originsInSentences,
@@ -289,10 +290,13 @@
     const saveLabel = $derived(
         isNew ? (showPredictedNotice ? 'Create anyway' : 'Create agent') : showPredictedNotice ? 'Save anyway' : 'Save',
     );
+    /** Set when the policy requires a tool profile and the builder has none to offer: nothing could be saved. */
+    const noProfile = $derived(platform ? noProfileAvailable(platform) : undefined);
     const saveBlock = $derived.by(() => {
         if (isNew && !draft.name) return 'Give the agent a name first.';
         if (isNew && nameError) return nameError;
         if (!draft.model) return 'Choose a model first.';
+        if (isNew && noProfile) return noProfile;
         if (!promptFromConfigMap && !draft.instructions.trim()) return 'Write the instructions first.';
         if (!isNew && !dirty) return 'Nothing to save: the form matches the cluster.';
         return undefined;
@@ -607,6 +611,18 @@
                         <ul>
                             {#each schemaErrors as s (s)}<li>{s}</li>{/each}
                         </ul>
+                    </Notice>
+                {/if}
+                {#if isNew && noProfile}
+                    <Notice kind="warn" title="No tool profile is available">
+                        <p class="sm" data-testid="no-profile">
+                            {noProfile}
+                            <a
+                                href="https://openagentix.github.io/reference/platform-catalog"
+                                rel="noopener noreferrer"
+                                target="_blank">Read how the catalog and policy list profiles</a
+                            >.
+                        </p>
                     </Notice>
                 {/if}
                 {#if ctx.platformError}

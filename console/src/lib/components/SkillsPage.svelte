@@ -2,6 +2,7 @@
     // Skills (UI-SPEC 6.5), read-only: the skills of the catalog with their pinned reference, whether the policy allows each,
     // and which agents use it. The digest is shortened on the card; the full reference is shown and copied from the panel.
     import { copyText } from '$lib/actions';
+    import { allows } from '$lib/draft';
     import { READONLY } from '$lib/planned';
     import { toasts } from '$lib/toast.svelte';
     import { useAgents } from '$lib/useagents.svelte';
@@ -38,7 +39,7 @@
             <div class="ld">
                 <div class="grid g2 cards">
                     {#each p.skills as s (s.name)}
-                        {@const ok = p.policy.allowedSkills.includes(s.name)}
+                        {@const ok = allows(p.policy.allowedSkills, s.name)}
                         {@const users = usedBy(src.items, (a) => a.skills.includes(s.name))}
                         <button
                             class="card"
@@ -57,7 +58,7 @@
                 </div>
                 <aside class="panel detail" aria-labelledby="sk-title">
                     {#if sel}
-                        {@const ok = p.policy.allowedSkills.includes(sel.name)}
+                        {@const ok = allows(p.policy.allowedSkills, sel.name)}
                         <div class="hd">
                             <h2 id="sk-title" class="mono-title">{sel.name}</h2>
                             <StatusBadge state={ok ? 'ready' : 'paused'} word={ok ? 'Allowed' : 'Not allowed'} />

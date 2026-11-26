@@ -143,7 +143,6 @@ Answer 200. It is built from the two mounted files (catalog and policy). It has 
 | `gatewayBaseUrl` | string | Model gateway base URL |
 | `gateEnabled` | boolean | True when the catalog has a gate URL |
 | `models` | array of string | Model names |
-| `toolServer` | string | Tool server name |
 | `profiles` | array of object | Each has `name`, `toolServer`, `codeMode` (boolean), `tools` (array of string) |
 | `knowledge` | object | `available` (boolean), `tools` (array), `prompt` (string) |
 | `notify` | object | Same fields as `knowledge` |

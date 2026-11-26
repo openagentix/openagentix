@@ -1,12 +1,12 @@
 {
   "adapters": {
     "runtime": "kagent",
+    "modelGateway": "agentgateway",
+    "tools": "toolhive",
     "runtimes": {
       "builtin": "kagent",
       "container": "container"
-    },
-    "modelGateway": "agentgateway",
-    "tools": "toolhive"
+    }
   },
   "namespaces": {
     "agents": "kagent",
@@ -18,32 +18,45 @@
     "claude-haiku",
     "claude-sonnet"
   ],
-  "toolServer": "toolhive-vmcp",
-  "profiles": [
-    {
-      "name": "lookup",
-      "toolServer": "toolhive-vmcp-lookup",
-      "codeMode": true,
-      "workload": {
-        "url": "http://toolhive-vmcp-lookup-workload.mcp-tools.svc:4483/mcp",
-        "audience": "openagentix-tools-lookup"
-      },
-      "tools": [
-        "knowledge_kb_search",
-        "osv_query_vulnerability",
-        "osv_get_vulnerability",
-        "execute_tool_script"
-      ]
-    },
-    {
-      "name": "browse",
-      "toolServer": "toolhive-vmcp-browse",
-      "codeMode": false,
-      "tools": [
-        "fetch_fetch"
+  "runtime": {
+    "kagent": {
+      "harnessImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
+      "workerPool": "kagent-default",
+      "snapshotLocation": "s3://ate-snapshots/kagent/",
+      "harnessEnv": [],
+      "memoryModelConfig": "gateway-embed-memory"
+    }
+  },
+  "tools": {
+    "toolhive": {
+      "codeModeTool": "execute_tool_script",
+      "profiles": [
+        {
+          "name": "lookup",
+          "toolServer": "toolhive-vmcp-lookup",
+          "codeMode": true,
+          "tools": [
+            "knowledge_kb_search",
+            "osv_query_vulnerability",
+            "osv_get_vulnerability",
+            "execute_tool_script"
+          ],
+          "workload": {
+            "url": "http://toolhive-vmcp-lookup-workload.mcp-tools.svc:4483/mcp",
+            "audience": "openagentix-tools-lookup"
+          }
+        },
+        {
+          "name": "browse",
+          "toolServer": "toolhive-vmcp-browse",
+          "codeMode": false,
+          "tools": [
+            "fetch_fetch"
+          ]
+        }
       ]
     }
-  ],
+  },
   "knowledge": {
     "available": true,
     "tools": [
@@ -68,17 +81,12 @@
     "available": true,
     "expiryEnabled": true,
     "defaultTtlDays": 15,
-    "modelConfig": "gateway-embed-memory",
     "prompt": "You have long-term memory. Relevant facts from earlier conversations with this user may appear in your\ncontext; use them. When the user tells you something worth keeping across conversations (a preference, a\nproject name, a codename, a standing instruction) or asks you to remember something, call the save_memory tool\nwith one short, self-contained sentence. Never store passwords, tokens or other secrets."
   },
   "skills": {
     "openagentix-canary": "registry.invalid:5000/skills/openagentix-canary@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "openagentix-triage": "registry.invalid:5000/skills/openagentix-triage@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   },
-  "harnessImage": "ghcr.io/kagent-dev/kagent/golang-adk@sha256:d3b1151d39c529a6f921a58a995ff699963012001d2e5075f69bf613abebc24d",
-  "workerPool": "kagent-default",
-  "snapshotLocation": "s3://ate-snapshots/kagent/",
-  "harnessEnv": [],
   "gateUrl": "http://a2a-gate.openagentix-gateway.svc.cluster.local:8080",
   "reservedNames": [
     "assistant",

@@ -147,7 +147,7 @@ func (b *Backend) ready(d backend.Definition, at time.Time) model.Status {
 	if d.Spec.Egress != nil {
 		eg = append(eg, d.Spec.Egress.Allow...)
 	}
-	srv := b.p.Catalog.ToolServer
+	srv := ""
 	if p, ok := b.p.Catalog.Profile(d.Spec.ToolProfile); ok {
 		srv = p.ToolServer
 	}

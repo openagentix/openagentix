@@ -1,6 +1,7 @@
 <script lang="ts">
     // Models (UI-SPEC 6.6), read-only: the gateway models of the catalog, whether the policy allows each, and who uses it.
     // Providers, upstream names, credentials, prices and spend have no source in the console API; the page does not show them.
+    import { allows } from '$lib/draft';
     import { READONLY } from '$lib/planned';
     import { useAgents } from '$lib/useagents.svelte';
     import { usedBy } from '$lib/views';
@@ -33,7 +34,7 @@
                 <div class="stack">
                     <div class="grid g3 cards">
                         {#each p.models as m (m)}
-                            {@const ok = p.policy.allowedModels.includes(m)}
+                            {@const ok = allows(p.policy.allowedModels, m)}
                             {@const users = usedBy(src.items, (a) => a.model === m)}
                             <button class="card" type="button" aria-pressed={sel === m} onclick={() => (picked = m)}>
                                 <div class="row1">
@@ -72,8 +73,8 @@
                     <div class="hd">
                         <h2 id="md-title" class="mono-title">{sel}</h2>
                         <StatusBadge
-                            state={p.policy.allowedModels.includes(sel) ? 'ready' : 'paused'}
-                            word={p.policy.allowedModels.includes(sel) ? 'Allowed' : 'Not allowed'}
+                            state={allows(p.policy.allowedModels, sel) ? 'ready' : 'paused'}
+                            word={allows(p.policy.allowedModels, sel) ? 'Allowed' : 'Not allowed'}
                         />
                     </div>
                     <div class="bd">
@@ -82,7 +83,7 @@
                             <dd><code>{sel}</code>, in the <code>model</code> field of a definition</dd>
                             <dt>Policy</dt>
                             <dd>
-                                {#if p.policy.allowedModels.includes(sel)}
+                                {#if allows(p.policy.allowedModels, sel)}
                                     listed in <code>allowedModels</code>
                                 {:else}
                                     not in the policy <code>allowedModels</code>: a definition that names it is refused

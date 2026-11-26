@@ -371,7 +371,7 @@ func (k *Kube) charts(ctx context.Context) ([]model.Agent, map[string]*model.Spe
 
 	profiles, knowledge, notify := map[string]string{}, []string(nil), []string(nil)
 	if b, err := k.Platform.Get(); err == nil {
-		for _, p := range b.Catalog.Profiles {
+		for _, p := range b.Catalog.ToolProfiles() {
 			profiles[p.ToolServer] = p.Name
 		}
 		knowledge, notify = b.Catalog.Knowledge.Tools, b.Catalog.Notify.Tools
