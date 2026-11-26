@@ -180,7 +180,7 @@ if [ "$QS_BYO" = 1 ] && [ "$REMOTE" = 1 ] && [ -n "${IMAGE_REGISTRY:-}" ]; then
   # the quick start's own registry.local/oa/ is replaced; an operator's list must name the prefix itself.
   BYO_PREFIX=$(image_example_repo ""); BYO_LIST=$(yq -c '.controlPlane.policy.runtimes.container.images // empty' "$CHART/values.yaml")
   prev=""; for a in ${VALS[@]+"${VALS[@]}"}; do
-    if [ "$prev" = -f ]; then l=$(yq -c '.controlPlane.policy.runtimes.container.images // empty' "$a" 2>/dev/null) || l=""; [ -z "$l" ] || BYO_LIST=$l; fi; prev=$a
+    if [ "$prev" = -f ]; then l=$(yq -c '.controlPlane.policy.runtimes.container.images // empty' "$a" 2>/dev/null) || die "QUICKSTART_BYO=1: cannot read $a as YAML, so the install cannot tell which image prefixes it allows. Fix the file. Nothing was changed."; [ -z "$l" ] || BYO_LIST=$l; fi; prev=$a
   done
   case "${BYO_LIST:-[]}" in
     '[]'|'["registry.local/oa/"]') jq -n --arg p "$BYO_PREFIX" '{controlPlane:{policy:{runtimes:{container:{images:[$p]}}}}}' > "$QS_TMP/byo-prefix.json"; VALS+=(-f "$QS_TMP/byo-prefix.json");;

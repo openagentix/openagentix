@@ -29,7 +29,7 @@
 IMAGE_REGISTRY_RE='^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+$'
 
 images_check(){
-  local ty=${CLUSTER_TYPE:-kind} reg=${IMAGE_REGISTRY:-} host first
+  local ty=${CLUSTER_TYPE:-kind} reg=${IMAGE_REGISTRY:-} host first hname hport
   if [ "$ty" != remote ]; then
     [ -z "$reg" ] || { echo "ERROR: IMAGE_REGISTRY is only for CLUSTER_TYPE=remote. On $ty the images are built locally and loaded into the nodes; unset IMAGE_REGISTRY. Nothing was changed." >&2; return 1; }
     [ -z "${IMAGE_PLATFORM:-}" ] || { echo "ERROR: IMAGE_PLATFORM is only for CLUSTER_TYPE=remote. On $ty the images are built for this machine's platform; unset IMAGE_PLATFORM. Nothing was changed." >&2; return 1; }
@@ -48,7 +48,9 @@ images_check(){
     echo "ERROR: IMAGE_REGISTRY must be host[:port]/path in lower case, the host with a dot or a port, at least one path part, no scheme, no trailing slash, no tag (got '$reg'; for example europe-west4-docker.pkg.dev/<project>/<repository>). Nothing was changed." >&2; return 1
   fi
   first=${reg#*/}; first=${first%%/*}
-  if [ "${host%:443}" = ghcr.io ] && [ "$first" = openagentix ]; then
+  # the port is compared as a number: ghcr.io:0443 is ghcr.io:443
+  hname=${host%%:*}; hport=""; [[ "$host" != *:* ]] || hport=$((10#${host#*:}))
+  if [ "$hname" = ghcr.io ] && { [ -z "$hport" ] || [ "$hport" = 443 ]; } && [ "$first" = openagentix ]; then
     echo "ERROR: IMAGE_REGISTRY must not be ghcr.io/openagentix or under it: that path holds the signed release images (ADR 0018), and these are unsigned developer builds. Use a registry of your own. Nothing was changed." >&2; return 1
   fi
   return 0
@@ -89,10 +91,11 @@ image_digest(){
 # so Docker Hub) is refused; with IMAGE_REGISTRY every one must be under it; an image the installer built must have a digest; an image the
 # operator supplies by tag is allowed with a warning. Errors and warnings go to stderr; returns 1 on an error.
 images_render_check(){
-  local rendered=$1 path img first bad=0 built
+  local rendered=$1 path img first bad=0 built seen=" " b
   shift; built=" $* "
   while IFS=$'\t' read -r path img; do
     [ -n "$path" ] || continue
+    seen+="$path "
     first=${img%%/*}
     if [ "$first" = "$img" ] || { [[ "$first" != *.* ]] && [[ "$first" != *:* ]]; }; then
       echo "ERROR: $path: $img is an unqualified name, which a remote cluster pulls from Docker Hub. Let the installer build it (IMAGE_REGISTRY) or set $path.image.repository to your registry." >&2; bad=1; continue
@@ -112,5 +115,9 @@ images_render_check(){
              "openagentix-control-plane":"controlPlane","openagentix-console":"console"}[.metadata.name]) as $p
            | if $p then [$p, .spec.template.spec.containers[0].image] else empty end
          else empty end) | select(.[1]!=null) | @tsv' <<<"$rendered" | sort -u)
+  # every image the installer built must run in a rendered workload: a renamed Deployment or another container position must not skip the checks above
+  for b in $*; do
+    [[ "$seen" == *" $b "* ]] || { echo "ERROR: $b: the installer built an image for this path but no rendered workload runs it (a renamed Deployment or container?); the checks above did not cover it." >&2; bad=1; }
+  done
   return "$bad"
 }

@@ -122,6 +122,10 @@ for k in .governance.a2a.image .gateway.stubModel.image .controlPlane.image .con
   t "values: $k from Artifact Registry, tag gke1" "$(yq -r "$k | .repository + \":\" + .tag" "$V" | grep -cE "^us-central1-docker.pkg.dev/$P/oa/[a-z0-9-]+:gke1$")" 1
 done
 t "next step printed" "$(grep -c "hack/gke/install.sh $STATE" <<<"$OUT")" 1
+OUT=$(up GKE_IMAGES=installer "${OK_ENV[@]}")
+t "GKE_IMAGES=installer: up.sh exit 0, no Cloud Build, cluster still created" "$(grep -c '^exit=0$' <<<"$OUT")/$(calls | grep -c '^gcloud builds submit ')/$(calls | grep -c '^gcloud container clusters create ')" 1/0/1
+OUT=$(up GKE_IMAGES=bogus "${OK_ENV[@]}")
+t "GKE_IMAGES=bogus: up.sh refuses before any call" "$(grep -c 'GKE_IMAGES must be' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
 OUT=$(up FAKE_CLUSTER_FAIL=1 "${OK_ENV[@]}")
 t "cluster create fails: exit 1 and the teardown is printed again" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'hack/gke/down.sh' <<<"$OUT")" 1/2
 

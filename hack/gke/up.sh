@@ -52,6 +52,8 @@ IMAGE_TAG=${IMAGE_TAG:-gke1} CLUSTER_VERSION=${CLUSTER_VERSION:-} STATE_ROOT=${S
 [[ "$BUDGET_USD" =~ ^[0-9]+$ ]] || die "BUDGET_USD must be a whole number"
 [[ "$DISK_GB" =~ ^[0-9]+$ ]] || die "DISK_GB must be a whole number"
 [[ "$IMAGE_TAG" =~ ^[a-zA-Z0-9_.-]+$ ]] || die "IMAGE_TAG has characters a tag cannot have"
+GKE_IMAGES=${GKE_IMAGES:-cloudbuild}
+case "$GKE_IMAGES" in cloudbuild|installer) ;; *) die "GKE_IMAGES must be cloudbuild (default: up.sh builds the four images with Cloud Build) or installer (hack/gke/install.sh builds and pushes them)";; esac
 for c in gcloud git jq; do command -v "$c" >/dev/null || die "$c is not installed"; done
 
 RAND=$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')
@@ -119,17 +121,21 @@ VER_FLAG=(); [ -n "$CLUSTER_VERSION" ] && VER_FLAG=(--cluster-version="$CLUSTER_
     --no-enable-managed-prometheus --labels="created-by=$GKE_LABEL" --quiet > "$STATE_DIR/cluster-create.log" 2>&1 ) &
 CPID=$!
 
-step "Cloud Build: four images for linux/amd64, pushed to $REPO with tag $IMAGE_TAG (log: $STATE_DIR/build.log)"
-# Only the committed files the four images need travel (git archive of HEAD): no local .env, no uncommitted change.
-git archive --format=tar.gz -o "$STATE_DIR/source.tgz" HEAD -- services/a2a-gate services/stub-model services/control-plane services/console console .dockerignore
-B0=$(date +%s)
-if ! gcloud builds submit "$STATE_DIR/source.tgz" --project="$PROJECT" --config=hack/gke/cloudbuild.yaml \
-      --substitutions="_REPO=$REPO,_TAG=$IMAGE_TAG" > "$STATE_DIR/build.log" 2>&1; then
-  wait "$CPID" || true
-  fail "Cloud Build failed (see $STATE_DIR/build.log)"
+if [ "$GKE_IMAGES" = cloudbuild ]; then
+  step "Cloud Build: four images for linux/amd64, pushed to $REPO with tag $IMAGE_TAG (log: $STATE_DIR/build.log)"
+  # Only the committed files the four images need travel (git archive of HEAD): no local .env, no uncommitted change.
+  git archive --format=tar.gz -o "$STATE_DIR/source.tgz" HEAD -- services/a2a-gate services/stub-model services/control-plane services/console console .dockerignore
+  B0=$(date +%s)
+  if ! gcloud builds submit "$STATE_DIR/source.tgz" --project="$PROJECT" --config=hack/gke/cloudbuild.yaml \
+        --substitutions="_REPO=$REPO,_TAG=$IMAGE_TAG" > "$STATE_DIR/build.log" 2>&1; then
+    wait "$CPID" || true
+    fail "Cloud Build failed (see $STATE_DIR/build.log)"
+  fi
+  echo "   images built and pushed in $(( $(date +%s) - B0 )) s"
+  rm -f "$STATE_DIR/source.tgz"
+else
+  echo "== no Cloud Build (GKE_IMAGES=installer): hack/gke/install.sh builds and pushes the images with IMAGE_REGISTRY=$REPO"
 fi
-echo "   images built and pushed in $(( $(date +%s) - B0 )) s"
-rm -f "$STATE_DIR/source.tgz"
 
 step "waiting for the cluster"
 if ! wait "$CPID"; then fail "cluster create failed (see $STATE_DIR/cluster-create.log)"; fi

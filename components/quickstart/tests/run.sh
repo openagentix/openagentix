@@ -253,6 +253,9 @@ else
   printf 'controlPlane: {policy: {runtimes: {container: {images: ["registry.acme.example/agents/", "%s/openagentix-examples/"]}}}}\n' "$REG" > "$RT/own-prefix.yaml"
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1 VALUES_FILE="$RT/own-prefix.yaml")
   eq "byo remote: an operator list that already has the prefix is kept as it is" "$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")/$(for f in "$RT"/values-*; do yq -c '.controlPlane.policy.runtimes.container.images // empty' "$f"; done | tail -1)" "1/[\"registry.acme.example/agents/\",\"$REG/openagentix-examples/\"]"
+  printf 'controlPlane: {policy: [unclosed\n' > "$RT/bad-values.yaml"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1 VALUES_FILE="$RT/bad-values.yaml")
+  eq "byo remote: a values file yq cannot read stops the install, names the file, nothing built" "$(/usr/bin/grep -c "cannot read .*bad-values.yaml" <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^docker buildx build' "$RT/calls")" 1/1/0
 
   echo "# install.sh on kind with a fake kind (ADR 0022: nothing changes there)"
   mkdir -p "$RT/kbin"; printf '#!/usr/bin/env bash\necho "kind $*" >> "%s/calls"\n[ "$1 $2" = "get clusters" ] && echo openagentix\nexit 0\n' "$RT" > "$RT/kbin/kind"; chmod +x "$RT/kbin/kind"

@@ -75,10 +75,10 @@ for bad in https://reg.example/p reg.example/p/ reg.example myname/repo Reg.exam
   t "remote: IMAGE_REGISTRY='$bad' refused" "$(chk CLUSTER_TYPE=remote IMAGE_REGISTRY="$bad" | grep -c 'IMAGE_REGISTRY')" 1
 done
 t "remote: the refusal does not print a user:password value" "$(chk CLUSTER_TYPE=remote IMAGE_REGISTRY=user:s3cr3t@reg.example/p | grep -c s3cr3t)" 0
-for bad in ghcr.io/openagentix ghcr.io/openagentix/dev ghcr.io:443/openagentix ghcr.io:443/openagentix/x; do
+for bad in ghcr.io/openagentix ghcr.io/openagentix/dev ghcr.io:443/openagentix ghcr.io:443/openagentix/x ghcr.io:0443/openagentix ghcr.io:00443/openagentix/x; do
   t "remote: IMAGE_REGISTRY='$bad' (the release namespace) refused" "$(chk CLUSTER_TYPE=remote IMAGE_REGISTRY="$bad" | grep -c 'signed release images')" 1
 done
-for good in ghcr.io/openagentix-dev ghcr.io/acme/openagentix ghcr.io:5000/openagentix; do
+for good in ghcr.io/openagentix-dev ghcr.io/acme/openagentix ghcr.io:5000/openagentix ghcr.io:4430/openagentix; do
   t "remote: IMAGE_REGISTRY='$good' is not the release namespace" "$(chk CLUSTER_TYPE=remote IMAGE_REGISTRY="$good")" "ok linux/amd64"
 done
 t "remote: the release refusal names ADR 0018" "$(chk CLUSTER_TYPE=remote IMAGE_REGISTRY=ghcr.io/openagentix | grep -c 'ADR 0018')" 1
@@ -132,6 +132,7 @@ rc(){ local reg=$1 built=$2 r="" p i x; shift 3
       scheduling) r+=$(printf '{"kind":"CronJob","metadata":{"name":"s1","labels":{"openagentix.io/schedule":"s1"}},"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"image":"%s"}]}}}}}}' "$i")$'\n';;
       controlPlane) r+=$(wl openagentix-control-plane "$i")$'\n';;
       console) r+=$(wl openagentix-console "$i")$'\n';;
+      renamedConsole) r+=$(wl my-console "$i")$'\n';;
     esac
   done
   r+=$(wl other busybox:1)$'\n'
@@ -147,6 +148,9 @@ t "an operator image by tag (no IMAGE_REGISTRY): a warning, passes" "$(rc "" "" 
 t "an operator image by digest: no warning" "$(rc "" "" -- controlPlane=europe-west4-docker.pkg.dev/p/oa/control-plane:gke1@$DGX)" "rc=0|"
 t "a host with a port is qualified" "$(rc "" "" -- bridge=localhost:5000/x/telegram:v1@$DGX)" "rc=0|"
 t "the schedules CronJob image is checked (scheduling)" "$(rc "" "" -- scheduling=openagentix/a2a-call:dev | grep -c 'scheduling: openagentix/a2a-call:dev is an unqualified name')" 1
+t "a built image path not found in the rendered workloads (a renamed Deployment) is refused, the path named" "$(rc $REG "console" -- renamedConsole=$REG/openagentix/console@$DGX | grep -c 'console: the installer built an image for this path but no rendered workload runs it')" 1
+t "a built image path not found: rc 1" "$(rc $REG "console" -- renamedConsole=$REG/openagentix/console@$DGX | grep -o 'rc=[0-9]')" rc=1
+t "a built image path not found next to one that is found: only that path is named" "$(rc $REG "controlPlane console" -- controlPlane=$REG/openagentix/control-plane@$DGX | grep -c 'console: the installer built an image')" 1
 t "images of other workloads (a Deployment, the memory-expiry CronJob) are not checked" "$(rc "" "" -- | grep -cE 'busybox|postgres')" 0
 
 echo "# every Dockerfile the installer pushes pins its base images by digest (ADR 0022)"
