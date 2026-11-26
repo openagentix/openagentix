@@ -21,7 +21,7 @@ Workflows are in `.github/workflows/`. Every check also runs locally through the
 | `console-e2e` | builds the web app, installs Chromium with its libraries, runs Playwright against the Go binary in demo mode; uploads the report on failure | `make test-console-e2e` | 4-6 min |
 | `ci-ok` | passes when every job above passed or was skipped | | seconds |
 
-Make **`ci-ok`** the only required status check in the branch protection rule. Docs-only changes (`docs/`, `website/`, `*.md`,
+The branch protection rule for `main` requires **`ci-ok`** and **`DCO`** (the DCO check is its own workflow, not part of `ci-ok`). Docs-only changes (`docs/`, `website/`, `*.md`,
 `LICENSE`) skip everything except `secrets`; `ci-ok` still passes. Superseded runs of the same ref are cancelled.
 `docs.yml` is separate and untouched. `e2e.yml` is the keyless end-to-end install (see "e2e" below); it is NOT in `ci-ok` yet.
 
