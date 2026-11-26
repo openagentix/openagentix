@@ -1,0 +1,13 @@
+# API server authentication config for the k3s cluster that hack/cluster.sh makes with k3d (CLUSTER_TYPE=k3d).
+# k3s starts its API server with --anonymous-auth=false unless an authentication config is given. The workload tool server (ADR 0019)
+# fetches the cluster's public ServiceAccount signing keys without a token, so a caller without a token must reach these two paths.
+# Anonymous requests are allowed on these two paths only. RBAC still decides (the chart binds system:service-account-issuer-discovery
+# to system:unauthenticated when serviceAccountTokens.anonymousKeys is true). Every other path stays closed to anonymous callers, as before.
+# Tests: hack/ci/cluster-test.sh.
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+  conditions:
+    - path: /.well-known/openid-configuration
+    - path: /openid/v1/jwks
