@@ -39,7 +39,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: bridge
-          image: {{ printf "%s:%s" $b.image.repository (toString $b.image.tag) | quote }}
+          image: {{ include "oa.image" (list $b.image "bridge") | quote }}
           imagePullPolicy: {{ $b.image.pullPolicy }}
           env:
             - name: A2A_URL

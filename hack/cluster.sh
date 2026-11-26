@@ -5,7 +5,8 @@
 #   CLUSTER_TYPE=kind (default)   a kind cluster named $CLUSTER, context kind-$CLUSTER
 #   CLUSTER_TYPE=k3d              a k3s cluster in Docker made by k3d, named $CLUSTER, context k3d-$CLUSTER (see docs/diary/guide/install-k3s.md)
 #   CLUSTER_TYPE=remote           an EXISTING cluster (for example GKE), context $KUBE_CONTEXT (required). Never created or deleted here, no
-#                                 node shell (no docker exec, no ctr), images are not loaded (a registry push is issue #162, not built yet).
+#                                 node shell (no docker exec, no ctr), images are not loaded: install.sh pushes them to IMAGE_REGISTRY
+#                                 and the nodes pull them by digest (hack/images.sh, ADR 0022).
 #                                 A local context name (kind-*, k3d-*, docker-desktop, ...) is refused unless ALLOW_LOCAL_CONTEXT=1.
 #                                 Not run on a managed cluster yet: docs/diary/guide/install-gke.md.
 #   K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1   the k3s image k3d starts (the runtime needs Kubernetes 1.37 or newer)
@@ -19,7 +20,7 @@
 #   cluster_network               Docker network of the nodes (fails on remote)
 #   cluster_exists                0 when the cluster exists (remote: its API server answers)
 #   cluster_create <repo root>    creates it (kind: hack/kind-config.yaml; k3d: one server, no Traefik, no ServiceLB, NetworkPolicy left on; remote: fails)
-#   cluster_load_images <image>.. copies local Docker images into the nodes (fails on remote)
+#   cluster_load_images <image>.. copies local Docker images into the nodes (fails on remote: install.sh pushes there, hack/images.sh)
 #   cluster_ctr <args>            runs `ctr` in the k8s.io namespace on the node (fails on remote)
 #   cluster_delete_hint           the command that removes the cluster (remote: the cloud teardown, nothing is run)
 #   cluster_node_settings <root>  the two sysctls of components/runtime/NOTES.md (proxy_arp, proxy_ndp); see NODE_SETTINGS
@@ -72,7 +73,7 @@ cluster_load_images(){
   case "$CLUSTER_TYPE" in
     kind) kind load docker-image "$@" --name "$CLUSTER";;
     k3d) k3d image import "$@" --cluster "$CLUSTER";;
-    remote) echo "ERROR: CLUSTER_TYPE=remote cannot copy local images into the nodes. Pushing them to a registry (IMAGE_REGISTRY) is issue #162 and not built yet." >&2; return 1;;
+    remote) echo "ERROR: CLUSTER_TYPE=remote cannot copy local images into the nodes; install.sh pushes them to IMAGE_REGISTRY instead (hack/images.sh, ADR 0022)." >&2; return 1;;
   esac
 }
 cluster_ctr(){

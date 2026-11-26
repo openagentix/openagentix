@@ -636,3 +636,16 @@ the users from the render and fails if one is missing. */ -}}
 {{- define "oa.openshift" -}}
 {{- if eq (include "oa.platform" .) "openshift" }}true{{ end -}}
 {{- end -}}
+
+{{/* The image of a component the installer builds (ADR 0022): "repository:tag", or "repository:tag@digest" when image.digest is set.
+     image.digest must be sha256:<64 hex>; the render fails with the value path otherwise. Usage: include "oa.image" (list $x.image "bridge") */}}
+{{- define "oa.image" -}}
+{{- $i := index . 0 -}}{{- $path := index . 1 -}}
+{{- $d := toString ($i.digest | default "") -}}
+{{- if $d -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $d) -}}{{- fail (printf "%s.image.digest must be sha256: followed by 64 lower case hex characters, got %q" $path $d) -}}{{- end -}}
+{{- printf "%s:%s@%s" $i.repository (toString $i.tag) $d -}}
+{{- else -}}
+{{- printf "%s:%s" $i.repository (toString $i.tag) -}}
+{{- end -}}
+{{- end -}}
