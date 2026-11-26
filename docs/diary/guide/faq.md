@@ -8,7 +8,10 @@ description: Short, honest answers to the questions platform engineers ask first
 
 ## Do I need a specific agent framework?
 
-Today, yes, in one sense. Agents run on kagent with Agent Substrate. You do not write framework code: you describe the agent (model, instructions, tool profile, tools) in an `AgentDefinition` or in the chart values, and the platform builds it. Bringing an agent built with another framework, as a container that speaks A2A, is planned for release 0.3 ([ADR 0013](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0013-focus-and-runtime-neutrality.md)).
+No. There are two ways to run an agent:
+
+- Describe it (model, instructions, tool profile, tools) in an `AgentDefinition` or in the chart values, and the platform builds it on kagent with Agent Substrate. You write no framework code.
+- Bring your own agent: a digest-pinned container image that speaks A2A 1.0, built with any language or framework. It runs under the same gateway key, budget, gate and tool profile. This is opt-in and proven in CI on kind only, with a Go sample; a Python sample is unit-tested. Whether LangGraph, Google ADK or CrewAI serve A2A 1.0 was not checked. See [Bring your own agent](./bring-your-own-agent.md) and [ADR 0015](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0015-bring-your-own-agent.md).
 
 The callers do not need any framework. Anything that can send an A2A request over HTTP can call an agent through the A2A gate. `hack/ask.sh` is a short shell script that does it with `curl`.
 
@@ -40,11 +43,11 @@ The install itself pulls container images and the `kubectl-ate` plugin from publ
 
 The quick start installs: kagent and Agent Substrate (the runtime, with gVisor sandboxes), agentgateway (the model gateway), ToolHive with one tool server and one tool profile, the control plane, the console, the A2A gate, VictoriaMetrics and Jaeger. Upstream versions are pinned (kagent and Substrate 1.0.1, agentgateway v1.7.0, ToolHive 0.67.1).
 
-Measured in CI on a hosted runner with 4 vCPU and about 16 GB: the install took 6 min 34 s from nothing, and the node used about 2.4 GiB of memory afterwards. On your machine, give Docker 4 CPU and 8 GB or more. The full demo, with every optional part, was run on a 6 CPU and 8 GB VM. Kubernetes 1.37 or newer is needed (the installer creates a kind cluster with it).
+Measured in CI on a hosted runner with 4 vCPU and about 16 GB, with an empty image cache: the first answer came 301 to 320 s (about 5 minutes) after the start of `./install.sh` in three runs on kind, and the node used about 2.4 GiB of memory. A laptop was not timed. On your machine, give Docker 4 CPU and 8 GB or more. The full demo, with every optional part, was run on a 6 CPU and 8 GB VM. Kubernetes 1.37 or newer is needed (the installer creates a kind cluster with it).
 
 ## Is it production ready?
 
-No. It is an early project with one maintainer. It was proven on one single-node kind cluster, and the quick start in CI on a hosted runner. It was not tested on k3s, a managed cloud, OpenShift, several nodes, or under load. Databases are development setups, most services run one replica, and there are no backups. Read [what works](../what-works.md) and the "Known limitations" section of the README before you point anything real at it.
+No. It is an early project with one maintainer. It was proven on one single-node kind cluster, and the quick start in CI on hosted runners, on kind and on k3s (k3d, one node). It was not run on a managed cloud (GKE, EKS, AKS), OpenShift, several nodes, or under load. Release signing is built but unproven until a real tag runs. Databases are development setups, most services run one replica, and there are no backups. Read [what works](../what-works.md) and the "Known limitations" section of the README before you point anything real at it.
 
 ## How is this different from running an agent as a plain Deployment?
 
@@ -58,10 +61,28 @@ With a plain Deployment, the platform team has to build each of these by hand, f
 - A platform policy checks every `AgentDefinition` before anything is created, and refuses one that breaks a rule, with the reason in its status.
 - Traces and metrics per agent turn, without capturing content by default.
 
+## How does it relate to kagent, agentgateway and ToolHive?
+
+OpenAgentix installs them and uses them; it does not fork or replace them ([Built with](./built-with.md)). What it adds on top, all in this repository:
+
+- the `AgentDefinition` resource and a controller that checks it against a platform policy before anything is created;
+- admission policies that limit what other actors, and the controller itself, may change;
+- one gateway key and token budget per agent, created and removed with the agent;
+- tool profiles wired per agent, and egress rules per agent;
+- the A2A gate with caller rules and an audit line per request;
+- bring your own agent under the same controls;
+- the console and the one-command quick start.
+
+If you already run one of these projects, you can read how each one is used in [Built with](./built-with.md).
+
 ## What is the licence, and who controls the project?
 
 The code is Apache-2.0. The [governance rules](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md) say how decisions are made and keep the project vendor-neutral: the roadmap is decided in the open, no feature may depend on a commercial product, and security is never held back. Today there is one maintainer, and the project is looking for maintainers from other organisations. Upstream components and their licences are listed in [THIRD-PARTY.md](https://github.com/openagentix/openagentix/blob/main/THIRD-PARTY.md).
 
 ## How can I contribute?
 
-Read [CONTRIBUTING.md](https://github.com/openagentix/openagentix/blob/main/CONTRIBUTING.md). Good places to start: documentation, tests, an adapter for another observability stack, vector store or notification target, and testing the Slack path if you have a workspace. Every commit is signed off (`git commit -s`). You do not need a cluster or a model key to contribute code, tests or docs. Questions are welcome in GitHub Discussions.
+Start with [Your first contribution in an hour](./first-contribution.md) and the [good first issues](https://github.com/openagentix/openagentix/labels/good%20first%20issue). The rules are in [CONTRIBUTING.md](https://github.com/openagentix/openagentix/blob/main/CONTRIBUTING.md). Good places to start: documentation, tests, an adapter for another observability stack, vector store or notification target, and testing the Slack path if you have a workspace. Every commit is signed off (`git commit -s`). You do not need a cluster or a model key to contribute code, tests or docs. Questions are welcome in [GitHub Discussions](https://github.com/openagentix/openagentix/discussions).
+
+## I use it. How do I say so?
+
+Add a row to [ADOPTERS.md](https://github.com/openagentix/openagentix/blob/main/ADOPTERS.md) with a pull request (the stage "evaluating" is a useful entry), or post in [Show and tell](https://github.com/openagentix/openagentix/discussions/categories/show-and-tell). If you want to work with the project on your use case before 0.3, say so in that post.

@@ -37,7 +37,7 @@ for (const f of ['roadmap.md', 'contributing/workflow.md']) {
 
 const repo = 'https://github.com/openagentix/openagentix';
 const description =
-  'OpenAgentix is an open-source control plane for running AI agents on Kubernetes: a key and budget per agent, approved tools, closed egress, checked callers and an audit record. Apache-2.0.';
+  'OpenAgentix is an open-source, Kubernetes-native control plane for AI agents: agent governance with a key and token budget per agent, MCP tool profiles, egress control, an A2A gate and an audit trail. Apache-2.0.';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -53,6 +53,24 @@ const config = {
   onBrokenAnchors: 'throw',
   onDuplicateRoutes: 'throw',
   i18n: {defaultLocale: 'en', locales: ['en']},
+  // Structured data for search engines: what the project is, its licence and its code.
+  headTags: [
+    {
+      tagName: 'script',
+      attributes: {type: 'application/ld+json'},
+      innerHTML: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'SoftwareSourceCode',
+        name: 'OpenAgentix',
+        description,
+        url: `${url}${baseUrl}`,
+        codeRepository: repo,
+        license: 'https://www.apache.org/licenses/LICENSE-2.0',
+        programmingLanguage: ['Go', 'TypeScript'],
+        runtimePlatform: 'Kubernetes',
+      }),
+    },
+  ],
   markdown: {
     format: 'detect',
     mermaid: true,
@@ -120,7 +138,7 @@ const config = {
     image: 'img/social-card.png',
     metadata: [
       {name: 'description', content: description},
-      {name: 'keywords', content: 'AI agents, Kubernetes, agent platform, governance, open source, A2A, MCP'},
+      {name: 'keywords', content: 'AI agents on Kubernetes, agent governance, A2A protocol, MCP, MCP gateway, egress control, audit trail, token budgets, bring your own agent, platform engineering, open source'},
     ],
     colorMode: {defaultMode: 'light', respectPrefersColorScheme: true},
     navbar: {
@@ -155,6 +173,9 @@ const config = {
             {label: 'Repository', href: repo},
             {label: 'Issues', href: `${repo}/issues`},
             {label: 'Discussions', href: `${repo}/discussions`},
+            {label: 'Your first contribution', to: '/guide/first-contribution'},
+            {label: 'Good first issues', href: `${repo}/labels/good%20first%20issue`},
+            {label: 'Adopters', href: `${repo}/blob/main/ADOPTERS.md`},
           ],
         },
         {

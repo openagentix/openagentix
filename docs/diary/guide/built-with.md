@@ -22,9 +22,9 @@ Versions are the ones pinned in this repository on 2026-11-25. The full list wit
 | Project | Version | What OpenAgentix uses it for |
 |---|---|---|
 | [agentgateway](https://github.com/agentgateway/agentgateway) | v1.7.0 | The model gateway: a virtual key and a token budget per agent, prompt caching, failover between models, and the access log that cost is counted from. |
-| [Model Context Protocol (MCP)](https://modelcontextprotocol.io) | open standard | How agents call tools. |
+| [Model Context Protocol (MCP)](https://modelcontextprotocol.io) | open standard, hosted by the Agentic AI Foundation (Linux Foundation) | How agents call tools. |
 | [ToolHive](https://github.com/stacklok/toolhive) (virtual MCP server) | 0.67.1 | Serves tools to agents and builds tool profiles, so an agent sees only the tools approved for it. |
-| [Agent2Agent (A2A) protocol](https://a2a-protocol.org) | open standard | How callers, the gate, schedules and channels talk to agents. |
+| [Agent2Agent (A2A) protocol](https://a2a-protocol.org) | open standard, a Linux Foundation project; 1.0 | How callers, the gate, schedules, channels and your own container agents talk to agents. |
 
 ## Triggers
 

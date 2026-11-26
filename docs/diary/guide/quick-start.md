@@ -19,7 +19,7 @@ git clone https://github.com/openagentix/openagentix && cd openagentix
 PROFILE=quickstart ./install.sh
 ```
 
-The install ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. In CI on a hosted runner, with nothing cached, it took 366 to 394 seconds. A laptop was not timed. Where the time goes, by phase, is in [how the quick start is measured](../features/quick-start.md).
+The install ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. In CI on a hosted runner, with nothing cached, the first answer came about 5 minutes after the start (301 to 320 seconds in three runs on kind). A laptop was not timed. Where the time goes, by phase, is in [how the quick start is measured](../features/quick-start.md).
 
 ## Ask the agent
 

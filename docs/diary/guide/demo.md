@@ -1,7 +1,7 @@
 ---
 title: Demo walkthrough
 sidebar_position: 3.2
-description: A scripted walk through the quick start in about ten minutes. Create an agent, ask it, see its gateway key and budget, read the audit line, hit a denied call, and open the console. No paid key.
+description: A scripted walk through the quick start, after an install of about five minutes. Create an agent, ask it, see its gateway key and budget, read the audit line, hit a denied call, and open the console. No paid key.
 ---
 
 # Demo walkthrough
@@ -16,7 +16,7 @@ Install the quick start and keep the cluster:
 PROFILE=quickstart ./install.sh
 ```
 
-You need `kubectl` (pointing at that cluster), `jq`, `curl` and `python3`. The install takes about six minutes on a hosted CI runner (see [how it was measured](../features/quick-start.md)).
+You need `kubectl` (pointing at that cluster), `jq`, `curl` and `python3`. The install takes about five minutes on a hosted CI runner (see [how it was measured](../features/quick-start.md)).
 
 ## Run it
 

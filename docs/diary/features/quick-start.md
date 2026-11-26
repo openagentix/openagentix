@@ -101,7 +101,7 @@ The first runs of the new script are below. They have the exact marker for "firs
 | kind | 45663797281 | 26 s | 341 s | 372 s | 385 s | 383 s |
 | k3s (k3d) | 45663797407 | 14 s | 315 s | 326 s | 339 s | 337 s |
 
-Reading it: on a hosted runner with nothing cached, a first working agent takes 6 to 7 minutes on kind (362 to 410 s) and about 6 minutes on k3s (346 to 366 s). The question itself takes under a second with the stub. The time is the install: building the images, the tool profile and the runtime. The cluster is ready in about 25 s.
+Reading it: on a hosted runner with nothing cached, before the faster install below, a first working agent took 6 to 7 minutes on kind (362 to 410 s) and about 6 minutes on k3s (346 to 366 s). After it, about 5 minutes on kind (301 to 320 s, next section). The question itself takes under a second with the stub. The time is the install: building the images, the tool profile and the runtime. The cluster is ready in about 25 s.
 
 Limits. This is a hosted `ubuntu-24.04` runner (4 vCPU, 16 GB), a cold image cache every time, and the stub model, so no model call and no key. `git clone` and the tool installs are not in the numbers (the clock starts at `./install.sh`). A laptop was not timed, nor a warm re-install, nor a slow network. The runs spread by about 50 s, so read the numbers as a range. They are not a promise for your machine. The two rows of the second table are one run each.
 
