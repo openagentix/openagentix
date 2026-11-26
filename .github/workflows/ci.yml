@@ -140,6 +140,7 @@ jobs:
           components/quickstart/tests/run.sh
           hack/ci/cluster-test.sh
           hack/ci/preflight-test.sh
+          hack/ci/default-storageclass-test.sh
           hack/ci/sa-issuer-test.sh
           hack/ci/uninstall-test.sh
           components/runtime/tests/run.sh
