@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -143,6 +144,72 @@ func (w *w) feature(indent int, key, listKey string, f *model.Feature) {
 	w.list(indent+2, listKey, items)
 }
 
+// value writes a nested value of the generic part of the spec (runtime): maps with their keys in order, lists, and scalars.
+func (w *w) value(indent int, key string, v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		if len(x) == 0 {
+			w.line(indent, "%s: {}", key)
+			return
+		}
+		w.line(indent, "%s:", key)
+		w.mapBody(indent+2, x)
+	case []any:
+		if len(x) == 0 {
+			w.line(indent, "%s: []", key)
+			return
+		}
+		w.line(indent, "%s:", key)
+		for _, it := range x {
+			if m, ok := it.(map[string]any); ok && len(m) > 0 {
+				w.itemMap(indent+2, m)
+				continue
+			}
+			w.line(indent+2, "- %s", scalarOf(it))
+		}
+	default:
+		w.line(indent, "%s: %s", key, scalarOf(v))
+	}
+}
+
+func (w *w) mapBody(indent int, m map[string]any) {
+	for _, k := range sortedKeys(m) {
+		w.value(indent, Scalar(k), m[k])
+	}
+}
+
+// itemMap writes one list item that is a map: the first key on the dash line, the rest under it.
+func (o *w) itemMap(indent int, m map[string]any) {
+	var sub w
+	sub.mapBody(indent+2, m)
+	text := sub.b.String()
+	o.b.WriteString(strings.Repeat(" ", indent) + "- " + strings.TrimLeft(text, " "))
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func scalarOf(v any) string {
+	switch x := v.(type) {
+	case string:
+		return Scalar(x)
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case nil:
+		return "null"
+	}
+	b, _ := json.Marshal(v)
+	return Scalar(string(b))
+}
+
 // Render writes the definition. status.controller (internal bookkeeping) is left out. status may be nil (a draft).
 func Render(m Meta, spec model.Spec, st *model.Status) string {
 	var o w
@@ -167,7 +234,9 @@ func Render(m Meta, spec model.Spec, st *model.Status) string {
 		o.line(2, "description: %s", Scalar(spec.Description))
 	}
 	o.line(2, "model: %s", Scalar(spec.Model))
-	o.block(2, "instructions", spec.Instructions)
+	if spec.Instructions != "" || spec.Runtime == nil {
+		o.block(2, "instructions", spec.Instructions)
+	}
 	if spec.ToolProfile != "" {
 		o.line(2, "toolProfile: %s", Scalar(spec.ToolProfile))
 	}
@@ -196,6 +265,9 @@ func Render(m Meta, spec model.Spec, st *model.Status) string {
 	}
 	if spec.Suspend {
 		o.line(2, "suspend: true")
+	}
+	if spec.Runtime != nil {
+		o.value(2, "runtime", spec.Runtime)
 	}
 	if st != nil {
 		o.line(0, "status:")

@@ -58,3 +58,27 @@ func TestConflictAndSettling(t *testing.T) {
 		t.Fatal(d2.State)
 	}
 }
+
+func TestContainerAgentNeedsNoInstructionsAndIsAcceptedByTheDemoPolicy(t *testing.T) {
+	now := time.Now()
+	b := New(func() time.Time { return now }, 5*time.Second)
+	ctx := context.Background()
+	img := "registry.example.com/agents/echo@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	sp := model.Spec{Model: "claude-haiku", Runtime: map[string]any{"type": "container", "container": map[string]any{"image": img, "port": float64(8080)}}}
+	d, err := b.Create(ctx, "echo", sp)
+	if err != nil || d.RuntimeType != "container" {
+		t.Fatal(err, d.RuntimeType)
+	}
+	now = now.Add(6 * time.Second)
+	if d, _ = b.Get(ctx, "echo"); d.State != model.StateReady {
+		t.Fatal(d.State, d.Status.Violations)
+	}
+	sp.Runtime["container"].(map[string]any)["image"] = "registry.example.com/agents/echo:1"
+	if _, err := b.Create(ctx, "bad", sp); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(6 * time.Second)
+	if d, _ = b.Get(ctx, "bad"); d.State != model.StateRefused {
+		t.Fatal(d.State)
+	}
+}

@@ -66,7 +66,7 @@ export function renderSpecYaml(name: string, namespace: string, s: Spec): string
     o.push('spec:');
     if (s.description) o.push(`  description: ${scalar(s.description)}`);
     o.push(`  model: ${scalar(s.model)}`);
-    const text = s.instructions;
+    const text = s.instructions ?? '';
     if (!blockSafe(text)) o.push(`  instructions: ${scalar(text)}`);
     else {
         const mark = !text.endsWith('\n') ? '|-' : text.endsWith('\n\n') ? '|+' : '|';

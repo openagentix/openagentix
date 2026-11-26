@@ -45,7 +45,7 @@ type Egress struct {
 type Spec struct {
 	Description  string   `json:"description,omitempty"`
 	Model        string   `json:"model"`
-	Instructions string   `json:"instructions"`
+	Instructions string   `json:"instructions,omitempty"` // empty for a container agent: the CRD has no instructions to hold
 	ToolProfile  string   `json:"toolProfile,omitempty"`
 	Tools        []string `json:"tools,omitempty"`
 	Knowledge    *Feature `json:"knowledge,omitempty"`
@@ -54,8 +54,8 @@ type Spec struct {
 	Skills       []Skill  `json:"skills,omitempty"`
 	Egress       *Egress  `json:"egress,omitempty"`
 	Suspend      bool     `json:"suspend,omitempty"`
-	// Runtime (ADR 0015) is carried through untouched, so that an update made in the console never drops a container agent's
-	// image. The console shows its type and does not edit it: container agents are created with kubectl (issue #107).
+	// Runtime (ADR 0015). The builder's "Bring your own agent" path creates it (issue #107). An update made in the console
+	// carries it through untouched, so a save never drops a container agent's image.
 	Runtime map[string]any `json:"runtime,omitempty"`
 }
 

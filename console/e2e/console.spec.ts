@@ -312,6 +312,42 @@ test('delete asks for the name, then removes the agent', async ({ page }) => {
     await done();
 });
 
+test('bring your own agent: the digest rule is explained, then a container agent is created', async ({ page }) => {
+    const done = await watch(page);
+    await signIn(page);
+    await goTo(page, '/agents');
+    await page.getByRole('button', { name: /New agent/ }).click();
+    await page.getByRole('link', { name: 'Bring your own agent' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Bring your own agent' })).toBeVisible();
+    await expect(page.getByLabel('Instructions')).toHaveCount(0);
+    const create = page.getByRole('button', { name: 'Create agent' });
+    await page.getByLabel('Name', { exact: true }).fill('byo-agent');
+    // a tag is explained in plain English and keeps Create off
+    await page.getByLabel('Image').fill('registry.example.com/agents/echo:latest');
+    await expect(page.locator('.err')).toContainText('The image must be pinned by digest');
+    await expect(create).toHaveAttribute('aria-disabled', 'true');
+    // an image of another registry names the allowed one
+    await page.getByLabel('Image').fill('evil.example.com/x@sha256:' + 'c'.repeat(64));
+    await expect(page.locator('.err')).toContainText('registry.example.com/agents/');
+    // a secret-shaped value is refused and not echoed
+    await page.getByRole('button', { name: 'Add variable' }).click();
+    await page.getByLabel('Variable 1 name').fill('TOKEN');
+    await page.getByLabel('Variable 1 value').fill('sk-' + 'a'.repeat(40));
+    await expect(page.getByRole('alert').filter({ hasText: 'shaped like a secret' })).toBeVisible();
+    await page.getByRole('button', { name: 'Remove variable 1' }).click();
+    // a good image passes the platform check, and only then can the agent be created
+    await page.getByLabel('Image').fill('registry.example.com/agents/echo@sha256:' + 'c'.repeat(64));
+    await expect(create).not.toHaveAttribute('aria-disabled', 'true');
+    await create.click();
+    await expect(page.getByRole('heading', { level: 1, name: 'byo-agent' })).toBeVisible();
+    await expect(page.getByText('This is a container agent')).toBeVisible();
+    await expect(page.getByTestId('container-note')).toContainText('registry.example.com/agents/echo@sha256:');
+    await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0);
+    await goTo(page, '/agents');
+    await expect(page.locator('tr[data-agent="byo-agent"]')).toContainText('container');
+    await done();
+});
+
 test('pause and resume an agent', async ({ page }) => {
     const done = await watch(page);
     await signIn(page);

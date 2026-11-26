@@ -135,7 +135,10 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			status(w, 409, "AlreadyExists", "exists")
 			return
 		}
-		if sp, _ := o["spec"].(map[string]any); sp["instructions"] == "" || sp["instructions"] == nil {
+		sp, _ := o["spec"].(map[string]any)
+		rt, _ := sp["runtime"].(map[string]any)
+		// the CRD's own rule: a container agent is configured in its image and needs no instructions
+		if rt["type"] != "container" && (sp["instructions"] == "" || sp["instructions"] == nil) {
 			status(w, 422, "Invalid", "invalid", map[string]string{"field": "spec.instructions", "message": "Required value", "reason": "FieldValueRequired"})
 			return
 		}
@@ -215,6 +218,8 @@ type rigOpt struct {
 	static  func() *fstest.MapFS
 	timeout int
 	fake    bool
+	// noContainers: the policy does not list the container runtime.
+	noContainers bool
 	// mod changes the server options after the rig has filled them in; kube changes the backend.
 	mod  func(*server.Options)
 	kube func(*backend.Kube)
@@ -234,7 +239,11 @@ func newRig(t *testing.T, opts ...func(*rigOpt)) *rig {
 	_ = os.WriteFile(saPath, []byte(saToken), 0o600)
 
 	var be backend.Backend
-	plat := platform.Static{Value: fake.Platform()}
+	pv := fake.Platform()
+	if o.noContainers {
+		pv.Policy.AllowedRuntimes = nil
+	}
+	plat := platform.Static{Value: pv}
 	if o.fake {
 		be = fake.New(nil, 0)
 	} else {

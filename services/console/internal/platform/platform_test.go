@@ -51,3 +51,42 @@ func TestSummaryCarriesSuspendAllAndInClusterDestinations(t *testing.T) {
 		t.Fatalf("summary leaks catalog internals: %s", raw)
 	}
 }
+
+// The real catalog keeps its profiles under tools.toolhive.profiles, and a profile the operator opened to container agents
+// has a workload block (a URL and an audience, which the summary must not carry). The summary says only whether it is open.
+func TestSummaryReadsToolhiveProfilesAndContainerRuntime(t *testing.T) {
+	dir := t.TempDir()
+	f := &Files{
+		CatalogPath: write(t, dir, "catalog.json", `{"adapters":{"runtime":"kagent","runtimes":{"builtin":"kagent","container":"container"}},"models":["m"],
+			"tools":{"toolhive":{"profiles":[{"name":"open","toolServer":"s","tools":["a"],"workload":{"url":"http://tools.internal/mcp","audience":"aud-secret"}},{"name":"closed","toolServer":"s2","tools":["b"]}]}}}`),
+		PolicyPath: write(t, dir, "policy.json", `{"maxAgents":2,"allowedRuntimes":["builtin","container"],"runtimes":{"container":{"images":["ghcr.io/acme/"],"maxAgents":1}}}`),
+	}
+	b, err := f.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Summarize(b, false)
+	if len(s.Profiles) != 2 || !s.Profiles[0].ContainerAccess || s.Profiles[1].ContainerAccess {
+		t.Fatalf("profiles: %+v", s.Profiles)
+	}
+	c := s.Container
+	if !c.Available || !c.Allowed || len(c.Images) != 1 || c.Images[0] != "ghcr.io/acme/" || c.MaxAgents != 1 {
+		t.Fatalf("container: %+v", c)
+	}
+	raw, _ := json.Marshal(s)
+	if strings.Contains(string(raw), "aud-secret") || strings.Contains(string(raw), "tools.internal") || strings.Contains(string(raw), `"workload"`) {
+		t.Fatalf("summary leaks the workload block: %s", raw)
+	}
+}
+
+func TestSummaryContainerRuntimeIsOffByDefault(t *testing.T) {
+	s := Summarize(Both{Catalog: Catalog{Adapters: Adapters{Runtime: "kagent"}}}, false)
+	if s.Container.Available || s.Container.Allowed || s.Container.Images == nil || len(s.Container.Images) != 0 {
+		t.Fatalf("%+v", s.Container)
+	}
+	// allowed by the policy but not installed: the two facts stay apart
+	s = Summarize(Both{Policy: Policy{AllowedRuntimes: []string{"container"}}}, false)
+	if s.Container.Available || !s.Container.Allowed {
+		t.Fatalf("%+v", s.Container)
+	}
+}
