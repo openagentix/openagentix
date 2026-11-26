@@ -94,13 +94,17 @@ EOS
 PLACEHOLDERS=(SKIP_SKILL=1 ANTHROPIC_API_KEY=ci-placeholder-not-a-real-key TELEGRAM_BOT_TOKEN=0:ci-placeholder-not-a-real-token TELEGRAM_ALLOWED_CHAT_IDS=0)
 extract_old(){ OLD="$W/old"; mkdir -p "$OLD" && git -C "$REPO" archive "$FROM" | tar -x -C "$OLD"; }
 old_install(){
-  # Finding on v0.2.0 (fixed in main, only the old tag has it): with bridge.enabled=false it still writes the Telegram Secret into the namespace openagentix-gateway before that
-  # namespace exists, and stops. The namespace is created, then the installer runs again (it is meant to be re-run), as a user of v0.2.0 would.
-  if ( cd "$OLD" && env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh ) >"$W/old-first.log" 2>&1; then cat "$W/old-first.log"; return 0; fi
-  cat "$W/old-first.log"
-  grep -q 'namespaces "openagentix-gateway" not found' "$W/old-first.log" || return 1
-  echo "NOTE: $FROM stopped at its Telegram Secret (namespace openagentix-gateway missing with the bridge off); creating the namespace and running its installer again"
-  $K create namespace openagentix-gateway && ( cd "$OLD" && env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh )
+  # The installer of v0.2.0 is meant to be re-run, and a fresh install with it has two known faults that main has fixed, so it is run up to three times,
+  # as a user of v0.2.0 would: (1) a start-up race on kagent's PostgreSQL ("the database system is shutting down", fixed in main by issue #86), and
+  # (2) with bridge.enabled=false it writes the Telegram Secret into the namespace openagentix-gateway before that namespace exists: it is created here.
+  local n
+  for n in 1 2 3; do
+    if ( cd "$OLD" && env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh ) >"$W/old-$n.log" 2>&1; then cat "$W/old-$n.log"; echo "NOTE: $FROM installed on attempt $n"; return 0; fi
+    tail -n 12 "$W/old-$n.log"
+    echo "NOTE: $FROM installer attempt $n failed"
+    if grep -q 'namespaces "openagentix-gateway" not found' "$W/old-$n.log"; then $K create namespace openagentix-gateway; fi
+  done
+  return 1
 }
 new_install_a(){ env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh; }
 new_install_b(){ env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A $VALUES_B" ./install.sh; }
