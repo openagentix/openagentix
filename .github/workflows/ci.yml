@@ -138,6 +138,7 @@ jobs:
           hack/ci/verify-release-test.sh
           hack/ci/kind-image-digest-test.sh
           hack/ci/flake-sweep-test.sh
+          hack/ci/green-streak-test.sh
           components/quickstart/tests/run.sh
           hack/ci/cluster-test.sh
           hack/ci/images-test.sh

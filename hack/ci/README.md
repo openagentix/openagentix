@@ -51,6 +51,26 @@ hack/ci/flake-sweep.sh services/kb --count 20               # the same command t
 ```
 
 The offline test builds a throwaway Go module with a test that fails 2 times in 20, and checks the exit code and that the test is named (`hack/ci/flake-sweep-test.sh`, in `make test-shell`).
+## Nightly runs and the green streak
+
+`e2e.yml` (03:17 UTC) and `e2e-k3s.yml` (03:47 UTC) have a `schedule:` trigger. The cron lines are valid, both files are on `main`, Actions is enabled for the repository with all actions allowed, and both workflows are active. Even so, the Actions API listed no run with event `schedule` for either workflow on 2026-11-26, about 22 hours after the first possible tick. We could not find a setting that explains it. GitHub does not promise that a scheduled run starts on time, and it can drop one when its queue is busy. So the claim is only this: no nightly run has been seen yet. Check again after 03:50 UTC on the next day: `hack/ci/green-streak.sh` prints a warning for `e2e` and `e2e-k3s` while the window holds no `schedule` run, and it prints the date of the newest one when there is one. If a night passes with no run, start the workflow by hand (`gh workflow run e2e.yml`) and record the gap in issue #196.
+
+`hack/ci/green-streak.sh` counts the green runs in a row on `main` for `ci`, `docs`, `e2e` and `e2e-k3s`. It is the check for the release 0.3 exit criterion "30 green runs on main".
+
+```
+hack/ci/green-streak.sh                    # text, one line per workflow
+hack/ci/green-streak.sh --json             # the same as JSON
+hack/ci/green-streak.sh --target 30 --check ci docs   # exit 1 when ci or docs is below 30
+```
+
+How to read a line, for example `ci  17 in a row  (target 30, not met)  counted 62  last red: <run url>`:
+
+- The streak is the number of green runs before the first red one, newest first. The link is the run that ended it.
+- Cancelled, skipped and still running runs are ignored. They do not add to the streak and they do not break it. Pull request runs are ignored too.
+- `counted` is how many runs the window held (`--limit`, default 100). A streak equal to `counted` may be longer than shown.
+- `e2e` and `e2e-k3s` run on `main` only at night or by hand, so 30 green runs of them take 30 nights. A manual run counts like a nightly one.
+
+The offline test is `hack/ci/green-streak-test.sh` (in `make test-shell`).
 
 ## Tools and pins
 
