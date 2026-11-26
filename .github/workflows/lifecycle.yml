@@ -1,0 +1,76 @@
+name: lifecycle
+
+# Install twice, uninstall and reinstall (issue #206): a kind cluster on a hosted runner, the keyless quick start (stub model), and
+# hack/ci/lifecycle-test.sh: install, smoke, install again (no object recreated, lost or doubled), uninstall (only the documented keep-policy
+# objects and data volumes stay), install again, smoke. The offline test of the script is hack/ci/lifecycle-test-test.sh (in `make test-shell`).
+# NOT part of the required `ci-ok` gate; see hack/ci/README.md.
+on:
+  pull_request:
+    paths:
+      - install.sh
+      - uninstall.sh
+      - charts/**
+      - components/**
+      - hack/cluster.sh
+      - hack/ci/lifecycle-test.sh
+      - hack/ci/smoke.sh
+      - hack/ask.sh
+      - hack/kind-config.yaml
+      - .github/workflows/lifecycle.yml
+  schedule:
+    - cron: '47 4 * * *'   # nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lifecycle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    name: lifecycle (quickstart)
+    runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
+    timeout-minutes: 60
+    env:
+      PROFILE: quickstart          # no key, no chat token: the built-in stub model
+      AGENT_WAIT: 300s
+      SMOKE_BYO: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: lifecycle test (install, install again, uninstall, install)
+        run: |
+          set -o pipefail
+          hack/ci/lifecycle-test.sh 2>&1 | tee lifecycle.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Install lifecycle, PROFILE=quickstart (stub model)"
+            echo '```'
+            grep -E '^(#|ok|FAIL|lifecycle:|      )' lifecycle.log 2>/dev/null | grep -v '^      |' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          kubectl get agentdefinitions.openagentix.io,agents.api.kagent.dev -A -o yaml | head -150 || true
+          helm list -A || true
+          kubectl logs -n openagentix-system deploy/openagentix-control-plane --tail=60 || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs
+          path: kind-logs
+          retention-days: 7

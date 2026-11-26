@@ -43,6 +43,17 @@ State that must be unchanged after upgrade A (and still after B): UIDs of the ag
 Not checked, and printed at the end of every run: an answer from the old agent (v0.2.0 has no stub model and no paid call is made in tests), A2A gate audit lines (the gate is off in the v0.2.0 default values), a request with the virtual key. The installer of v0.2.0 is run up to three times, because a fresh v0.2.0 install has a start-up race on kagent's PostgreSQL (fixed in main) and, with the bridge off, writes its Telegram Secret before the namespace exists (fixed in main).
 
 It runs on pull requests that touch the installer or the chart, nightly at 05:47 UTC and by hand (`gh workflow run upgrade.yml -f from=v0.2.0`; do this before a release). It is not in `ci-ok`. Offline test of the script: `hack/ci/upgrade-test-test.sh` (fake `kubectl`, `helm` and kb, in `make test-shell`).
+## lifecycle (install twice, uninstall, reinstall)
+
+`.github/workflows/lifecycle.yml` (issue #206) runs `hack/ci/lifecycle-test.sh` on a hosted `ubuntu-24.04` runner with the keyless quick start (stub model, `PROFILE=quickstart`): install, smoke test, install again with the same values, uninstall (no `PURGE_*`), install again, smoke test. It checks:
+
+- after the second install: every object in `helm get manifest` has the same UID, no object or workload was added, the AgentDefinition and the Agent have the same UIDs (not rebuilt), no Secret in the OpenAgentix namespaces changed (compared by checksum, values are never printed), every pod is Ready and none crash-loops, the smoke test passes;
+- after the uninstall: the Helm release is gone, no object of the release is left except those with `helm.sh/resource-policy: keep` (the CRD and the key ConfigMap), no AgentDefinition and no Agent is left, and the only PVCs left are the documented data volumes (the list is in `uninstall.sh`);
+- after the reinstall: the smoke test passes and the kept Secrets have the same content as after the first install. The one exception is the Secret `model-gateway-session-key`: the agentgateway controller (upstream) makes a new one when the Gateway is created again.
+
+It runs on pull requests that touch the installer, the chart or `components/`, nightly at 04:47 UTC and by hand. It is not in `ci-ok`. Offline test of the script: `hack/ci/lifecycle-test-test.sh` (fake `kubectl` and `helm`, in `make test-shell`). Local run on a cluster you may use: `PROFILE=quickstart hack/ci/lifecycle-test.sh` (it installs and uninstalls on the current context: never point it at a cluster you use).
+
+First live run: [what-works.md](../../docs/diary/what-works.md), row "Install twice, uninstall, reinstall".
 
 ## e2e-k3s (the quick start on k3s)
 
