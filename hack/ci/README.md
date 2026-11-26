@@ -19,10 +19,11 @@ Workflows are in `.github/workflows/`. Every check also runs locally through the
 | `console` | `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm check`, `pnpm test` (vitest), `pnpm build` | `make test-console` | 2-3 min |
 | `console-audit` | `pnpm audit --prod` (blocking), full `pnpm audit` (report only) | `cd console && pnpm audit --prod` | under 1 min |
 | `console-e2e` | builds the web app, installs Chromium with its libraries, runs Playwright against the Go binary in demo mode; uploads the report on failure | `make test-console-e2e` | 4-6 min |
+| `docs` | builds the Docusaurus site (`npm ci && npm run build` in `website/`, Node 22) so a broken link or broken markdown link fails the pull request; nothing is deployed (`docs.yml` deploys from `main`). Runs when `docs/`, `website/`, `CHANGELOG.md`, `ci.yml` or `docs.yml` changed (the `docs` output of `changes`), docs-only changes included | `cd website && npm ci && npm run build` | 2-3 min |
 | `ci-ok` | passes when every job above passed or was skipped | | seconds |
 
 The branch protection rule for `main` requires **`ci-ok`** and **`DCO`** (the DCO check is its own workflow, not part of `ci-ok`). Docs-only changes (`docs/`, `website/`, `*.md`,
-`LICENSE`) skip everything except `secrets`; `ci-ok` still passes. Superseded runs of the same ref are cancelled.
+`LICENSE`) skip everything except `secrets` and `docs`; `ci-ok` still passes. Superseded runs of the same ref are cancelled.
 `docs.yml` is separate and untouched. `e2e.yml` is the keyless end-to-end install (see "e2e" below); it is NOT in `ci-ok` yet.
 
 ## release (tag to images, chart and release)
