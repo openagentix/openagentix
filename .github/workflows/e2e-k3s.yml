@@ -10,6 +10,7 @@ on:
       - .github/workflows/e2e-k3s.yml
       - hack/cluster.sh
       - hack/images.sh
+      - hack/k3s-authn.yaml
       - install.sh
       - hack/kind-image-digest.sh
       - components/runtime/up.sh
@@ -54,6 +55,17 @@ jobs:
           ./install.sh 2>&1 | tee install.log
           echo "install_start=$start" >> "$GITHUB_OUTPUT"
           echo "install_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: anonymous access is closed except for the signing keys (issue #189)
+        run: |
+          # k3s sets anonymous-auth=false unless an authentication config is given (hack/k3s-authn.yaml). Call the API server with no token.
+          ctx=$(kubectl config current-context); server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+          [ "$ctx" = "k3d-$CLUSTER" ] || { echo "unexpected context $ctx"; exit 1; }
+          fail=0
+          check() { code=$(curl -ksS -o /dev/null -w '%{http_code}' "$server$1"); if [ "$code" = "$2" ]; then echo "ok   $1 -> $code"; else echo "FAIL $1 -> $code, want $2"; fail=1; fi; }
+          check /api 401
+          check /healthz 401
+          check /openid/v1/jwks 200
+          exit $fail
       - name: smoke test
         id: smoke
         env:
