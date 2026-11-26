@@ -33,7 +33,10 @@ eq "bridge token env has no literal value"             "$(q "$D" '.[]|select(.ki
 eq "allowlist env present by default, optional"        "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].env[]|select(.name=="TELEGRAM_ALLOWED_CHAT_IDS")|.valueFrom.secretKeyRef.optional')" true
 eq "bot is not open to everyone by default"            "$(q "$D" '[.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].env[]|select(.name=="TELEGRAM_ALLOW_ALL")]|length')" 0
 eq "bridge liveness probe hits /healthz"               "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].livenessProbe.httpGet|.path+":"+(.port|tostring)')" /healthz:health
-eq "bridge exposes health port 8080"                   "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].ports[]|select(.name=="health")|.containerPort')" 8080
+BRG='.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0]'
+eq "bridge readiness probe hits /readyz (ready after the first poll)" "$(q "$D" "$BRG|.readinessProbe.httpGet|.path+\":\"+(.port|tostring)")" /readyz:health
+eq "bridge startup probe hits /readyz, 5 s period, 24 tries (the first long poll can take 30 s)" "$(q "$D" "$BRG|.startupProbe|[.httpGet.path,.periodSeconds,.failureThreshold]|join(\" \")")" "/readyz 5 24"
+eq "bridge exposes health port 8080"                  "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].ports[]|select(.name=="health")|.containerPort')" 8080
 
 echo "# bridge toggles"
 D=$(docs --set bridge.enabled=false)
