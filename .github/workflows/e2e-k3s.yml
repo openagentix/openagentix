@@ -2,7 +2,8 @@ name: e2e-k3s
 
 # The keyless quick start on k3s (issue #30): a k3s cluster in Docker made by k3d (CLUSTER_TYPE=k3d), `PROFILE=quickstart ./install.sh` with the
 # stub model, then hack/ci/smoke.sh. Same steps as e2e.yml, other cluster.
-# NOT part of the required `ci-ok` gate and never will be until it has passed reliably; a failure here is a report, not a block.
+# NOT part of the required `ci-ok` gate (a separate workflow; the required checks of main are `ci-ok` and `DCO`) until it has passed reliably.
+# It shows its real result: a failure is a red check on the pull request or the nightly run, and it does not block a merge.
 # It runs nightly, by hand, and on pull requests that change this file or the cluster helper.
 on:
   pull_request:
@@ -30,8 +31,7 @@ concurrency:
 jobs:
   e2e-k3s:
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
-    timeout-minutes: 45
-    continue-on-error: true        # the job never turns a pull request red
+    timeout-minutes: 45            # no continue-on-error (issue #195): a failed step shows as a red check; it is still not required
     env:
       CLUSTER_TYPE: k3d
       CLUSTER: oa-k3s-ci
