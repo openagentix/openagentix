@@ -187,6 +187,10 @@ gateway:
   name: model-gateway
   className: agentgateway
   port: 80
+  # Type of the model gateway's Service (ADR 0023). "" (default): nothing is set and agentgateway makes a LoadBalancer. "ClusterIP" or
+  # "LoadBalancer": the chart renders an AgentgatewayParameters object and the Gateway points at it. Any other value fails the render.
+  # On a managed cloud a LoadBalancer is a public IP; install.sh sets ClusterIP for CLUSTER_TYPE=remote unless a values file sets this.
+  serviceType: ""
   # Models clients can name in the OpenAI "model" field. Fields per entry:
   #   name, provider (Anthropic|Gemini|OpenAI|...), authSecret (Secret in gateway.namespace, key
   #   "Authorization"), upstreamModel (rewrites the model sent upstream), baseURL, health {...},

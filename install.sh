@@ -33,6 +33,11 @@
 #   SERVICE_ACCOUNT_ISSUER=https://...  the service account issuer the workload tool server trusts (container agents with a tool profile). Default: read
 #                        from the cluster (/.well-known/openid-configuration, then the kube-apiserver flag) and passed only when the chart value is not
 #                        set in a values file and differs from the chart default (kind and k3s), so the default render does not change (hack/sa-issuer.sh)
+#   gateway.serviceType  (chart value, ADR 0023; set it in a values file) the type of the model gateway's Service: empty (agentgateway makes a
+#                        LoadBalancer, a public IP on a managed cloud), ClusterIP or LoadBalancer. With CLUSTER_TYPE=remote the installer passes
+#                        gateway.serviceType=ClusterIP when your values leave it empty, prints that it did, and never overrides a value you set.
+#                        kind and k3d: unchanged. After a remote install it warns about every Service of type LoadBalancer in the cluster (read only).
+#                        Not run on a cluster yet (hack/gateway-service-type.sh).
 #   ALLOW_LOCAL_CONTEXT=1  with CLUSTER_TYPE=remote, accept a KUBE_CONTEXT that is the name of a local cluster (kind-*, k3d-*, docker-desktop, ...)
 #   NODE_SETTINGS=daemonset  set the two node sysctls for gVisor pod networking (components/runtime/NOTES.md) with the privileged DaemonSet
 #                        components/runtime/node-settings.yaml (its own namespace) instead of docker exec. Default: docker exec on kind and k3d,
@@ -692,6 +697,17 @@ if jq -e -s 'any(.[]; .kind=="MCPOIDCConfig" and .metadata.name=="openagentix-wo
     echo "WARNING: could not read the cluster's service account issuer; the workload tool server keeps '$SA_RENDERED'. Set SERVICE_ACCOUNT_ISSUER or controlPlane.containerAgents.serviceAccountTokens.issuer if it is wrong." >&2
   fi
 fi
+# The model gateway's Service (ADR 0023): agentgateway makes it a LoadBalancer, which is a public IP on a managed cloud. On a remote cluster the
+# installer asks for ClusterIP unless a values file sets gateway.serviceType (ClusterIP or LoadBalancer: never overridden). kind and k3d: unchanged.
+# shellcheck source=hack/gateway-service-type.sh
+. hack/gateway-service-type.sh
+GW_ST=$(gw_service_type_set_value "$REMOTE" "$RENDERED")
+if [ -n "$GW_ST" ]; then
+  echo "model gateway: gateway.serviceType=$GW_ST (CLUSTER_TYPE=remote: no public IP). Set gateway.serviceType: LoadBalancer in a values file if you want a load balancer."
+  SET+=(--set-string "gateway.serviceType=$GW_ST")
+elif [ "$REMOTE" = 1 ] && jq -e -s 'any(.[]; .kind=="AgentgatewayParameters")' <<<"$RENDERED" >/dev/null; then
+  echo "model gateway: gateway.serviceType is set in your values file ($(jq -r -s '.[]|select(.kind=="AgentgatewayParameters")|.spec.service.spec.type' <<<"$RENDERED" | head -1)); the installer leaves it as it is"
+fi
 if [ -n "$CN_DEP" ]; then
   # Same for the console: a hash of services/console AND console (the web app) rolls the pod on a code change although the tag stays "dev".
   # Build outputs (node_modules, console/build, .svelte-kit, web/dist) are left out: they follow from the sources.
@@ -874,6 +890,9 @@ if [ "$QS" = 1 ]; then
 fi
 
 log "DONE"
+if [ "$REMOTE" = 1 ]; then   # a LoadBalancer on a managed cloud is a public IP, a firewall rule and a charge: say so (read only)
+  gw_loadbalancer_warnings "$($K get svc -A -o json 2>/dev/null || true)" "$CTX" >&2
+fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null; then $K get pods -n $BRIDGE_NS; fi
 $K get agent -n $KAGENT_NS
 if [ "$QS" = 1 ]; then

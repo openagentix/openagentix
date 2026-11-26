@@ -58,6 +58,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/preflight-test.sh
 	hack/ci/default-storageclass-test.sh
 	hack/ci/sa-issuer-test.sh
+	hack/ci/gateway-service-type-test.sh
 	hack/ci/uninstall-test.sh
 	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh

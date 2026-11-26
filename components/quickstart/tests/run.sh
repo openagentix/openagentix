@@ -143,6 +143,7 @@ else
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up FAKE_SC="$SC_NONE"); eq "without SET_DEFAULT_STORAGECLASS the storage classes are not touched" "$(/usr/bin/grep -c 'storageclass' "$RT/calls")" 0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up NODE_SETTINGS=bogus); eq "an unknown NODE_SETTINGS is refused at the start" "$(/usr/bin/grep -c "unknown NODE_SETTINGS 'bogus'" <<<"$OUT")" 1
 fi
+eq "install.sh wires gateway.serviceType (ADR 0023): remote default, prints it, warns about LoadBalancers, header documents it" "$(/usr/bin/grep -c 'gw_service_type_set_value "\$REMOTE" "\$RENDERED"' "$ROOT/install.sh")/$(/usr/bin/grep -c 'SET+=(--set-string "gateway.serviceType=\$GW_ST")' "$ROOT/install.sh")/$(/usr/bin/grep -c 'gw_loadbalancer_warnings' "$ROOT/install.sh")/$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -c 'gateway.serviceType')" 1/1/1/2
 eq "the install.sh header lists CLUSTER_TYPE=remote, ALLOW_LOCAL_CONTEXT and NODE_SETTINGS" "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -cE 'CLUSTER_TYPE=remote|ALLOW_LOCAL_CONTEXT=1|NODE_SETTINGS=daemonset' | awk '{print ($1>=3)?"yes":"no"}')" yes
 
 echo "# the minimal profile and the install order (issue #29)"

@@ -72,7 +72,31 @@ D=$(docs --set gateway.policy.promptCaching.enabled=true --set gateway.policy.pr
 eq "promptCaching switches and minTokens are honoured (0 is kept)" "$(q "$D" '.[]|select(.kind=="AgentgatewayPolicy")|.spec.backend.ai.promptCaching|"\(.cacheSystem) \(.cacheMessages) \(.cacheTools) \(.minTokens)"')" "true false false 0"
 D=$(docs --set gateway.enabled=false)
 eq "gateway.enabled=false: no Gateway/Model/Policy"    "$(count "$D" '.kind=="Gateway" or .kind=="AgentgatewayModel" or .kind=="AgentgatewayPolicy"')" 0
-cat > "$(dirname "$0")/.extra-models.yaml" <<'YAML'
+echo "# gateway.serviceType (ADR 0023, issue #165)"
+GT='.[]|select(.kind=="Gateway")'
+D=$(docs)
+eq "default: no AgentgatewayParameters"                "$(count "$D" '.kind=="AgentgatewayParameters"')" 0
+eq "default: the Gateway has no infrastructure block"  "$(q "$D" "$GT|.spec|has(\"infrastructure\")")" false
+HDEF=$(helm template openagentix "$CHART" -n openagentix-system 2>&1 | shasum -a 256)
+HEMPTY=$(helm template openagentix "$CHART" -n openagentix-system --set-string gateway.serviceType= 2>&1 | shasum -a 256)
+eq "gateway.serviceType empty is byte-identical to the default render" "$HEMPTY" "$HDEF"
+for T in ClusterIP LoadBalancer; do
+  D=$(docs --set-string gateway.serviceType=$T)
+  eq "$T: exactly one AgentgatewayParameters"          "$(count "$D" '.kind=="AgentgatewayParameters"')" 1
+  eq "$T: named model-gateway-parameters in agentgateway-system" "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.apiVersion+" "+.metadata.namespace+"/"+.metadata.name')" "agentgateway.dev/v1alpha1 agentgateway-system/model-gateway-parameters"
+  eq "$T: its spec is exactly service.spec.type"       "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.spec|tojson')" "{\"service\":{\"spec\":{\"type\":\"$T\"}}}"
+  eq "$T: the Gateway points at it with parametersRef" "$(q "$D" "$GT|.spec.infrastructure|tojson")" '{"parametersRef":{"group":"agentgateway.dev","kind":"AgentgatewayParameters","name":"model-gateway-parameters"}}'
+  eq "$T: only those two documents differ from the default (same count + 1)" "$(q "$D" 'length')" "$(( $(q "$(docs)" 'length') + 1 ))"
+done
+D=$(docs --set-string gateway.serviceType=ClusterIP --set gateway.name=gw2 --set gateway.namespace=gwns)
+eq "the object follows gateway.name and gateway.namespace" "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.metadata.namespace+"/"+.metadata.name')+$(q "$D" "$GT|.spec.infrastructure.parametersRef.name")" "gwns/gw2-parameters+gw2-parameters"
+for BAD in NodePort ExternalName clusterip " ClusterIP" loadbalancer; do
+  E=$(render_err --set-string "gateway.serviceType=$BAD")
+  eq "serviceType '$BAD' fails the render and names the allowed values" "$(grep -c 'gateway.serviceType.*ClusterIP.*LoadBalancer' <<<"$E")" 1
+done
+D=$(docs --set gateway.enabled=false --set-string gateway.serviceType=ClusterIP)
+eq "gateway.enabled=false: no AgentgatewayParameters"  "$(count "$D" '.kind=="AgentgatewayParameters"')" 0
+cat >"$(dirname "$0")/.extra-models.yaml" <<'YAML'
 gateway:
   models:
     - name: claude-haiku
