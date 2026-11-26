@@ -1,9 +1,11 @@
 # ADR 0023: the model gateway Service type
 
-Status: Proposed
+Status: Accepted (2026-11-26)
 Date: 2026-11-26
 Issue: https://github.com/openagentix/openagentix/issues/165 (umbrella #31)
 Replaces: none
+
+The 7-day review period was waived by the maintainer on 2026-11-26 after a real GKE run (#31); an independent review was done and its changes are in this text.
 
 A new chart value, `gateway.serviceType`, sets the type of the model gateway's Service through agentgateway's Gateway parameters. Its default is `ClusterIP` from release 0.3, with an upgrade note. A load balancer exists only when the operator writes `LoadBalancer`.
 
