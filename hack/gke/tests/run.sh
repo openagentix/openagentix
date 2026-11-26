@@ -22,7 +22,8 @@ case "\$*" in
       *labels.created-by*) echo "\${FAKE_LABEL-openagentix-gke-up}";;
       *lifecycleState*) if [ -f "$D/deleted" ]; then echo DELETE_REQUESTED; else echo ACTIVE; fi;;
     esac;;
-  "projects create "*) touch "$D/created";;
+  "projects create "*) touch "$D/created"; ls "$D"/state/*/state.env >/dev/null 2>&1 && touch "$D/state-before-create";;
+  "billing projects link "*) if [ "\${FAKE_LINK_FAIL:-0}" = 1 ]; then echo "ERROR: (gcloud) cannot link \$*" >&2; exit 1; fi;;
   "projects delete "*) [ "\${FAKE_DELETE_NOOP:-0}" = 1 ] || touch "$D/deleted";;
   "container clusters create "*) [ "\${FAKE_CLUSTER_FAIL:-0}" = 1 ] && exit 1;;
   "container clusters get-credentials "*) [ -n "\${KUBECONFIG:-}" ] && touch "\$KUBECONFIG";;
@@ -43,7 +44,7 @@ EOS
 chmod +x "$D/bin/"* "$D/fake-install.sh"
 calls(){ cat "$D/calls" 2>/dev/null; }
 mode(){ stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }   # GNU stat first, then BSD stat
-reset(){ : > "$D/calls"; rm -f "$D/created" "$D/deleted"; }
+reset(){ : > "$D/calls"; rm -f "$D/created" "$D/deleted" "$D/state-before-create"; }
 BA=0A0A0A-1B1B1B-2C2C2C; ORG=987654321098
 OK_ENV=(PROJECT_PREFIX=oa-test "ORG_ID=$ORG" "BILLING_ACCOUNT=$BA" MAX_HOURS=2 AUTHORIZED_CIDR=192.0.2.10/32)
 # up <VAR=value>...: up.sh with only these variables and the fakes first on PATH; prints its output and exit=<code>
@@ -64,6 +65,14 @@ OUT=$(up PROJECT_PREFIX=oa-test ORG_ID=$ORG BILLING_ACCOUNT=$BA MAX_HOURS=2 AUTH
 t "an open control plane (0.0.0.0/0) refused" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
 OUT=$(up PROJECT_PREFIX=oa-test ORG_ID=12ab BILLING_ACCOUNT=$BA MAX_HOURS=2 AUTHORIZED_CIDR=192.0.2.10/32)
 t "non-numeric ORG_ID refused" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
+for cidr in 1.2.3.4/0 10.0.0.0/7 300.1.1.1/32 192.0.2.10; do
+  OUT=$(up PROJECT_PREFIX=oa-test "ORG_ID=$ORG" "BILLING_ACCOUNT=$BA" MAX_HOURS=2 AUTHORIZED_CIDR=$cidr)
+  t "AUTHORIZED_CIDR $cidr refused" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
+done
+for bad in CLUSTER=Bad_Name "CLUSTER=$(printf 'a%.0s' $(seq 1 45))" ZONE=us-central1 REGION=US "STATE_ROOT=$D/with space" STATE_ROOT=relative/path; do
+  OUT=$(up "${OK_ENV[@]}" "$bad")
+  t "bad ${bad%%=*} refused before any call" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
+done
 OUT=$(up PROJECT=existing-one "${OK_ENV[@]}")
 t "PROJECT is not an input (never an existing project)" "$(grep -c 'ERROR: .*PROJECT is not an input' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
 
@@ -81,8 +90,9 @@ t "state file written" "$([ -f "$STATE" ] && echo yes)" yes
 P=$(sed -n 's/^PROJECT=//p' "$STATE")
 t "project id: prefix, date, random part, at most 30 characters" "$(grep -cE '^oa-test-[0-9]{4}-[0-9a-f]{4}$' <<<"$P")/$([ ${#P} -le 30 ] && echo short)" 1/short
 td=$(grep -n "hack/gke/down.sh $STATE" <<<"$OUT" | head -1 | cut -d: -f1)
-first=$(grep -n '^FAKE gcloud projects create' <<<"$OUT" | head -1 | cut -d: -f1)
-t "teardown command printed before anything is created" "$([ -n "$td" ] && [ "$td" -lt "$first" ] && echo yes)" yes
+first=$(grep -n '^== project' <<<"$OUT" | head -1 | cut -d: -f1)
+t "teardown command printed before anything is created" "$([ -n "$td" ] && [ -n "$first" ] && [ "$td" -lt "$first" ] && echo yes)" yes
+t "state file (for down.sh) written before the project create" "$([ -f "$D/state-before-create" ] && echo yes)" yes
 t "no billing account in the output" "$(grep -c "$BA" <<<"$OUT")" 0
 t "no organisation id in the output" "$(grep -c "$ORG" <<<"$OUT")" 0
 t "no billing account in the state file" "$(grep -c "$BA" "$STATE")" 0
@@ -106,13 +116,17 @@ t "Cloud Build with the recipe and the repository path" "$(calls | grep '^gcloud
 t "Cloud Build starts before the cluster create returns (both started)" "$(c '^gcloud builds submit ')/$(c '^gcloud container clusters create ')" 1/1
 t "credentials fetched into the separate kubeconfig" "$(c "^gcloud container clusters get-credentials oa-gke --zone=us-central1-a --project=$P")" 1
 t "kubeconfig is private (600)" "$(mode "$(dirname "$STATE")/kubeconfig")" 600
-V=$(sed -n 's/^VALUES_FILE=//p' "$STATE")
+V="$(dirname "$STATE")/gke-images.yaml"
+t "state file names no file path (paths come from its own directory)" "$(grep -cE '^(KUBECONFIG|VALUES_FILE)=' "$STATE")" 0
 for k in .governance.a2a.image .gateway.stubModel.image .controlPlane.image .console.image; do
   t "values: $k from Artifact Registry, tag gke1" "$(yq -r "$k | .repository + \":\" + .tag" "$V" | grep -cE "^us-central1-docker.pkg.dev/$P/oa/[a-z0-9-]+:gke1$")" 1
 done
 t "next step printed" "$(grep -c "hack/gke/install.sh $STATE" <<<"$OUT")" 1
 OUT=$(up FAKE_CLUSTER_FAIL=1 "${OK_ENV[@]}")
 t "cluster create fails: exit 1 and the teardown is printed again" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'hack/gke/down.sh' <<<"$OUT")" 1/2
+
+OUT=$(up FAKE_LINK_FAIL=1 "${OK_ENV[@]}")
+t "a gcloud error that echoes the billing account: exit 1, teardown printed, the id not shown" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'hack/gke/down.sh' <<<"$OUT")/$(grep -c "$BA" <<<"$OUT")" 1/2/0
 
 echo "# install.sh: wraps ./install.sh with the values of the run"
 inst(){ : > "$D/calls"; rm -f "$D/install-env"; env -i PATH="$D/bin:$PATH" HOME="$D/home" OA_INSTALL_SH="$D/fake-install.sh" "$@" bash hack/gke/install.sh "$STATE" 2>&1; echo "exit=$?"; }
@@ -135,6 +149,8 @@ t "NODE_SETTINGS=none reaches install.sh as empty (the installer skips the Daemo
 cp "$STATE" "$D/past.env"; sed -i.bak 's/^DEADLINE=.*/DEADLINE=1000/' "$D/past.env"
 OUT=$(: > "$D/calls"; rm -f "$D/install-env"; env -i PATH="$D/bin:$PATH" HOME="$D/home" OA_INSTALL_SH="$D/fake-install.sh" bash hack/gke/install.sh "$D/past.env" 2>&1; echo "exit=$?")
 t "past the deadline: refused, teardown printed, install not run" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'hack/gke/down.sh' <<<"$OUT")/$([ -f "$D/install-env" ] && echo ran || echo no)" 1/1/no
+OUT=$(inst FAKE_SC="$D/sc-none.json" FAKE_LABEL=something-else)
+t "project without the up.sh label: refused, no patch, install not run" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | grep -c '^kubectl ')/$([ -f "$D/install-env" ] && echo ran || echo no)" 1/0/no
 printf 'PROJECT=x; rm -rf /\n' > "$D/evil.env"
 OUT=$(: > "$D/calls"; env -i PATH="$D/bin:$PATH" HOME="$D/home" OA_INSTALL_SH="$D/fake-install.sh" bash hack/gke/install.sh "$D/evil.env" 2>&1; echo "exit=$?")
 t "a state file with a bad value is refused" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
@@ -145,6 +161,9 @@ OUT=$(dn FAKE_LABEL=something-else)
 t "project without the up.sh label: refused, not deleted" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | grep -c '^gcloud projects delete ')" 1/0
 OUT=$(STATE_ARG="$D/evil.env" dn)
 t "bad state file: refused, no call" "$(grep -c '^exit=1$' <<<"$OUT")/$(calls | wc -l | tr -d ' ')" 1/0
+mkdir -p "$D/evilkc"; cp "$STATE" "$D/evilkc/state.env"; echo "KUBECONFIG=$D/victim" >> "$D/evilkc/state.env"; touch "$D/victim"
+OUT=$(STATE_ARG="$D/evilkc/state.env" dn)
+t "a state file that names another kubeconfig: refused, that file kept" "$(grep -c '^exit=1$' <<<"$OUT")/$([ -e "$D/victim" ] && echo kept || echo removed)/$(calls | grep -c '^gcloud projects delete ')" 1/kept/0
 OUT=$(dn FAKE_DELETE_NOOP=1)
 t "delete not confirmed by the project state: exit 1" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'not DELETE_REQUESTED' <<<"$OUT")" 1/1
 rm -f "$D/deleted"; touch "$(dirname "$STATE")/kubeconfig"

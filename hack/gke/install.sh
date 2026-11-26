@@ -21,6 +21,8 @@ if [ "$(date -u +%s)" -ge "$DEADLINE" ]; then
   teardown_line "$STATE" "$DEADLINE" >&2
   exit 1
 fi
+command -v gcloud >/dev/null || die "gcloud is not installed"
+project_is_ours || die "project $PROJECT does not carry created-by=$GKE_LABEL (or cannot be read); hack/gke/install.sh installs only into a project up.sh made"
 [ -f "$KUBECONFIG_FILE" ] || die "no kubeconfig at $KUBECONFIG_FILE (up.sh did not finish?)"
 export KUBECONFIG=$KUBECONFIG_FILE
 CTX="gke_${PROJECT}_${ZONE}_${CLUSTER}"

@@ -18,9 +18,8 @@ LIFE=$(gcloud projects describe "$PROJECT" --format='value(lifecycleState)' 2>/d
 if [ "$LIFE" = DELETE_REQUESTED ]; then
   echo "project $PROJECT is already DELETE_REQUESTED; nothing to delete"
 else
-  [ -n "$LIFE" ] || die "cannot read project $PROJECT (deleted long ago, or no access). Nothing was deleted."
-  LABEL=$(gcloud projects describe "$PROJECT" --format='value(labels.created-by)' 2>/dev/null || true)
-  [ "$LABEL" = "$GKE_LABEL" ] || die "project $PROJECT does not carry created-by=$GKE_LABEL; down.sh deletes only projects up.sh made. Nothing was deleted."
+  [ -n "$LIFE" ] || die "cannot read project $PROJECT (deleted long ago, no access, or a passing error: retry). Nothing was deleted; check it in the console, it may still cost money."
+  project_is_ours || die "project $PROJECT does not carry created-by=$GKE_LABEL; down.sh deletes only projects up.sh made. Nothing was deleted."
   T0=$(date +%s)
   gcloud projects delete "$PROJECT" --quiet
   LIFE=$(gcloud projects describe "$PROJECT" --format='value(lifecycleState)' 2>/dev/null || true)

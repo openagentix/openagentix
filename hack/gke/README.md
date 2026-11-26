@@ -25,12 +25,18 @@ Run `hack/ci/smoke.sh`, `hack/ci/netpol-test.sh` and `hack/demo.sh` with the sam
 
 ## Safety rules the scripts keep
 
-- Never an existing project. The project id is made by the script (`<prefix>-<MMDD>-<4 hex>`), `PROJECT` is refused as an input, and the script stops if the id exists. `down.sh` deletes nothing without the label.
-- Refuses to start without `PROJECT_PREFIX`, `ORG_ID`, `BILLING_ACCOUNT`, `MAX_HOURS` (1 to 24) and `AUTHORIZED_CIDR` (not `0.0.0.0/0`).
-- Prints no credential, no billing account and no organisation id. The state file holds neither.
+- Never an existing project. The project id is made by the script (`<prefix>-<MMDD>-<4 hex>`), `PROJECT` is refused as an input, and the script stops if the id exists. `install.sh` and `down.sh` act only on a project with the label `created-by=openagentix-gke-up`. The kubeconfig and values paths are never read from the state file; they are always files in the state file's own directory.
+- Refuses to start without `PROJECT_PREFIX`, `ORG_ID`, `BILLING_ACCOUNT`, `MAX_HOURS` (1 to 24) and `AUTHORIZED_CIDR` (an IPv4 range of /8 or narrower). Every other input is checked before the first call.
+- Prints no credential, no billing account and no organisation id. The state file holds neither. Errors of the three calls that carry them go to `gcloud.log` in the state directory, not to the terminal.
 - Your default kubeconfig is not touched. The cluster's credentials go to a separate file with mode 600, in a directory with mode 700.
 - Only committed files travel to Cloud Build (`git archive HEAD` of the four images' directories).
+- On a failure or Ctrl-C after the project exists, `up.sh` prints the teardown command again.
 - `install.sh` refuses after the deadline. **Nothing deletes the project at the deadline. Only `down.sh` does.** A budget only sends alerts; it does not stop spending.
+
+## Limits
+
+- The four roles go to the default compute service account, which is also the node identity. So pods on the node can push to the project's Artifact Registry and read its buckets. That is acceptable for a throwaway project with only this install in it; do not reuse the project.
+- The budget lives on the billing account and stays after `down.sh`.
 
 ## Optional settings
 

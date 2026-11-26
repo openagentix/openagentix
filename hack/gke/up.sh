@@ -33,12 +33,22 @@ done
 [[ "$ORG_ID" =~ ^[0-9]{6,20}$ ]] || die "ORG_ID must be the numeric organisation id"
 [[ "$BILLING_ACCOUNT" =~ ^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$ ]] || die "BILLING_ACCOUNT must look like XXXXXX-XXXXXX-XXXXXX"
 [[ "$MAX_HOURS" =~ ^[0-9]+$ ]] && [ "$MAX_HOURS" -ge 1 ] && [ "$MAX_HOURS" -le 24 ] || die "MAX_HOURS must be a whole number from 1 to 24"
-[[ "$AUTHORIZED_CIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] || die "AUTHORIZED_CIDR must be an IPv4 range like 192.0.2.10/32"
-case "$AUTHORIZED_CIDR" in 0.0.0.0/*) die "AUTHORIZED_CIDR $AUTHORIZED_CIDR opens the control plane to everyone; use your own address, for example <your IP>/32";; esac
+[[ "$AUTHORIZED_CIDR" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || die "AUTHORIZED_CIDR must be an IPv4 range like 192.0.2.10/32"
+for o in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do [ "$o" -le 255 ] || die "AUTHORIZED_CIDR $AUTHORIZED_CIDR is not an IPv4 address"; done
+PFX=${BASH_REMATCH[5]}
+[ "$PFX" -le 32 ] || die "AUTHORIZED_CIDR $AUTHORIZED_CIDR has a prefix over 32"
+[ "$PFX" -ge 8 ] || die "AUTHORIZED_CIDR $AUTHORIZED_CIDR is too wide (/0 to /7 open the control plane to most of the internet); use your own address, for example <your IP>/32"
 
 REGION=${REGION:-us-central1} ZONE=${ZONE:-us-central1-a} CLUSTER=${CLUSTER:-oa-gke}
 MACHINE_TYPE=${MACHINE_TYPE:-c3-standard-4} SPOT=${SPOT:-1} DISK_GB=${DISK_GB:-60} BUDGET_USD=${BUDGET_USD:-10}
 IMAGE_TAG=${IMAGE_TAG:-gke1} CLUSTER_VERSION=${CLUSTER_VERSION:-} STATE_ROOT=${STATE_ROOT:-$HOME/.openagentix/gke}
+[[ "$REGION" =~ $RE_REGION ]] || die "REGION must look like us-central1"
+[[ "$ZONE" =~ $RE_ZONE ]] || die "ZONE must look like us-central1-a"
+[[ "$CLUSTER" =~ $RE_CLUSTER ]] || die "CLUSTER must be 2 to 40 lowercase letters, digits or hyphens, starting with a letter"
+[[ "$STATE_ROOT" =~ $RE_PATH ]] || die "STATE_ROOT must be an absolute path of letters, digits and . _ / - (no spaces)"
+[[ "$MACHINE_TYPE" =~ ^[a-z0-9-]+$ ]] || die "MACHINE_TYPE has characters a machine type cannot have"
+[[ "$SPOT" =~ ^[01]$ ]] || die "SPOT must be 0 or 1"
+[[ -z "$CLUSTER_VERSION" || "$CLUSTER_VERSION" =~ ^[0-9a-z.-]+$ ]] || die "CLUSTER_VERSION has characters a version cannot have"
 [[ "$BUDGET_USD" =~ ^[0-9]+$ ]] || die "BUDGET_USD must be a whole number"
 [[ "$DISK_GB" =~ ^[0-9]+$ ]] || die "DISK_GB must be a whole number"
 [[ "$IMAGE_TAG" =~ ^[a-zA-Z0-9_.-]+$ ]] || die "IMAGE_TAG has characters a tag cannot have"
@@ -63,8 +73,6 @@ REGION=$REGION
 ZONE=$ZONE
 CLUSTER=$CLUSTER
 REPO=$REPO
-KUBECONFIG=$KCFG
-VALUES_FILE=$VALUES
 CREATED=$NOW
 DEADLINE=$DEADLINE
 EOF
@@ -73,20 +81,23 @@ teardown_line "$STATE" "$DEADLINE"
 on_fail(){ echo "up.sh stopped. The project may exist and may cost money:" >&2; teardown_line "$STATE" "$DEADLINE" >&2; }
 fail(){ trap - ERR; on_fail; die "$*"; }
 trap 'on_fail' ERR
+trap 'echo "interrupted" >&2; on_fail; kill "${CPID:-}" 2>/dev/null; exit 130' INT TERM HUP
+GLOG="$STATE_DIR/gcloud.log"   # the calls that carry the organisation or billing id write their errors here, not to the terminal
 
 
 step(){ echo "== $*"; }
 step "project (under the organisation, labelled created-by=$GKE_LABEL, delete-after=$DELETE_AFTER)"
-gcloud projects create "$PROJECT" --organization="$ORG_ID" --labels="created-by=$GKE_LABEL,delete-after=$DELETE_AFTER" --quiet >/dev/null
+gcloud projects create "$PROJECT" --organization="$ORG_ID" --labels="created-by=$GKE_LABEL,delete-after=$DELETE_AFTER" --quiet >/dev/null 2>>"$GLOG" \
+  || fail "project create failed (see $GLOG)"
 step "billing link"
-gcloud billing projects link "$PROJECT" --billing-account="$BILLING_ACCOUNT" >/dev/null
+gcloud billing projects link "$PROJECT" --billing-account="$BILLING_ACCOUNT" >/dev/null 2>>"$GLOG" || fail "billing link failed (see $GLOG)"
 step "APIs"
 gcloud services enable container.googleapis.com compute.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com billingbudgets.googleapis.com --project="$PROJECT" >/dev/null
 step "budget alert: $BUDGET_USD USD (alerts only; it does not stop spending)"
 # --billing-project: without it gcloud bills the budget API call to whatever quota project is configured, often another project
 gcloud billing budgets create --billing-account="$BILLING_ACCOUNT" --display-name="$PROJECT" --budget-amount="${BUDGET_USD}USD" \
   --filter-projects="projects/$PROJECT" --threshold-rule=percent=0.5 --threshold-rule=percent=0.9 --threshold-rule=percent=1.0 \
-  --threshold-rule=percent=1.0,basis=forecasted-spend --billing-project="$PROJECT" >/dev/null
+  --threshold-rule=percent=1.0,basis=forecasted-spend --billing-project="$PROJECT" >/dev/null 2>>"$GLOG" || fail "budget create failed (see $GLOG)"
 step "IAM: grants for the default compute service account (Cloud Build and the nodes use it in a new project)"
 NUM=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
 [[ "$NUM" =~ ^[0-9]+$ ]] || fail "could not read the project number"
