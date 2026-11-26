@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +20,10 @@ type Profile struct {
 	ToolServer string   `json:"toolServer"`
 	CodeMode   bool     `json:"codeMode"`
 	Tools      []string `json:"tools"`
+	// Workload is read from the catalog and never copied out: it holds a URL and a token audience. A profile has one when the
+	// operator opened it to container agents (ADR 0019); the summary says only that, in ContainerAccess.
+	Workload        json.RawMessage `json:"workload,omitempty"`
+	ContainerAccess bool            `json:"containerAccess"`
 }
 
 type Feature struct {
@@ -41,9 +46,18 @@ type Namespaces struct {
 }
 
 type Adapters struct {
-	Runtime      string `json:"runtime"`
-	ModelGateway string `json:"modelGateway"`
-	Tools        string `json:"tools"`
+	Runtime string `json:"runtime"`
+	// Runtimes names the adapter per runtime type; "container" is there only when the operator turned container agents on.
+	Runtimes     map[string]string `json:"runtimes,omitempty"`
+	ModelGateway string            `json:"modelGateway"`
+	Tools        string            `json:"tools"`
+}
+
+// ToolsSection is the tools adapter's own part of the catalog: the control plane writes the profiles there.
+type ToolsSection struct {
+	Toolhive struct {
+		Profiles []Profile `json:"profiles"`
+	} `json:"toolhive"`
 }
 
 // Catalog is what exists on the platform.
@@ -55,6 +69,7 @@ type Catalog struct {
 	Models         []string          `json:"models"`
 	ToolServer     string            `json:"toolServer"`
 	Profiles       []Profile         `json:"profiles"`
+	Tools          ToolsSection      `json:"tools"`
 	Knowledge      Feature           `json:"knowledge"`
 	Notify         Feature           `json:"notify"`
 	Memory         Memory            `json:"memory"`
@@ -88,6 +103,56 @@ type Policy struct {
 	ReservedNames      []string     `json:"reservedNames"`
 	// SuspendAll is the operator's stop switch: every definition is treated as suspended.
 	SuspendAll bool `json:"suspendAll"`
+	// AllowedRuntimes lists the runtime types a definition may use. Absent or empty means only builtin.
+	AllowedRuntimes []string `json:"allowedRuntimes,omitempty"`
+	// Runtimes is read for the container runtime's image prefixes and agent limit; the summary carries it as Container.
+	Runtimes *PolicyRuntimes `json:"runtimes,omitempty"`
+}
+
+type PolicyRuntimes struct {
+	Container struct {
+		Images    []string `json:"images"`
+		MaxAgents int      `json:"maxAgents"`
+	} `json:"container"`
+}
+
+// RuntimeAllowed says whether the policy lets a definition use runtime type t (builtin when none is named).
+func (p Policy) RuntimeAllowed(t string) bool {
+	if t == "" {
+		t = "builtin"
+	}
+	if len(p.AllowedRuntimes) == 0 {
+		return t == "builtin"
+	}
+	return slices.Contains(p.AllowedRuntimes, t)
+}
+
+// ImageAllowed says whether image starts with one of the operator's registry prefixes.
+func (p Policy) ImageAllowed(image string) bool {
+	if p.Runtimes == nil {
+		return false
+	}
+	for _, pre := range p.Runtimes.Container.Images {
+		if pre != "" && strings.HasPrefix(image, pre) {
+			return true
+		}
+	}
+	return false
+}
+
+// RuntimeAvailable says whether the catalog has an adapter for runtime type t.
+func (c Catalog) RuntimeAvailable(t string) bool {
+	if a := c.Adapters.Runtimes[t]; a != "" {
+		return true
+	}
+	return t == "builtin" && c.Adapters.Runtime != ""
+}
+
+// normalize copies the profiles of the tools adapter's section to Profiles when the catalog has no top-level list.
+func (c *Catalog) normalize() {
+	if len(c.Profiles) == 0 {
+		c.Profiles = c.Tools.Toolhive.Profiles
+	}
 }
 
 func (c Catalog) Profile(name string) (Profile, bool) {
@@ -149,6 +214,7 @@ func (f *Files) Get() (Both, error) {
 	if err := readJSON(f.PolicyPath, &b.Policy); err != nil {
 		return Both{}, err
 	}
+	b.Catalog.normalize()
 	f.cached, f.stamp, f.have = b, now, true
 	return b, nil
 }
@@ -187,6 +253,16 @@ type Summary struct {
 	Skills         []Skill    `json:"skills"`
 	ReservedNames  []string   `json:"reservedNames"`
 	Policy         Policy     `json:"policy"`
+	// Container is what the builder needs to offer "bring your own agent": whether it is installed, whether the policy
+	// allows it, the registry prefixes an image must start with, and the per-namespace limit (0: none).
+	Container ContainerInfo `json:"container"`
+}
+
+type ContainerInfo struct {
+	Available bool     `json:"available"`
+	Allowed   bool     `json:"allowed"`
+	Images    []string `json:"images"`
+	MaxAgents int      `json:"maxAgents"`
 }
 
 type Skill struct {
@@ -214,18 +290,26 @@ func Summarize(b Both, demo bool) Summary {
 		skills = append(skills, Skill{Name: n, Ref: c.Skills[n]})
 	}
 	c.Knowledge.Tools, c.Notify.Tools = nz(c.Knowledge.Tools), nz(c.Notify.Tools)
+	c.normalize()
 	profiles := make([]Profile, 0, len(c.Profiles))
 	for _, pr := range c.Profiles {
 		pr.Tools = nz(pr.Tools)
+		pr.ContainerAccess = len(pr.Workload) > 0 && string(pr.Workload) != "null"
+		pr.Workload = nil
 		profiles = append(profiles, pr)
 	}
+	ci := ContainerInfo{Available: c.RuntimeAvailable("container"), Allowed: slices.Contains(p.AllowedRuntimes, "container"), Images: []string{}}
+	if p.Runtimes != nil {
+		ci.Images, ci.MaxAgents = nz(p.Runtimes.Container.Images), p.Runtimes.Container.MaxAgents
+	}
+	p.Runtimes = nil // carried in Container, not twice
 	p.AllowedModels, p.AllowedProfiles, p.AllowedSkills = nz(p.AllowedModels), nz(p.AllowedProfiles), nz(p.AllowedSkills)
 	p.Egress.AllowedOrigins, p.ReservedNames = nz(p.Egress.AllowedOrigins), nz(p.ReservedNames)
 	p.Egress.InClusterDestinations = nz(p.Egress.InClusterDestinations)
 	return Summary{
 		Demo: demo || c.Demo, Adapters: c.Adapters, Namespaces: c.Namespaces, GatewayBaseURL: c.GatewayBaseURL,
 		GateEnabled: c.GateURL != "", Models: nz(c.Models), ToolServer: c.ToolServer, Profiles: profiles,
-		Knowledge: c.Knowledge, Notify: c.Notify, Memory: c.Memory, Skills: skills, ReservedNames: nz(c.ReservedNames), Policy: p,
+		Knowledge: c.Knowledge, Notify: c.Notify, Memory: c.Memory, Skills: skills, ReservedNames: nz(c.ReservedNames), Policy: p, Container: ci,
 	}
 }
 

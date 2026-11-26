@@ -25,10 +25,29 @@ export interface SkillRef {
     version?: string;
 }
 
+export interface ContainerEnvVar {
+    name: string;
+    value: string;
+}
+
+/** spec.runtime.container (ADR 0015): the user's own image, pinned by digest. */
+export interface ContainerRuntime {
+    image: string;
+    port: number;
+    env?: ContainerEnvVar[];
+}
+
+export interface Runtime {
+    type?: 'builtin' | 'container' | string;
+    container?: ContainerRuntime;
+}
+
 export interface Spec {
     description?: string;
     model: string;
-    instructions: string;
+    /** Absent for a container agent, which is configured in its image. */
+    instructions?: string;
+    runtime?: Runtime;
     toolProfile?: string;
     tools?: string[];
     knowledge?: FeatureSpec;
@@ -170,6 +189,8 @@ export interface Profile {
     toolServer: string;
     codeMode: boolean;
     tools: string[];
+    /** The operator opened this profile to container agents (ADR 0019). */
+    containerAccess?: boolean;
 }
 
 export interface Feature {
@@ -191,6 +212,20 @@ export interface PlatformPolicy {
     reservedNames: string[];
     /** The operator's stop switch: every definition is treated as suspended. */
     suspendAll: boolean;
+    /** Runtime types a definition may use; absent means builtin only. */
+    allowedRuntimes?: string[];
+}
+
+/** What the builder needs for "bring your own agent" (GET /api/v1/platform, field container). */
+export interface ContainerInfo {
+    /** The platform has the container runtime installed. */
+    available: boolean;
+    /** The policy lists the container runtime in allowedRuntimes. */
+    allowed: boolean;
+    /** Registry prefixes an image must start with. Empty: no image is allowed. */
+    images: string[];
+    /** Most container agents in the namespace; 0 means no extra limit. */
+    maxAgents: number;
 }
 
 /** Already formatted headline numbers of the metrics row (the metrics route is a later pull request; absent today). */
@@ -222,6 +257,7 @@ export interface Platform {
     skills: { name: string; ref: string }[];
     reservedNames: string[];
     policy: PlatformPolicy;
+    container: ContainerInfo;
 }
 
 /** GET /api/v1/schedules (services/console/internal/govern). No prompt, token or user id. */

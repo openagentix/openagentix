@@ -1,6 +1,10 @@
 {
   "adapters": {
     "runtime": "kagent",
+    "runtimes": {
+      "builtin": "kagent",
+      "container": "container"
+    },
     "modelGateway": "agentgateway",
     "tools": "toolhive"
   },
@@ -20,6 +24,10 @@
       "name": "lookup",
       "toolServer": "toolhive-vmcp-lookup",
       "codeMode": true,
+      "workload": {
+        "url": "http://toolhive-vmcp-lookup-workload.mcp-tools.svc:4483/mcp",
+        "audience": "openagentix-tools-lookup"
+      },
       "tools": [
         "knowledge_kb_search",
         "osv_query_vulnerability",

@@ -62,7 +62,7 @@ export function draftFromSpec(name: string, s: Spec): Draft {
     return {
         name,
         description: s.description ?? '',
-        instructions: s.instructions,
+        instructions: s.instructions ?? '',
         model: s.model,
         toolProfile: s.toolProfile ?? '',
         tools: [...(s.tools ?? [])],
