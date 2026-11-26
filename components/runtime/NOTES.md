@@ -42,7 +42,7 @@ Non-Helm bootstrap (this is what an umbrella chart must absorb or replace):
 - kagent's own PostgreSQL: not bundled in the Helm chart. I ran a plain `pgvector/pgvector:pg17` StatefulSet with password auth (`sslmode=disable`), the kagent `setup.sql` role script, and two Secrets (`kagent-postgres-owner`, `kagent-postgres-readwrite`).
 - `kubectl label ns kagent ate.dev/api-access=true` (NetworkPolicy gate for reaching ate-api).
 - Provider key Secret `kagent-gemini` (from env, `--from-literal`; never written to disk).
-- Node sysctl `net.ipv4.conf.all.proxy_arp=1` / `net.ipv6.conf.all.proxy_ndp=1` (upstream `hack/create-kind-cluster.sh` does it for gVisor pod networking; docs do not mention it; not proven necessary here because I applied it before anything ran).
+- Node sysctl `net.ipv4.conf.all.proxy_arp=1` / `net.ipv6.conf.all.proxy_ndp=1` (upstream `hack/create-kind-cluster.sh` does it for gVisor pod networking; docs do not mention it; not proven necessary here because I applied it before anything ran). On kind and k3d the installer sets them with `docker exec` (`cluster_node_settings` in `hack/cluster.sh`). On `CLUSTER_TYPE=remote` there is no node shell, so they are skipped unless `NODE_SETTINGS=daemonset` applies `node-settings.yaml` (a privileged DaemonSet in its own namespace; issue #163; not run on any cluster).
 
 Values files are in `values/`. Key kagent values: `controller.substrateClientCertificate.enabled=true`, `substrateWorkerPool.create=true` + `workerImage`, `harnesses.enabled=true`, `providers.default=gemini`. `kagent` creates `default-model-config` from `providers.*` (native `Gemini` provider exists, no OpenAI shim needed).
 

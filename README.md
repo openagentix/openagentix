@@ -1,14 +1,17 @@
 # OpenAgentix
 
-OpenAgentix is an open-source control plane for running AI agents on Kubernetes under the rules your platform team sets.
+OpenAgentix is an open-source (Apache-2.0), Kubernetes-native control plane for running AI agents under the rules your platform team sets.
+
+**Who it is for.** Platform teams whose developers have started to run AI agents, and who need agent governance before those agents touch real tools and data. **The problem.** Each team wires its own stack: provider keys in agent pods, no cost per agent, tools and network wide open, no audit trail of who called which agent. **What you get in about 5 minutes.** One command, no model key and no chat token: a governed agent on a local kind cluster, with its own gateway key and token budget, one approved MCP tool, callers checked at an A2A gate, and a web console. **What is proven.** Each claim on this page links to [what works today, and what does not yet](docs/diary/what-works.md).
 
 **What you get**
 
 - **No provider keys in agent pods, and cost per agent.** Each agent gets its own key for a model gateway, with a token budget. The gateway records tokens and cost per agent and refuses calls when the budget is used up.
-- **Tools and network closed by default.** An agent sees only the tools in the tool profile you approved. Its sandbox reaches only what its model and tools need, plus hosts you list.
-- **Known callers and a record.** A gate checks who calls an agent and which user they may speak for, and writes one audit line per request. Tool calls are audited too.
+- **Least privilege for tools and network.** An agent sees only the MCP (Model Context Protocol) tools in the tool profile you approved. Egress control: its sandbox reaches only what its model and tools need, plus hosts you list.
+- **Known callers and an audit trail.** A gate checks who calls an agent over the A2A protocol and which user they may speak for, and writes one audit line per request. Tool calls are audited too.
 - **Agents as Kubernetes resources.** A short `AgentDefinition` is checked against a platform policy. If it breaks a rule, it is refused with a reason and nothing is created. Keep it in Git and apply it like any manifest.
-- **One shared stack instead of one per team.** Runtime, gateways, telemetry and a web console come from one install. They are existing open-source projects behind adapters, on open standards (MCP, A2A, OpenTelemetry).
+- **Bring your own agent.** Besides agents described in an `AgentDefinition`, you can run your own container that speaks A2A 1.0, built with any framework, under the same key, budget, gate and tool profile (opt-in; proven in CI on kind, see the limits in [what works](docs/diary/what-works.md)).
+- **One shared stack instead of one per team.** Runtime, model gateway, MCP gateway, telemetry and a web console come from one install. They are existing open-source projects behind adapters, on open standards (MCP, A2A, OpenTelemetry).
 
 ```mermaid
 flowchart LR
@@ -35,15 +38,20 @@ PROFILE=quickstart ./install.sh                     # no key needed: a scripted 
 hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
 ```
 
-The installer ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. `hack/ask.sh` prints the answer and `(answered in Ns through the A2A gate)`. With the stub, the answer says it comes from the stub and names the tool it used. For real answers, run the install again with your key (`ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh`) or any OpenAI-compatible endpoint. Details: [Try it in 10 minutes](#try-it-in-10-minutes).
+The installer ends with a summary: how long it took, which model is active, and the commands to ask the agent and open the console. `hack/ask.sh` prints the answer and `(answered in Ns through the A2A gate)`. With the stub, the answer says it comes from the stub and names the tool it used. For real answers, run the install again with your key (`ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh`) or any OpenAI-compatible endpoint. Details: [Try it in about 5 minutes](#try-it-in-about-5-minutes).
 
-**Status and limits**
+**Status and limits** (full table: [what works today, and what does not yet](docs/diary/what-works.md))
 
-- Early project with one maintainer. Last release `v0.2.0`; the control plane, console and quick start are on `main` and not yet in a release.
-- Proven on one single-node kind cluster, and the keyless quick start in CI on a hosted runner (6 min 34 s). The same quick start and smoke test also passed on k3s (k3d, v1.37.2) in a CI job that is not a required check ([Install on k3s](docs/diary/guide/install-k3s.md)). Not yet tried on a managed cloud, OpenShift, several nodes or under load. The chart has a `platform: openshift` setting whose manifests render and follow restricted-v2, but nothing was run on OpenShift ([OpenShift](docs/diary/guide/openshift.md)).
-- Agents run on kagent with Agent Substrate (gVisor sandboxes). Bringing your own A2A agent is planned for 0.3.
-- Not built yet: human approval, identity per agent, budgets in money (budgets are in tokens), a Slack channel proven on a real workspace.
-- Demo-grade parts: development databases, one replica of most services. Read [what works](docs/diary/what-works.md) before you rely on anything.
+- Early project with one maintainer. Not production ready. Last release `v0.2.0`; the control plane, console, quick start and bring your own agent are on `main` and not yet in a release.
+- Proven on one single-node kind cluster, and the keyless quick start in CI on hosted runners: first answer about 5 minutes after the start of `./install.sh` on kind (301 to 320 s, three runs, empty cache, stub model). The quick start and smoke test also passed on k3s (k3d) in CI, one node. A laptop was not timed.
+- GKE: the quick start ran once on a GKE Standard cluster (one node, stub model), with the images built by hand in Cloud Build and one manual StorageClass patch; smoke test passed ([Install on GKE](docs/diary/guide/install-gke.md)). The model gateway got a public IP there (issue #165).
+- Not run yet: EKS, AKS, OpenShift, several nodes, load. The `platform: openshift` manifests are built and tested offline only ([OpenShift](docs/diary/guide/openshift.md)).
+- Agents run on kagent with Agent Substrate (gVisor sandboxes). Bring your own A2A agent (a digest-pinned container) is proven in CI on kind only, off by default.
+- Release signing, SBOM and provenance are built but unproven until a real tag runs.
+- Not built yet: human approval, one identity per agent for every call, budgets in money (budgets are in tokens), a Slack channel proven on a real workspace.
+- Demo-grade parts: development databases, one replica of most services.
+
+**Get involved:** [your first contribution in an hour](docs/diary/guide/first-contribution.md) · [good first issues](https://github.com/openagentix/openagentix/labels/good%20first%20issue) · [Discussions](https://github.com/openagentix/openagentix/discussions) · using or evaluating it? Add a row to [ADOPTERS.md](ADOPTERS.md) (evaluating counts), or tell us in [Show and tell](https://github.com/openagentix/openagentix/discussions/categories/show-and-tell).
 
 **Read next:** [Why OpenAgentix](docs/diary/guide/why.md) · [Concepts](docs/diary/guide/concepts.md) · [Quick start](docs/diary/guide/quick-start.md) · [Built with](docs/diary/guide/built-with.md) · [Use cases](docs/diary/guide/use-cases.md) · [FAQ](docs/diary/guide/faq.md) · [API reference](docs/diary/reference/index.md) · [What works](docs/diary/what-works.md) · [Docs site](https://openagentix.github.io/openagentix/) · [Roadmap](docs/roadmap.md)
 
@@ -53,7 +61,7 @@ The installer ends with a summary: how long it took, which model is active, and 
 
 Everything below is the detailed reference for each part: how it is packaged, every install option, and every feature with its commands, values and limits. Each feature also has a page in the [feature diary](docs/diary/index.md).
 
-- Getting started: [Architecture](#architecture), [How it is packaged](#how-it-is-packaged), [Try it in 10 minutes](#try-it-in-10-minutes), [Prerequisites](#prerequisites), [Full demo install](#full-demo-install)
+- Getting started: [Architecture](#architecture), [How it is packaged](#how-it-is-packaged), [Try it in about 5 minutes](#try-it-in-about-5-minutes), [Prerequisites](#prerequisites), [Full demo install](#full-demo-install)
 - Features: [Knowledge base](#knowledge-base), [Memory](#memory), [Prompt caching](#prompt-caching), [Channels and triggers](#channels-and-triggers), [Schedules](#schedules), [Notifications](#notifications), [Observability](#observability), [Add an agent](#add-an-agent)
 - Governance: [A2A gate](#a2a-gate-opt-in), [Tool profiles and egress per agent](#tool-profiles-and-egress-per-agent-opt-in), [Control plane and agent builder](#control-plane-and-agent-builder), [Console](#console), [Security](#security)
 - Operations: [Tests](#tests), [Adopting an existing hand-applied install](#adopting-an-existing-hand-applied-install), [Known limitations](#known-limitations), [Repository layout](#repository-layout), [Community](#community), [License](#license)
@@ -100,11 +108,11 @@ The chart owns: the Telegram bridge Deployment, the model gateway (Gateway, one 
 
 Pinned upstream versions: kagent and Agent Substrate 1.0.1, Gateway API CRDs 1.6.3, agentgateway v1.7.0, ToolHive 0.67.1.
 
-## Try it in 10 minutes
+## Try it in about 5 minutes
 
 Bring any model key, or a local model, and get a governed agent on a laptop-size kind cluster. No chat app is needed, and no account other than your model provider's. (Slack is the first channel for organisations, planned for release 0.4; the Telegram bridge is an optional demo.)
 
-You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 4 CPU and 8 GB or more (measured: 6 min 34 s on a hosted 4 vCPU / 16 GB runner, the node used 2.4 GiB; a laptop was not timed).
+You need `docker`, `kind`, `kubectl`, `helm`, `jq`, the Python `yq` (not mikefarah's) and `openssl`, and a Docker VM with 4 CPU and 8 GB or more (measured in CI: first answer 301 to 320 s on a hosted 4 vCPU / 16 GB runner with an empty cache, the node used about 2.4 GiB; a laptop was not timed).
 
 ```sh
 ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh      # or ./install.sh --quickstart
@@ -114,7 +122,7 @@ ANTHROPIC_API_KEY=sk-ant-... PROFILE=quickstart ./install.sh      # or ./install
 
 Model, chosen for you in this order: a key in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`), or any OpenAI-compatible endpoint (`MODEL_BASE_URL`, `MODEL_NAME`, and `MODEL_API_KEY` if it needs one); a local Ollama when you ask (`MODEL_PROVIDER=ollama MODEL_NAME=llama3.2`, optionally `OLLAMA_HOST`; Ollama must listen on all interfaces, and the cluster reaches the host at `host.docker.internal` on Docker Desktop or at the kind network gateway on Linux, which the installer looks up; this path is not tested yet); otherwise the stub. `MODEL_NAME` overrides the model name sent upstream. The installer's last lines say which model is active.
 
-No key yet? You can still try the platform's controls in 10 minutes: run `PROFILE=quickstart ./install.sh` with nothing set. A built-in **stub model** answers. It is a scripted stand-in, not a language model: it calls a tool for a vulnerability question and reports what the tool returned, and every answer says it is the stub. Use it to see the tool profile, the gate, the budget, the console and the refusals, not for answers. To switch later, run the same command with a key or endpoint above.
+No key yet? You can still try the platform's controls in minutes: run `PROFILE=quickstart ./install.sh` with nothing set. A built-in **stub model** answers. It is a scripted stand-in, not a language model: it calls a tool for a vulnerability question and reports what the tool returned, and every answer says it is the stub. Use it to see the tool profile, the gate, the budget, the console and the refusals, not for answers. To switch later, run the same command with a key or endpoint above.
 
 What you get: kagent and Agent Substrate (sandboxed agents), the model gateway (a virtual key and a token budget per agent), the tool gateway with one tool server (OSV) and one tool profile that offers one tool, the control plane and the console, the A2A gate, the bundled metrics store and Jaeger (content capture off), and one agent, `quickstart`, created from an `AgentDefinition` (`components/quickstart/agent.yaml`). Off: the Telegram bridge, channels, schedules, notify, the knowledge base and memory.
 

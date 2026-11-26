@@ -8,7 +8,7 @@ description: The problems a platform team meets when developers start to run AI 
 
 Developers in your organisation start to run AI agents. At first each team does it its own way. After some weeks, the platform team sees the same problems again and again. This page lists them and says how OpenAgentix answers each one today. Every answer links to the record of how it was proven. Where something is not built yet, the page says so.
 
-OpenAgentix is an early project. Everything here was proven on one single-node kind cluster, and the quick start also in CI on a hosted runner. Read [what works](../what-works.md) for the full status.
+OpenAgentix is an early project and not production ready. Everything here was proven on one single-node kind cluster, and the quick start also in CI on hosted runners (kind and k3s). Read [what works](../what-works.md) for the full status.
 
 ## 1. Provider keys sit in every agent pod
 
@@ -30,7 +30,7 @@ OpenAgentix is an early project. Everything here was proven on one single-node k
 
 **Not yet.** Budgets are in tokens, not money, and are counted per gateway replica. Budgets per run are planned for 0.5.
 
-## 3. Tools and the network are wide open
+## 3. Tools and the network are wide open (no least privilege)
 
 **The problem.** An agent with a shell or a generic fetch tool can call any tool and reach any host. A prompt hidden in a web page or a document can make it do so.
 
@@ -40,7 +40,7 @@ OpenAgentix is an early project. Everything here was proven on one single-node k
 
 **Not yet.** Tool servers themselves (for example `fetch`) run as normal pods; their internet access depends on your network plugin. The default kind network plugin does not enforce egress to the internet. Egress rules match host and port, not paths.
 
-## 4. No record of who called which agent
+## 4. No audit trail of who called which agent
 
 **The problem.** Anything that can reach an agent's port can call it and claim to be any user. There is no record of who asked what.
 
@@ -58,10 +58,10 @@ OpenAgentix is an early project. Everything here was proven on one single-node k
 
 **Proof.** [Control plane](../features/control-plane.md): a definition became a Ready agent in 13 to 31 s, a refused definition created nothing, delete removed everything. The quick start does the same in CI ([Quick start](../features/quick-start.md)).
 
-**Not yet.** Today the runtime is kagent on Agent Substrate. Bringing an agent built with another framework, as a container that speaks A2A, is planned for 0.3. Only one namespace was tested.
+**Not yet.** The built-in runtime is kagent on Agent Substrate. Bring your own agent, an agent built with another framework as a digest-pinned container that speaks A2A 1.0, is built and proven in CI on kind only, and off by default ([Bring your own agent](./bring-your-own-agent.md)). Only one namespace was tested.
 
 ## Built from open parts
 
-OpenAgentix does not replace the open-source projects it uses. It puts them behind adapters and adds the policy, the keys, the gate and the console. It uses open standards: MCP for tools, A2A for calling agents, OpenTelemetry for traces and metrics. The code is Apache-2.0, and the [governance rules](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md) keep the project vendor-neutral.
+OpenAgentix does not replace the open-source projects it uses. It puts them behind adapters and adds the policy, the keys, the gate and the console. It uses open standards: MCP (Model Context Protocol, hosted by the Agentic AI Foundation under the Linux Foundation) for tools, the A2A protocol (Agent2Agent, a Linux Foundation project; the platform speaks A2A 1.0) for calling agents, and OpenTelemetry for traces and metrics. The code is Apache-2.0, and the [governance rules](https://github.com/openagentix/openagentix/blob/main/GOVERNANCE.md) keep the project vendor-neutral.
 
 Next: [Concepts](./concepts.md), [Use cases](./use-cases.md), [FAQ](./faq.md).

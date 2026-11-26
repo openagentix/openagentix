@@ -17,6 +17,26 @@
 # Switches (all optional):
 #   CLUSTER=openagentix  CREATE_CLUSTER=1  KUBE_CONTEXT=<type>-$CLUSTER
 #   CLUSTER_TYPE=kind    kind (default) or k3d (k3s in Docker; docs/diary/guide/install-k3s.md). K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1 picks the k3s version.
+#   CLUSTER_TYPE=remote  an EXISTING cluster (for example GKE), run once on GKE with images built by hand (docs/diary/guide/install-gke.md). KUBE_CONTEXT is
+#                        required and its API server must answer; no cluster is created, kind and k3d are not needed, nothing runs on a node
+#                        (no docker exec, no ctr). Refused for now, before anything changes: locally built images (a registry push is issue #162:
+#                        set the SKIP_*_IMAGE switches and point the image values at a registry), QUICKSTART_BYO=1, the example skill without
+#                        SKIP_SKILL=1, and MODEL_PROVIDER=ollama without MODEL_BASE_URL.
+#   SKIP_PREFLIGHT=1     with CLUSTER_TYPE=remote, do not run hack/preflight.sh first. It reads the cluster (Kubernetes 1.37 or newer, the certificates and
+#                        admission policy APIs, Gateway API CRD bundle, default StorageClass, nodes, Pod Security labels), prints PASS/WARN/FAIL with a fix
+#                        for each, changes nothing, and stops the install on a FAIL. You can run it alone: KUBE_CONTEXT=<context> hack/preflight.sh
+#                        It also prints INFO lines (not counted): Spot nodes, and on GKE that Autopilot is not supported (it cannot detect Autopilot).
+#   SET_DEFAULT_STORAGECLASS=<name>  mark that StorageClass as the cluster default (any CLUSTER_TYPE; never done without this). For a cluster that
+#                        has classes but no default, such as GKE 1.37 rapid (usual choice there: standard-rwo, pd-balanced). Checked (read only) before
+#                        anything changes, changed in step 1 with one kubectl patch on KUBE_CONTEXT. Refused, with nothing changed, when the class does not exist
+#                        or another class is the default; nothing to do when it already is. Prints what it changed and how to undo it.
+#   SERVICE_ACCOUNT_ISSUER=https://...  the service account issuer the workload tool server trusts (container agents with a tool profile). Default: read
+#                        from the cluster (/.well-known/openid-configuration, then the kube-apiserver flag) and passed only when the chart value is not
+#                        set in a values file and differs from the chart default (kind and k3s), so the default render does not change (hack/sa-issuer.sh)
+#   ALLOW_LOCAL_CONTEXT=1  with CLUSTER_TYPE=remote, accept a KUBE_CONTEXT that is the name of a local cluster (kind-*, k3d-*, docker-desktop, ...)
+#   NODE_SETTINGS=daemonset  set the two node sysctls for gVisor pod networking (components/runtime/NOTES.md) with the privileged DaemonSet
+#                        components/runtime/node-settings.yaml (its own namespace) instead of docker exec. Default: docker exec on kind and k3d,
+#                        nothing on remote. Not proven necessary, and not run on GKE.
 #   SKIP_PREREQS=1       never touch kagent/Substrate/agentgateway/ToolHive
 #   FORCE_PREREQS=1      re-run the upstream installers even if their Helm releases exist (this re-applies
 #                        components/runtime/values/substrate.yaml and DROPS any Substrate additions made by spikes/ax)
@@ -81,8 +101,8 @@ CLUSTER=${CLUSTER:-openagentix}
 cluster_check_type || exit 1
 CTX=${KUBE_CONTEXT:-$(cluster_ctx)}
 export CLUSTER CLUSTER_TYPE KUBE_CONTEXT=$CTX   # the component scripts (runtime, gateway, tools) read all three
-NODE=$(cluster_node)
-CLUSTER_NET=$(cluster_network)
+REMOTE=0; NODE=""; CLUSTER_NET=""
+if [ "$CLUSTER_TYPE" = remote ]; then REMOTE=1; else NODE=$(cluster_node); CLUSTER_NET=$(cluster_network); fi   # remote: no node container, no Docker network
 K=${KUBECTL:-kubectl}
 RELEASE=openagentix
 RELEASE_NS=${RELEASE_NS:-openagentix-system}
@@ -100,11 +120,18 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- 0. preflight: tools and env, before anything is changed ----------------------------------------------
 need=(docker "$CLUSTER_TYPE" kubectl helm jq yq openssl shasum)
+[ "$REMOTE" = 0 ] || need=(docker kubectl helm jq yq openssl shasum)   # remote: no kind, no k3d
 missing=(); for c in "${need[@]}"; do command -v "$c" >/dev/null || missing+=("$c"); done
 [ ${#missing[@]} -eq 0 ] || die "missing tools on PATH: ${missing[*]}"
 
 CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
-secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K get secret -n "$1" "$2" >/dev/null 2>&1; }
+# remote: an existing cluster only. Stop here when its API server does not answer (nothing is created, nothing was changed).
+[ "$REMOTE" = 0 ] || [ "$CLUSTER_UP" = 1 ] || die "cannot reach the API server of kube context '$CTX' (CLUSTER_TYPE=remote never creates a cluster; check: kubectl --context $CTX get --raw /version). Nothing was changed."
+# remote: read-only checks of the cluster (hack/preflight.sh, issue #168), before anything is created. A FAIL stops here; SKIP_PREFLIGHT=1 skips it.
+if [ "$REMOTE" = 1 ] && [ "${SKIP_PREFLIGHT:-0}" != 1 ]; then log "preflight: the remote cluster"; KUBE_CONTEXT=$CTX bash hack/preflight.sh || die "the preflight found a problem in cluster '$CTX' (see the FAIL lines and their fixes above). Nothing was changed. SKIP_PREFLIGHT=1 skips the checks."; fi
+# SET_DEFAULT_STORAGECLASS (opt-in): a read-only check now, when the cluster exists; the change is made in step 1.
+if [ -n "${SET_DEFAULT_STORAGECLASS:-}" ] && [ "$CLUSTER_UP" = 1 ]; then KUBECTL=$K KUBE_CONTEXT=$CTX bash hack/default-storageclass.sh --check "$SET_DEFAULT_STORAGECLASS" || die "SET_DEFAULT_STORAGECLASS=$SET_DEFAULT_STORAGECLASS was refused (see above). Nothing was changed."; fi
+secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K --context="$CTX" get secret -n "$1" "$2" >/dev/null 2>&1; }   # named context: this runs before the switch below
 
 # The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
 for arg in "$@"; do case "$arg" in --quickstart) PROFILE=quickstart;; --minimal) PROFILE=minimal;; *) die "unknown argument: $arg (use --quickstart, --minimal, or the environment variables in the README)";; esac; done
@@ -121,6 +148,7 @@ esac
 QS_BYO=0
 if [ "${QUICKSTART_BYO:-0}" = 1 ]; then
   [ "$QS" = 1 ] || die "QUICKSTART_BYO=1 needs PROFILE=quickstart or PROFILE=minimal"
+  [ "$REMOTE" = 0 ] || die "QUICKSTART_BYO=1 does not work with CLUSTER_TYPE=remote yet: the sample image is loaded into the node and its digest read with ctr (a registry push is issue #162). Nothing was changed."
   QS_BYO=1; VALS+=(-f components/quickstart/byo-values.yaml)
 fi
 for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
@@ -128,7 +156,7 @@ if [ "$QS" = 1 ]; then
   . components/quickstart/model.sh
   QS_MODEL=$(qs_pick_model) || die "model configuration: see the line above"
   QS_OLLAMA_HOST=host.docker.internal
-  if [ "$QS_MODEL" = ollama ] && [ "$(uname -s)" = Linux ]; then   # no host.docker.internal on Linux: the cluster's Docker network gateway
+  if [ "$QS_MODEL" = ollama ] && [ "$REMOTE" = 0 ] && [ "$(uname -s)" = Linux ]; then   # no host.docker.internal on Linux: the cluster's Docker network gateway
     QS_OLLAMA_HOST=$(docker network inspect "$CLUSTER_NET" -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true); QS_OLLAMA_HOST=${QS_OLLAMA_HOST:-172.18.0.1}
   fi
   qs_model_values "$QS_MODEL" "$QS_OLLAMA_HOST" > "$QS_TMP/model-values.json"
@@ -257,6 +285,15 @@ if [ "$QS_BYO" = 1 ]; then
   log "sample container agent image $BYO_IMAGE"
 fi
 # Fail before the builds start, not after: no cluster and no permission to make one.
+if [ "$REMOTE" = 1 ]; then   # remote: no step that needs the local Docker network or a node shell (issue #161)
+  if [ "${SKIP_SKILL:-0}" != 1 ] && jq -e 'select(.kind=="AgentTemplate")|.spec.skills[]?|select(.source.oci|test("/skills/openagentix-canary@"))' <<<"$RENDERED" >/dev/null; then
+    die "CLUSTER_TYPE=remote: the example skill is pushed to a registry container on the local Docker network, which a remote cluster cannot reach. Push it to a registry yourself, set skills.openagentix-canary.oci in a values file and SKIP_SKILL=1, or leave the skill out. Nothing was changed."
+  fi
+  if [ ${#BUILD_Q[@]} -gt 0 ]; then
+    rimgs=(); for spec in "${BUILD_Q[@]}"; do rimgs+=("${spec%%|*}"); done
+    die "CLUSTER_TYPE=remote cannot load locally built images into the nodes yet (a registry push, IMAGE_REGISTRY, issue #162, is not built). These would be built: ${rimgs[*]}. Set the matching SKIP_*_IMAGE=1 and point the chart's image values at a registry the nodes can pull from. Nothing was changed."
+  fi
+fi
 [ "$CLUSTER_UP" = 1 ] || [ "${CREATE_CLUSTER:-1}" = 1 ] || die "$CLUSTER_TYPE cluster '$CLUSTER' does not exist and CREATE_CLUSTER=0"
 start_builds
 
@@ -267,8 +304,10 @@ if [ "$CLUSTER_UP" = 0 ]; then
   cluster_create "$ROOT"
 fi
 $K config use-context "$CTX" >/dev/null || die "kube context $CTX not found"
-docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null   # gVisor pod networking (see components/runtime/NOTES.md)
-docker exec "$NODE" sysctl -e -w net.ipv6.conf.all.proxy_ndp=1 >/dev/null
+if [ -n "${SET_DEFAULT_STORAGECLASS:-}" ]; then KUBECTL=$K KUBE_CONTEXT=$CTX bash hack/default-storageclass.sh "$SET_DEFAULT_STORAGECLASS" || die "could not mark StorageClass $SET_DEFAULT_STORAGECLASS as the default (see above)"; fi
+# gVisor pod networking (components/runtime/NOTES.md): kind and k3d set two node sysctls with docker exec; remote skips them, or uses the
+# DaemonSet components/runtime/node-settings.yaml with NODE_SETTINGS=daemonset (hack/cluster.sh)
+cluster_node_settings "$ROOT"
 
 # --- 2. prerequisites: reuse the component scripts, pinned versions live in those scripts ---------------------
 helm_has(){ helm status "$1" -n "$2" >/dev/null 2>&1; }
@@ -631,6 +670,26 @@ if [ -n "$CP_DEP" ]; then
     CP_CIDRS=$(kourier_apiserver_cidrs "${CONTROL_PLANE_APISERVER_CIDRS:-}" "$CP_EPS" "$CP_NODES") || die "could not find the API server address for the control plane's NetworkPolicy; set CONTROL_PLANE_APISERVER_CIDRS"
     echo "control plane: its NetworkPolicy lets it reach the API server at $CP_CIDRS"
     SET+=(--set-json "controlPlane.apiServerCIDRs=$CP_CIDRS")
+  fi
+fi
+if jq -e -s 'any(.[]; .kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")' <<<"$RENDERED" >/dev/null; then
+  # The workload tool server (ADR 0019, container agents with a tool profile) trusts one service account issuer. The chart default is kind's
+  # and k3s's; another cluster (GKE: a container.googleapis.com URL) has its own. Read it from the cluster and pass it, but only when the chart
+  # default is what renders (a values file that sets the issuer wins) and the cluster's differs (so the default render stays byte-identical).
+  # shellcheck source=hack/sa-issuer.sh
+  . hack/sa-issuer.sh
+  SA_DISC=$($K --context="$CTX" get --raw /.well-known/openid-configuration 2>/dev/null || true)
+  SA_PODS=""; [ -n "$SA_DISC" ] || SA_PODS=$($K --context="$CTX" get pods -n kube-system -l component=kube-apiserver -o json 2>/dev/null || true)
+  SA_DEFAULT=$(yq -r .controlPlane.containerAgents.serviceAccountTokens.issuer "$CHART/values.yaml")
+  SA_RENDERED=$(jq -r -s '.[]|select(.kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")|.spec.kubernetesServiceAccount.issuer' <<<"$RENDERED")
+  if SA_CLUSTER=$(sa_issuer "${SERVICE_ACCOUNT_ISSUER:-}" "$SA_DISC" "$SA_PODS"); then
+    SA_SET=$(sa_issuer_set_value "$SA_CLUSTER" "$SA_RENDERED" "$SA_DEFAULT")
+    if [ -n "$SA_SET" ]; then
+      echo "workload tool server: the cluster's service account issuer is $SA_SET"
+      SET+=(--set-string "controlPlane.containerAgents.serviceAccountTokens.issuer=$SA_SET")
+    fi
+  else
+    echo "WARNING: could not read the cluster's service account issuer; the workload tool server keeps '$SA_RENDERED'. Set SERVICE_ACCOUNT_ISSUER or controlPlane.containerAgents.serviceAccountTokens.issuer if it is wrong." >&2
   fi
 fi
 if [ -n "$CN_DEP" ]; then

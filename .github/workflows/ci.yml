@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       heavy: ${{ steps.diff.outputs.heavy }}
+      docs: ${{ steps.diff.outputs.docs }}
       go_matrix: ${{ steps.matrix.outputs.go_matrix }}
       image_matrix: ${{ steps.matrix.outputs.image_matrix }}
     steps:
@@ -137,6 +138,13 @@ jobs:
           hack/ci/verify-release-test.sh
           hack/ci/kind-image-digest-test.sh
           components/quickstart/tests/run.sh
+          hack/ci/cluster-test.sh
+          hack/ci/preflight-test.sh
+          hack/ci/default-storageclass-test.sh
+          hack/ci/sa-issuer-test.sh
+          hack/ci/uninstall-test.sh
+          hack/gke/tests/run.sh
+          components/runtime/tests/run.sh
       - name: reference docs tests
         run: |
           pip install --quiet pyyaml==6.0.2 jsonschema==4.26.0
@@ -380,10 +388,35 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------------------------------------------
+  docs:
+    # Builds the Docusaurus site (website/) so a broken link fails the pull request. The site is set to fail on a broken link or
+    # broken markdown link. Nothing is deployed here; docs.yml deploys from main. Local: `cd website && npm ci && npm run build`.
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10            # about 2-3 minutes
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0           # the site shows last-updated dates from git history
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+        working-directory: website
+      - run: npm run build
+        working-directory: website
+        env:
+          DO_NOT_TRACK: '1'
+
+  # ---------------------------------------------------------------------------------------------------------------
   ci-ok:
     # The one required status check. Skipped jobs (docs-only change) count as passing; failed or cancelled ones do not.
     if: always()
-    needs: [changes, go, chart, shell, integration, python-samples, secrets, images, guard, apiserver, console, console-audit, console-e2e]
+    needs: [changes, go, chart, shell, integration, python-samples, secrets, images, guard, apiserver, console, console-audit, console-e2e, docs]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

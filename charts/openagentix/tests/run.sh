@@ -188,7 +188,7 @@ eq "vMCP: sources are egress proxy and kagent controller" "$(q "$D" "$VP|[.spec.
 eq "vMCP: egress source scoped to ate-system namespace" "$(q "$D" "$VP|[.spec.ingress[].from[]|select(.podSelector.matchLabels.app==\"atenet-egress\")|.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]]|join(\",\")")" ate-system
 eq "controller policy lives in kagent"                 "$(q "$D" "$CP|.metadata.namespace")" kagent
 eq "controller policy selects the controller pod"      "$(q "$D" "$CP|.spec.podSelector.matchLabels[\"app.kubernetes.io/component\"]")" controller
-eq "controller: 8083 sources are bridge pod, kagent UI pods, egress proxy" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|(.podSelector.matchLabels|if .==null then \"any-pod\" else to_entries[0].value end)]|sort|join(\",\")")" atenet-egress,telegram-bridge,ui
+eq "controller: 8083 sources are bridge pod, kagent UI pods, egress proxy, the controller itself" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|(.podSelector.matchLabels|if .==null then \"any-pod\" else to_entries[0].value end)]|sort|join(\",\")")" atenet-egress,controller,telegram-bridge,ui
 eq "controller: bridge source is pod-scoped (ns AND pod label in one entry)" "$(q "$D" "$CP|[.spec.ingress[].from[]?|select(.podSelector.matchLabels.app==\"telegram-bridge\")|.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]]|join(\",\")")" openagentix-gateway
 eq "controller: ports other than 8083 stay open"       "$(q "$D" "$CP|[.spec.ingress[]|select(has(\"from\")|not)|.ports[]|(.port|tostring)+\"-\"+(.endPort|tostring)]|sort|join(\",\")")" 1-8082,8084-65535
 UP='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-kagent-ui")'
@@ -199,6 +199,7 @@ eq "kagentUI.allowFrom adds a peer scoped by namespace AND pod labels, on the UI
 eq "kagentUI.allowFrom without podLabels admits the namespace" "$(q "$(docs --set 'networkPolicy.kagentUI.allowFrom[0].namespace=ops')" "$UP|.spec.ingress[0].from[0]|has(\"podSelector\")|tostring")" false
 eq "kagent.enabled=false renders no UI policy"        "$(count "$(docs --set kagent.enabled=false)" '.kind=="NetworkPolicy" and .metadata.name=="openagentix-kagent-ui"')" 0
 eq "no controller peer admits the whole kagent namespace" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|select(has(\"podSelector\")|not)]|length")" 0
+eq "the controller is its own 8083 peer (kagent-api RemoteMCPServer calls itself): kagent ns AND controller pod labels" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|select(.podSelector.matchLabels[\"app.kubernetes.io/component\"]==\"controller\" and .podSelector.matchLabels[\"app.kubernetes.io/name\"]==\"kagent\")|.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]]|join(\",\")")" kagent
 eq "the UI pods are a controller peer (the UI proxies /api to it)" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|select(.podSelector.matchLabels[\"app.kubernetes.io/component\"]==\"ui\")|.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]]|join(\",\")")" kagent
 D=$(docs --set networkPolicy.enabled=false)
 eq "networkPolicy.enabled=false renders none (also in the knowledge ns)" "$(count "$D" '.kind=="NetworkPolicy"')" 0
@@ -468,8 +469,8 @@ networkPolicy:
     - namespace: other-ns
 YAML
 D2=$(docs -f "$EX"); rm -f "$EX"
-eq "default render: controller policy has 3 sources on 8083" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 3
-eq "extraA2ACallers adds two sources to 8083"          "$(q "$D2" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 5
+eq "default render: controller policy has 4 sources on 8083" "$(q "$D" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 4
+eq "extraA2ACallers adds two sources to 8083"          "$(q "$D2" "$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 6
 eq "extra caller is scoped by namespace AND pod labels" "$(q "$D2" "$CP|[.spec.ingress[].from[]?|select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"agent-kourier\")|.podSelector.matchLabels[\"app.kubernetes.io/name\"]]|join(\",\")")" agent-kourier
 eq "extra caller without podLabels admits its whole namespace" "$(q "$D2" "$CP|[.spec.ingress[].from[]?|select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"other-ns\")|has(\"podSelector\")]|join(\",\")")" false
 eq "extra callers do not open the other ports"         "$(q "$D2" "$CP|[.spec.ingress[]|select(has(\"from\")|not)|.ports[]|(.port|tostring)+\"-\"+(.endPort|tostring)]|sort|join(\",\")")" 1-8082,8084-65535
@@ -581,11 +582,11 @@ KP='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-kagent-co
 Dd=$(docs)
 eq "controller policy has no Kourier peer by default"  "$(q "$Dd" "$KP|[.spec.ingress[].from[]?|select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"agent-kourier\")]|length")" 0
 eq "enabled: controller policy admits the Kourier pod (namespace AND pod labels)" "$(q "$D" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"agent-kourier\")|.podSelector.matchLabels[\"app.kubernetes.io/name\"]]|join(\",\")")" agent-kourier
-eq "enabled: 8083 has one more source than the default (4)" "$(q "$D" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 4
+eq "enabled: 8083 has one more source than the default (5)" "$(q "$D" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 5
 EXC="$(dirname "$0")/.extra2.yaml"
 printf 'networkPolicy:\n  extraA2ACallers:\n    - namespace: other-ns\n' > "$EXC"
 D2=$(docs -f "$CHF" -f "$EXC" $KAPI); rm -f "$EXC"
-eq "extraA2ACallers still works next to the Kourier peer (5)" "$(q "$D2" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 5
+eq "extraA2ACallers still works next to the Kourier peer (6)" "$(q "$D2" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 6
 D3=$(docs -f "$CHF" $KAPI --set networkPolicy.enabled=false)
 eq "networkPolicy.enabled=false: no controller policy, so no peer" "$(count "$D3" '.kind=="NetworkPolicy"')" 0
 D4=$(docs -f "$CHF" $KAPI --set channels.connections=null --set channels.bindings=null)
@@ -673,7 +674,7 @@ eq "no Secret objects, no stringData"                  "$(count "$D" '.kind=="Se
 echo "# schedules: network policy"
 KP='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-kagent-controller")'
 eq "controller policy admits the schedule pods: namespace AND pod label" "$(q "$D" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]|select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"openagentix-schedules\")|.podSelector.matchLabels[\"openagentix.io/component\"]]|join(\",\")")" schedule
-eq "8083 has exactly one more source than the default (4)" "$(q "$D" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 4
+eq "8083 has exactly one more source than the default (5)" "$(q "$D" "$KP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]|length")" 5
 eq "the other ports stay as before"                    "$(q "$D" "$KP|[.spec.ingress[]|select(has(\"from\")|not)|.ports[]|(.port|tostring)+\"-\"+(.endPort|tostring)]|sort|join(\",\")")" 1-8082,8084-65535
 EP='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-schedules-egress")'
 eq "egress policy selects exactly the schedule pods"   "$(q "$D" "$EP|.metadata.namespace+\" \"+(.spec.podSelector.matchLabels|tojson)")" 'openagentix-schedules {"openagentix.io/component":"schedule"}'
@@ -1137,9 +1138,9 @@ eq "source hash lands on the pod template"             "$(q "$(docs "${GON[@]}" 
 echo "# governance: network policies"
 CP='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-kagent-controller")'
 P83="$CP|[.spec.ingress[]|select(any(.ports[]?;.port==8083))|.from[]]"
-eq "port 8083 has exactly three sources"               "$(q "$DG" "$P83|length")" 3
-eq "port 8083 sources: the gate, atenet-egress, kagent" "$(q "$DG" "$P83|map(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]+\"/\"+((.podSelector.matchLabels.app // \"*\")))|sort|join(\",\")")" "ate-system/atenet-egress,kagent/*,openagentix-gateway/a2a-gate"
-eq "gate on: the kagent peer of 8083 is the UI pods only" "$(q "$DG" "$P83|map(select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"kagent\"))|map(.podSelector.matchLabels[\"app.kubernetes.io/component\"])|join(\",\")")" ui
+eq "port 8083 has exactly four sources (the controller itself is one)" "$(q "$DG" "$P83|length")" 4
+eq "port 8083 sources: the gate, atenet-egress, kagent" "$(q "$DG" "$P83|map(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]+\"/\"+((.podSelector.matchLabels.app // \"*\")))|sort|join(\",\")")" "ate-system/atenet-egress,kagent/*,kagent/*,openagentix-gateway/a2a-gate"
+eq "gate on: the kagent peers of 8083 are the controller itself and the UI pods only" "$(q "$DG" "$P83|map(select(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"kagent\"))|map(.podSelector.matchLabels[\"app.kubernetes.io/component\"])|sort|join(\",\")")" controller,ui
 eq "the Kourier and schedule namespaces are no longer peers of 8083" "$(q "$DG" "$P83|map(.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"])|map(select(.==\"agent-kourier\" or .==\"openagentix-schedules\"))|length")" 0
 eq "the bridge pod is not a peer of 8083"              "$(q "$DG" "$P83|map(select(.podSelector.matchLabels.app==\"telegram-bridge\"))|length")" 0
 eq "the port ranges around 8083 stay as they were"     "$(q "$DG" "$CP|[.spec.ingress[]|select(has(\"from\")|not)|.ports[]|(.port|tostring)+\"-\"+(.endPort|tostring)]|sort|join(\",\")")" 1-8082,8084-65535
