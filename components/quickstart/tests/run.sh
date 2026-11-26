@@ -125,6 +125,8 @@ else
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up QUICKSTART_BYO=1); eq "remote with QUICKSTART_BYO=1 is refused" "$(/usr/bin/grep -c 'QUICKSTART_BYO=1 does not work with CLUSTER_TYPE=remote yet' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up MODEL_PROVIDER=ollama); eq "remote with a local Ollama is refused (issue #170)" "$(/usr/bin/grep -c 'needs MODEL_BASE_URL' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
   OUT=$(rinst KUBE_CONTEXT=gke_p_z_c FAKE_API=up ANTHROPIC_API_KEY=x TELEGRAM_BOT_TOKEN=y SKIP_BRIDGE_IMAGE=1 SKIP_KB_IMAGE=1); eq "remote with the example skill: refused, says SKIP_SKILL=1" "$(/usr/bin/grep -c 'example skill.*SKIP_SKILL=1' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  OUT=$(rinst KUBE_CONTEXT=gke_p_z_c FAKE_API=up)   # default chart, no key: the preflight looks for the key Secrets in the cluster
+  eq "the preflight reads Secrets from the named context only (never the current one)" "$(/usr/bin/grep -c ' get secret ' "$RT/calls" | awk '{print ($1>0)?"some":"none"}')/$(/usr/bin/grep ' get secret ' "$RT/calls" | /usr/bin/grep -vc -- '--context=gke_p_z_c')" some/0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up NODE_SETTINGS=bogus); eq "an unknown NODE_SETTINGS is refused at the start" "$(/usr/bin/grep -c "unknown NODE_SETTINGS 'bogus'" <<<"$OUT")" 1
 fi
 eq "the install.sh header lists CLUSTER_TYPE=remote, ALLOW_LOCAL_CONTEXT and NODE_SETTINGS" "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -cE 'CLUSTER_TYPE=remote|ALLOW_LOCAL_CONTEXT=1|NODE_SETTINGS=daemonset' | awk '{print ($1>=3)?"yes":"no"}')" yes

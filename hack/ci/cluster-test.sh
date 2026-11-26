@@ -105,7 +105,7 @@ KUBE_CONTEXT=$R run remote cluster_node_settings . >"$D/out"; t "remote: node se
 t "remote: node settings run no docker exec by default" "$(calls)" ""
 t "remote: the skip is said" "$(grep -c 'skipped on a remote cluster' "$D/out")" 1
 NODE_SETTINGS=daemonset KUBE_CONTEXT=$R run remote cluster_node_settings . >/dev/null
-t "NODE_SETTINGS=daemonset applies the manifest and waits, no docker exec" "$(calls)" "kubectl apply -f ./components/runtime/node-settings.yaml;kubectl -n openagentix-node-settings rollout status ds/node-settings --timeout=180s;"
+t "NODE_SETTINGS=daemonset applies the manifest and waits, no docker exec" "$(calls)" "kubectl --context $R apply -f ./components/runtime/node-settings.yaml;kubectl --context $R -n openagentix-node-settings rollout status ds/node-settings --timeout=180s;"
 : > "$D/calls"
 for f in cluster_check_type cluster_ctx cluster_exists cluster_create cluster_node cluster_network cluster_load_images cluster_ctr cluster_delete_hint cluster_node_settings; do
   KUBE_CONTEXT=$R run remote "$f" . >/dev/null 2>&1

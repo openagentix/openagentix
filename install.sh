@@ -116,7 +116,7 @@ missing=(); for c in "${need[@]}"; do command -v "$c" >/dev/null || missing+=("$
 CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
 # remote: an existing cluster only. Stop here when its API server does not answer (nothing is created, nothing was changed).
 [ "$REMOTE" = 0 ] || [ "$CLUSTER_UP" = 1 ] || die "cannot reach the API server of kube context '$CTX' (CLUSTER_TYPE=remote never creates a cluster; check: kubectl --context $CTX get --raw /version). Nothing was changed."
-secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K get secret -n "$1" "$2" >/dev/null 2>&1; }
+secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K --context="$CTX" get secret -n "$1" "$2" >/dev/null 2>&1; }   # named context: this runs before the switch below
 
 # The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
 for arg in "$@"; do case "$arg" in --quickstart) PROFILE=quickstart;; --minimal) PROFILE=minimal;; *) die "unknown argument: $arg (use --quickstart, --minimal, or the environment variables in the README)";; esac; done

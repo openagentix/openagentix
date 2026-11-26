@@ -92,8 +92,9 @@ cluster_delete_hint(){
 # The two sysctls upstream sets for gVisor pod networking (components/runtime/NOTES.md: never proven necessary here).
 cluster_node_settings(){
   if [ "${NODE_SETTINGS:-}" = daemonset ]; then
-    ${KUBECTL:-kubectl} apply -f "${1:-.}/components/runtime/node-settings.yaml" >/dev/null
-    ${KUBECTL:-kubectl} -n openagentix-node-settings rollout status ds/node-settings --timeout=180s
+    local ctx=${KUBE_CONTEXT:-$(cluster_ctx)}   # named, not the current context: this applies a privileged workload
+    ${KUBECTL:-kubectl} --context "$ctx" apply -f "${1:-.}/components/runtime/node-settings.yaml" >/dev/null
+    ${KUBECTL:-kubectl} --context "$ctx" -n openagentix-node-settings rollout status ds/node-settings --timeout=180s
     return
   fi
   if [ "$CLUSTER_TYPE" = remote ]; then

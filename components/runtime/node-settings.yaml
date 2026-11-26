@@ -4,8 +4,11 @@
 # What it does: on every node, in the node's network namespace (hostNetwork), it sets net.ipv4.conf.all.proxy_arp=1 and, when the node has
 # IPv6, net.ipv6.conf.all.proxy_ndp=1 (upstream Substrate's hack/create-kind-cluster.sh sets them for gVisor pod networking), then sleeps.
 # Why privileged: these sysctls are not namespaced for a pod and are not on GKE's list of node system settings, so only a privileged pod on
-# the host network can write them. The privilege is confined to this namespace (Pod Security "privileged" here only), the pod has no API
-# token, and the image is the one Substrate's PostgreSQL already uses (pinned by digest; its busybox has sysctl).
+# the host network can write them. Only the init container is privileged, and only for the two writes; the container that stays is a
+# non-root, read-only sleep with no capabilities. The privilege is confined to this namespace (Pod Security "privileged" here only), the pod
+# has no API token, it tolerates no taint (dedicated or tainted node pools are left alone), and the image is the one Substrate's PostgreSQL
+# already uses (pinned by digest; its busybox has sysctl). Anyone who may create or exec into pods in this namespace is root on the node:
+# give nobody that right. GKE Autopilot refuses it (Substrate does not support Autopilot either). uninstall.sh deletes the namespace.
 #
 # Status: NOT run on GKE or any managed cluster. components/runtime/NOTES.md says the sysctls were never proven necessary even on kind;
 # the first live run decides whether this is needed at all (docs/diary/guide/install-gke.md). Remove with:
@@ -39,10 +42,8 @@ spec:
       hostNetwork: true
       automountServiceAccountToken: false
       enableServiceLinks: false
-      tolerations:
-        - operator: Exists
       terminationGracePeriodSeconds: 1
-      containers:
+      initContainers:
         - name: sysctl
           image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
           command: ["/bin/sh", "-c"]
@@ -50,10 +51,27 @@ spec:
             - >-
               set -e;
               sysctl -w net.ipv4.conf.all.proxy_arp=1;
-              if [ -e /proc/sys/net/ipv6/conf/all/proxy_ndp ]; then sysctl -w net.ipv6.conf.all.proxy_ndp=1; fi;
-              exec sleep 2147483647
+              if [ -e /proc/sys/net/ipv6/conf/all/proxy_ndp ]; then sysctl -w net.ipv6.conf.all.proxy_ndp=1; fi
           securityContext:
             privileged: true
           resources:
             requests: {cpu: 1m, memory: 8Mi}
             limits: {memory: 32Mi}
+      containers:
+        - name: sleep
+          image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          command: ["/bin/sh", "-c"]
+          args: ["exec sleep 2147483647"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: 1m, memory: 4Mi}
+            limits: {memory: 16Mi}

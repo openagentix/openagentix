@@ -67,5 +67,6 @@ t "remote: the deletes happen, on KUBE_CONTEXT" "$(calls | grep '^kubectl ' | gr
 t "remote: at least one delete was attempted" "$(calls | grep '^kubectl ' | grep -c ' delete ' | awk '{print ($1>0)?"yes":"no"}')" yes
 t "remote: every helm call names KUBE_CONTEXT" "$(calls | grep '^helm ' | grep -vc -- "--kube-context $R")" 0
 t "remote: no cluster delete is attempted (no kind, k3d, docker, gcloud)" "$(calls | grep -cE '^(kind|k3d|docker|gcloud) ')" 0
+t "remote: removes the opt-in node-settings namespace (privileged DaemonSet) on that context" "$(calls | grep -c "^kubectl --context=$R delete namespace openagentix-node-settings --ignore-not-found")" 1
 t "remote: prints the cloud teardown reminder" "$(grep -c 'load balancers and disks' <<<"$OUT")" 1
 exit $F

@@ -23,6 +23,7 @@
 # ConfigMap (llm-api-keys-control-plane); the key Secrets of built agents are deleted with their definitions (owner reference).
 # Console (ADR 0007, slice 3): the Deployment, Service, NetworkPolicy, ServiceAccount, Role and RoleBinding go with the release. The login token Secret
 # (console-token) is kept, so a later ./install.sh keeps the same token; PURGE_SECRETS=1 deletes it.
+# NODE_SETTINGS=daemonset: the namespace openagentix-node-settings (its privileged DaemonSet) is always deleted.
 # Context (issue #169): CLUSTER_TYPE=kind (default) or k3d use <type>-$CLUSTER unless KUBE_CONTEXT is set; CLUSTER_TYPE=remote needs KUBE_CONTEXT
 # (a local context name is refused unless ALLOW_LOCAL_CONTEXT=1, see hack/cluster.sh). Every kubectl and helm call names that context, and nothing
 # is removed unless it exists, is the current context after the switch and (remote) its API server answers. This script never deletes a cluster;
@@ -83,6 +84,8 @@ if [ "${PURGE_DATA:-0}" = 1 ]; then   # the knowledge base's data: database volu
   $K delete pvc memory-embeddings-models -n openagentix-memory --ignore-not-found   # memory embedding model cache (saved memories live in kagent's PostgreSQL)
   $K delete crd agentdefinitions.openagentix.io --ignore-not-found   # kept by the release; deleting it deletes any definition left (there should be none)
 fi
+# the opt-in node settings (NODE_SETTINGS=daemonset): a privileged DaemonSet must not outlive the platform. The sysctls stay set until a node restarts.
+$K delete namespace openagentix-node-settings --ignore-not-found
 echo "removed release openagentix. Upstream components and namespaces were left in place."
 if [ "$CLUSTER_TYPE" = remote ]; then
   echo "remote cluster ($CTX): this script deletes no cluster. Cloud load balancers and disks can outlive a deleted cluster and keep costing money:"

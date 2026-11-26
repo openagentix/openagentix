@@ -61,14 +61,16 @@ eq "the namespace is its own" "$(jq -r 'select(.kind=="Namespace")|.metadata.nam
 eq "privileged is allowed only in that namespace" "$(jq -r 'select(.kind=="Namespace")|.metadata.labels["pod-security.kubernetes.io/enforce"]' <<<"$DOCS")" privileged
 eq "the DaemonSet is in that namespace" "$(ds | jq -r '.metadata.namespace+"/"+.metadata.name')" openagentix-node-settings/node-settings
 eq "hostNetwork (the node's network namespace)" "$(ds | jq -r '.spec.template.spec.hostNetwork')" true
-eq "one container, privileged" "$(ds | jq -r '[.spec.template.spec.containers[].securityContext.privileged]|tostring')" '[true]'
+eq "one init container, privileged; it does the work" "$(ds | jq -r '[.spec.template.spec.initContainers[].securityContext.privileged]|tostring')" '[true]'
+eq "the running container is not privileged and not root" "$(ds | jq -c '.spec.template.spec.containers[0].securityContext|[.privileged//false,.runAsNonRoot,.allowPrivilegeEscalation,.readOnlyRootFilesystem,.capabilities.drop]')" '[false,true,false,true,["ALL"]]'
+eq "one running container only" "$(ds | jq -r '.spec.template.spec.containers|length')" 1
 eq "no API token in the pod" "$(ds | jq -r '.spec.template.spec.automountServiceAccountToken')" false
-CMD=$(ds | jq -r '.spec.template.spec.containers[0].args|join(" ")')
+CMD=$(ds | jq -r '.spec.template.spec.initContainers[0].args|join(" ")')
 eq "it sets proxy_arp" "$(grep -c 'sysctl -w net.ipv4.conf.all.proxy_arp=1' <<<"$CMD")" 1
 eq "it sets proxy_ndp" "$(grep -c 'sysctl -w net.ipv6.conf.all.proxy_ndp=1' <<<"$CMD")" 1
-eq "then it sleeps" "$(grep -c 'exec sleep' <<<"$CMD")" 1
-eq "the image is pinned by digest" "$(ds | jq -r '.spec.template.spec.containers[0].image' | grep -cE '@sha256:[0-9a-f]{64}$')" 1
-eq "it runs on every node (tolerates every taint)" "$(ds | jq -c '.spec.template.spec.tolerations')" '[{"operator":"Exists"}]'
+eq "then the running container only sleeps" "$(ds | jq -r '.spec.template.spec.containers[0].args|join(" ")' | grep -c '^exec sleep')" 1
+eq "both images are pinned by digest" "$(ds | jq -r '.spec.template.spec|(.initContainers+.containers)[].image' | grep -cE '@sha256:[0-9a-f]{64}$')" 2
+eq "no toleration: tainted (dedicated) nodes are left alone" "$(ds | jq -c '.spec.template.spec.tolerations // []')" '[]'
 eq "the selector matches the pod labels" "$(ds | jq -r '(.spec.selector.matchLabels|to_entries) - (.spec.template.metadata.labels|to_entries) == []')" true
 eq "nothing applies it by default (only cluster_node_settings, behind NODE_SETTINGS=daemonset)" "$(grep -lE '^[^#]*node-settings\.yaml' "$HERE/../../install.sh" "$HERE/up.sh" "$HERE/../../hack/cluster.sh" | sed 's|.*/||' | tr '\n' ' ')" "cluster.sh "
 
