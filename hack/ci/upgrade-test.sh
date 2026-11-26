@@ -79,7 +79,15 @@ EOS
 # placeholders only: the install needs a provider key and a bot token to exist, and nothing in this test calls a model or Telegram
 PLACEHOLDERS=(ANTHROPIC_API_KEY=ci-placeholder-not-a-real-key TELEGRAM_BOT_TOKEN=0:ci-placeholder-not-a-real-token TELEGRAM_ALLOWED_CHAT_IDS=0)
 extract_old(){ OLD="$W/old"; mkdir -p "$OLD" && git -C "$REPO" archive "$FROM" | tar -x -C "$OLD"; }
-old_install(){ ( cd "$OLD" && env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh ); }
+old_install(){
+  # Finding on v0.2.0 (fixed in main, only the old tag has it): with bridge.enabled=false it still writes the Telegram Secret into the namespace openagentix-gateway before that
+  # namespace exists, and stops. The namespace is created, then the installer runs again (it is meant to be re-run), as a user of v0.2.0 would.
+  if ( cd "$OLD" && env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh ) >"$W/old-first.log" 2>&1; then cat "$W/old-first.log"; return 0; fi
+  cat "$W/old-first.log"
+  grep -q 'namespaces "openagentix-gateway" not found' "$W/old-first.log" || return 1
+  echo "NOTE: $FROM stopped at its Telegram Secret (namespace openagentix-gateway missing with the bridge off); creating the namespace and running its installer again"
+  $K create namespace openagentix-gateway && ( cd "$OLD" && env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh )
+}
 new_install_a(){ env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A" ./install.sh; }
 new_install_b(){ env "${PLACEHOLDERS[@]}" VALUES_FILE="$VALUES_A $VALUES_B" ./install.sh; }
 OLD_INSTALL=${UPGRADE_OLD_INSTALL:-old_install}; NEW_INSTALL_A=${UPGRADE_NEW_INSTALL:-new_install_a}; NEW_INSTALL_B=${UPGRADE_NEW_INSTALL_B:-new_install_b}
@@ -115,7 +123,7 @@ seed(){
 sha(){ shasum -a 256 | cut -c1-16; }
 state(){
   {
-    $K get agents.kagent.dev -n "$KAGENT_NS" -o json 2>/dev/null | jq -r '.items[]?|["agent/"+.metadata.namespace+"/"+.metadata.name,.metadata.uid]|@tsv'
+    $K get agents.api.kagent.dev -n "$KAGENT_NS" -o json 2>/dev/null | jq -r '.items[]?|["agent/"+.metadata.namespace+"/"+.metadata.name,.metadata.uid]|@tsv'
     $K get cronjobs -A -o json 2>/dev/null | jq -r --arg re "$NS_RE" '.items[]?|select(.metadata.namespace|test($re))|["cronjob/"+.metadata.namespace+"/"+.metadata.name,.metadata.uid+" suspend="+(.spec.suspend|tostring)]|@tsv'
     $K get pvc -A -o json 2>/dev/null | jq -r --arg re "$NS_RE" '.items[]?|select(.metadata.namespace|test($re))|["pvc/"+.metadata.namespace+"/"+.metadata.name,.metadata.uid]|@tsv'
     # Secrets: content hashed. The agent's gateway key and the knowledge base's Secrets; kagent's own Secrets are excluded (the controller rotates them)
@@ -129,7 +137,7 @@ state(){
     psql_kagent "select count(*) || ' ' || coalesce(md5(string_agg(content, '|' order by content)),'') from kagent.memory where agent_name='$KAGENT_NS/$AGENT' and user_id='upgrade-test'" 2>/dev/null | while IFS= read -r l; do printf 'memory/upgrade-test\t%s\n' "$l"; done
   } | sort
 }
-agent_ready(){ $K wait "agent.kagent.dev/$AGENT" -n "$KAGENT_NS" --for=condition=Ready --timeout="${AGENT_READY_WAIT:-300s}" >/dev/null 2>&1; }
+agent_ready(){ $K wait "agent.api.kagent.dev/$AGENT" -n "$KAGENT_NS" --for=condition=Ready --timeout="${AGENT_READY_WAIT:-300s}" >/dev/null 2>&1; }
 healthy(){ # healthy <label>
   local out="" _
   for _ in $(seq 1 "${HEALTH_WAIT:-240}"); do
@@ -157,7 +165,7 @@ if [ -z "${UPGRADE_OLD_INSTALL:-}" ]; then
   extract_old && ok "extracted $FROM with git archive ($(git rev-parse --short "$FROM^{commit}"))" || { bad "git archive $FROM failed"; summary; }
 fi
 run "install $FROM (placeholder keys, bridge off, one schedule)" $OLD_INSTALL
-agent_ready && ok "agent $AGENT is Ready on $FROM" || bad "agent $AGENT is not Ready on $FROM (nothing to upgrade from)" "$($K get agent.kagent.dev "$AGENT" -n "$KAGENT_NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-600)"
+agent_ready && ok "agent $AGENT is Ready on $FROM" || bad "agent $AGENT is not Ready on $FROM (nothing to upgrade from)" "$($K get agent.api.kagent.dev "$AGENT" -n "$KAGENT_NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-600)"
 healthy "on $FROM"
 run "seed state (a knowledge base document, a memory row)" seed
 state > "$W/state-old"
@@ -172,7 +180,7 @@ REV_OLD=$($HELM status "$RELEASE" -n "$RELEASE_NS" -o json 2>/dev/null | jq -r '
 # ---- 2. upgrade A: this checkout, same values -------------------------------------------------------------------------------------------
 echo "# 2. upgrade A: ./install.sh of this checkout, same values, no manual step"
 run "upgrade to this checkout ($(git -C "$REPO" rev-parse --short HEAD 2>/dev/null))" $NEW_INSTALL_A
-agent_ready && ok "agent $AGENT is Ready after the upgrade" || bad "agent $AGENT is not Ready after the upgrade" "$($K get agent.kagent.dev "$AGENT" -n "$KAGENT_NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-600)"
+agent_ready && ok "agent $AGENT is Ready after the upgrade" || bad "agent $AGENT is not Ready after the upgrade" "$($K get agent.api.kagent.dev "$AGENT" -n "$KAGENT_NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-600)"
 healthy "after upgrade A"
 check "helm release is deployed" "$($HELM status "$RELEASE" -n "$RELEASE_NS" -o json 2>/dev/null | jq -r '.info.status // "unknown"')" deployed
 REV_A=$($HELM status "$RELEASE" -n "$RELEASE_NS" -o json 2>/dev/null | jq -r '.version // empty')

@@ -35,7 +35,7 @@ cat > "$D/bin/kubectl" <<EOS
 #!/usr/bin/env bash
 a="\$*"
 case "\$a" in
-  "get agents.kagent.dev -n kagent -o json") cat "$D/w/agents.json";;
+  "get agents.api.kagent.dev -n kagent -o json") cat "$D/w/agents.json";;
   "get cronjobs -A -o json") cat "$D/w/cronjobs.json";;
   "get pvc -A -o json") cat "$D/w/pvc.json";;
   "get secrets -A -o json") cat "$D/w/secrets.json";;
@@ -44,7 +44,7 @@ case "\$a" in
   "get crd agentdefinitions.openagentix.io -o jsonpath="*) [ -f "$D/w/crd" ] && printf True;;
   "get crd agentdefinitions.openagentix.io") [ -f "$D/w/crd" ] || exit 1;;
   "get agentdefinition upgrade-check"*) echo '{}';;
-  "wait agent.kagent.dev/assistant"*) [ -f "$D/w/notready" ] && exit 1;;
+  "wait agent.api.kagent.dev/assistant"*) [ -f "$D/w/notready" ] && exit 1;;
   "wait agentdefinition/upgrade-check"*) [ -f "$D/w/defnotready" ] && exit 1;;
   *"kagent-pg-0 -- psql"*) case "\$a" in *"insert into"*) ;; *) cat "$D/w/memory";; esac;;
 esac

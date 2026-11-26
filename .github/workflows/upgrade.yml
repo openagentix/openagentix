@@ -65,7 +65,7 @@ jobs:
         run: |
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
-          kubectl get agents.kagent.dev,agentdefinitions.openagentix.io -A -o yaml | head -200 || true
+          kubectl get agents.api.kagent.dev,agentdefinitions.openagentix.io -A -o yaml | head -200 || true
           helm list -A || true
           helm history openagentix -n openagentix-system || true
           kubectl logs -n kagent deploy/kagent-controller --tail=80 || true
