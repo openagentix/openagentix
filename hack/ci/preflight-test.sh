@@ -25,7 +25,7 @@ CERT_V1='{"resources":[{"name":"clustertrustbundles"},{"name":"podcertificatereq
 VAP='{"resources":[{"name":"validatingadmissionpolicies"},{"name":"validatingadmissionpolicybindings"}]}'
 SC_DEFAULT='{"items":[{"metadata":{"name":"standard-rwo","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}]}'
 DS_ANETD='{"items":[{"metadata":{"name":"anetd"}},{"metadata":{"name":"kube-proxy"}}]}'
-NODE_OK='{"items":[{"metadata":{"name":"n1"},"spec":{"providerID":"gce://p/z/n1"},"status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"architecture":"amd64"},"allocatable":{"cpu":"3920m","memory":"14000000Ki"}}}]}'
+NODE_OK='{"items":[{"metadata":{"name":"n1","labels":{"node.kubernetes.io/instance-type":"c3-standard-4","cloud.google.com/gke-nodepool":"default-pool"}},"spec":{"providerID":"gce://p/z/n1"},"status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"architecture":"amd64"},"allocatable":{"cpu":"3920m","memory":"14000000Ki"}}}]}'
 NS_NONE='{"items":[{"metadata":{"name":"default"}},{"metadata":{"name":"kube-system"}}]}'
 good(){   # a cluster where every check passes (the network policy line is always a warning)
   reset
@@ -54,7 +54,10 @@ t "pod security, nothing enforced" "$(line "$OUT" 'Pod Security')" "PASS  Pod Se
 t "remote context" "$(line "$OUT" 'kube context')" "PASS  kube context              gke_p_z_c does not look like a local cluster"
 t "network policy: always a warning, names what was found, claims nothing" "$(line "$OUT" 'NetworkPolicy')" "WARN  NetworkPolicy            found anetd (GKE Dataplane V2, Cilium based). A name is not proof that NetworkPolicy is enforced."
 t "network policy fix names the live check" "$(printf '%s\n' "$OUT" | grep -A1 'WARN  NetworkPolicy' | tail -1)" "      fix: run hack/ci/netpol-test.sh against this cluster; it checks ingress and egress to the internet."
-t "summary" "$(line "$OUT" 'preflight:')" "preflight: 9 pass, 1 warn, 0 fail"
+t "node machine type" "$(line "$OUT" 'node machine type')" "PASS  node machine type          c3-standard-4 (no E2 machine type)"
+t "GKE: the Autopilot line is information only and says what it cannot see" "$(line "$OUT" 'GKE mode')" "INFO  GKE mode                   Agent Substrate on GKE needs a Standard cluster; Autopilot is not supported. Reads alone cannot tell Autopilot apart, so check it: gcloud container clusters describe <cluster> --format='value(autopilot.enabled)'"
+t "no Spot line without Spot nodes" "$(line "$OUT" 'Spot')" ""
+t "summary (INFO lines are not counted)" "$(line "$OUT" 'preflight:')" "preflight: 10 pass, 1 warn, 0 fail"
 t "only reads: every call is get" "$(awk '$1!="get"' "$D/calls" | wc -l | tr -d ' ')" 0
 # shellcheck disable=SC2016  # the pattern is for grep
 t "no write verbs anywhere in the script" "$(grep -vE '^ *(warn|fail|#)' hack/preflight.sh | grep -cE '(kc|\$K|\$KUBECTL|kubectl) +(--context +[^ ]+ +)?(apply|create|delete|patch|replace|label|annotate|edit|exec|run|scale|drain|cordon|taint)( |$)')" 0
@@ -93,9 +96,30 @@ t "a warning alone exits 0" "$RC" 0
 good; fx "get crd gateways.gateway.networking.k8s.io -o json" '{"metadata":{"annotations":{}}}'; t "no bundle annotation warns" "$(line "$(run)" 'Gateway API')" "WARN  Gateway API CRDs            installed, bundle version unknown (no gateway.networking.k8s.io/bundle-version annotation)"
 
 echo "# default StorageClass"
-good; fx "get storageclass -o json" '{"items":[{"metadata":{"name":"fast"}}]}'; OUT=$(run)
-t "none is a FAIL" "$(line "$OUT" 'StorageClass')" "FAIL  default StorageClass       none (1 class, none marked default)"
-t "fix text" "$(printf '%s\n' "$OUT" | grep -A1 'FAIL  default StorageClass' | tail -1)" "      fix: mark one as default: kubectl patch storageclass <name> -p '{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'"
+sc_items(){ local i out=""; for i in "$@"; do out="${out:+$out,}{\"metadata\":{\"name\":\"$i\"}}"; done; printf '{"items":[%s]}' "$out"; }
+good; fx "get storageclass -o json" '{"items":[]}'; t "0 classes" "$(line "$(run)" 'StorageClass')" "FAIL  default StorageClass       none (no StorageClass exists)"
+good; fx "get storageclass -o json" "$(sc_items fast)"; t "1 class" "$(line "$(run)" 'StorageClass')" "FAIL  default StorageClass       none (1 class, not marked default)"
+good; fx "get storageclass -o json" "$(sc_items fast slow)"; t "2 classes" "$(line "$(run)" 'StorageClass')" "FAIL  default StorageClass       none (2 classes, none marked default)"
+GKE10=$(sc_items premium-rwo premium-rwx standard standard-rwo standard-rwx hyperdisk-balanced hyperdisk-throughput hyperdisk-extreme enterprise-rwx zonal-rwx)
+good; fx "get storageclass -o json" "$GKE10"; OUT=$(run); RC=$?
+t "10 classes (GKE 1.37 rapid): no plural typo" "$(line "$OUT" 'StorageClass')" "FAIL  default StorageClass       none (10 classes, none marked default)"
+t "no 'classs' anywhere" "$(printf '%s\n' "$OUT" | grep -c 'classs')" 0
+t "on GKE the fix names SET_DEFAULT_STORAGECLASS and standard-rwo" "$(printf '%s\n' "$OUT" | grep -A1 'FAIL  default StorageClass' | tail -1)" "      fix: on GKE the usual choice is standard-rwo (pd-balanced): run the installer with SET_DEFAULT_STORAGECLASS=standard-rwo, which marks it default (nothing is marked without it), or alone: KUBE_CONTEXT=gke_p_z_c hack/default-storageclass.sh standard-rwo"
+t "exit 1" "$RC" 1
+good; fx "get storageclass -o json" "$(sc_items fast slow)"; fx "get nodes -o json" '{"items":[{"metadata":{"name":"n1"},"spec":{"providerID":"aws:///eu-west-1a/i-1"},"status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"architecture":"amd64"},"allocatable":{"cpu":"4","memory":"16Gi"}}}]}'; OUT=$(run)
+t "elsewhere the fix names SET_DEFAULT_STORAGECLASS and the classes found" "$(printf '%s\n' "$OUT" | grep -A1 'FAIL  default StorageClass' | tail -1)" "      fix: run the installer with SET_DEFAULT_STORAGECLASS=<name> (one of: fast slow), which marks it default (nothing is marked without it), or alone: KUBE_CONTEXT=gke_p_z_c hack/default-storageclass.sh <name>"
+t "not GKE: no GKE mode line" "$(line "$OUT" 'GKE mode')" ""
+good; fx "get storageclass -o json" "$(sc_items premium-rwo)"; OUT=$(run)
+t "GKE without standard-rwo: the generic fix" "$(printf '%s\n' "$OUT" | grep -A1 'FAIL  default StorageClass' | tail -1)" "      fix: run the installer with SET_DEFAULT_STORAGECLASS=<name> (one of: premium-rwo), which marks it default (nothing is marked without it), or alone: KUBE_CONTEXT=gke_p_z_c hack/default-storageclass.sh <name>"
+good; fx "get storageclass -o json" "$GKE10"; OUT=$(SET_DEFAULT_STORAGECLASS=standard-rwo run); RC=$?
+t "SET_DEFAULT_STORAGECLASS names an existing class: pass, says what the installer will do" "$(line "$OUT" 'StorageClass')" "PASS  default StorageClass       none marked default yet; the installer marks standard-rwo (SET_DEFAULT_STORAGECLASS)"
+t "and exits 0" "$RC" 0
+good; fx "get storageclass -o json" "$GKE10"; OUT=$(SET_DEFAULT_STORAGECLASS=nope run)
+t "SET_DEFAULT_STORAGECLASS names a missing class: fail" "$(line "$OUT" 'StorageClass')" "FAIL  default StorageClass       SET_DEFAULT_STORAGECLASS=nope, but no StorageClass nope exists (10 classes)"
+good; OUT=$(SET_DEFAULT_STORAGECLASS=standard-rwo run); t "SET_DEFAULT_STORAGECLASS is already the default: pass" "$(line "$OUT" 'StorageClass')" "PASS  default StorageClass       standard-rwo"
+good; OUT=$(SET_DEFAULT_STORAGECLASS=premium-rwo run)
+t "SET_DEFAULT_STORAGECLASS names another class while one is default: fail" "$(line "$OUT" 'StorageClass')" "FAIL  default StorageClass       standard-rwo is already default; SET_DEFAULT_STORAGECLASS=premium-rwo would make a second default"
+t "fix text" "$(printf '%s\n' "$OUT" | grep -A1 'FAIL  default StorageClass' | tail -1)" "      fix: leave SET_DEFAULT_STORAGECLASS unset (standard-rwo is used), or remove the default mark from standard-rwo yourself first."
 good; fx "get storageclass -o json" '{"items":[{"metadata":{"name":"old","annotations":{"storageclass.beta.kubernetes.io/is-default-class":"true"}}}]}'; t "the beta annotation counts" "$(line "$(run)" 'StorageClass')" "PASS  default StorageClass       old"
 
 echo "# NetworkPolicy dataplane (a hint, never a pass)"
@@ -116,6 +140,23 @@ good; fx "get nodes -o json" '{"items":[{"metadata":{"name":"a"},"spec":{},"stat
 t "small nodes warn" "$(line "$OUT" 'node capacity')" "WARN  node capacity              2930m CPU and 4 GiB memory allocatable in total, 3000m and 6 GiB are needed"
 t "mixed architectures warn" "$(line "$OUT" 'node architecture')" "WARN  node architecture          amd64 and arm64 (2 Ready nodes); the sandbox runtime was only planned for amd64 and images must be built for amd64 and arm64"
 
+good; fx "get nodes -o json" '{"items":[]}'; t "0 nodes" "$(line "$(run)" 'node architecture')" "FAIL  node architecture          no Ready node (0 nodes, 0 Ready)"
+good; fx "get nodes -o json" '{"items":[{"metadata":{"name":"a"},"spec":{},"status":{"conditions":[]}},{"metadata":{"name":"b"},"spec":{},"status":{"conditions":[]}}]}'; t "2 nodes" "$(line "$(run)" 'node architecture')" "FAIL  node architecture          no Ready node (2 nodes, 0 Ready)"
+
+echo "# node machine type (Agent Substrate on GKE: c3-standard-4 or larger, no E2)"
+node(){ printf '{"metadata":{"name":"%s","labels":{%s}},"spec":{"providerID":"gce://p/z/%s"},"status":{"conditions":[{"type":"Ready","status":"True"}],"nodeInfo":{"architecture":"amd64"},"allocatable":{"cpu":"4","memory":"16Gi"}}}' "$1" "$2" "$1"; }
+good; fx "get nodes -o json" "{\"items\":[$(node a '"node.kubernetes.io/instance-type":"e2-standard-4"'),$(node b '"node.kubernetes.io/instance-type":"c3-standard-4"')]}"; OUT=$(run); RC=$?
+t "an E2 node warns" "$(line "$OUT" 'node machine type')" "WARN  node machine type          c3-standard-4 and e2-standard-4: Google's Agent Substrate page refuses E2 machine types (mixed CPU architectures) and asks for c3-standard-4 or larger"
+t "fix text names the source and that it is not verified elsewhere" "$(printf '%s\n' "$OUT" | grep -A1 'WARN  node machine type' | tail -1)" "      fix: use a node pool of c3-standard-4 or larger (C3, C4, N2 or N4). Source: https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate (GKE Standard only, not Autopilot); not verified for other install paths."
+t "a warning, not a failure" "$RC" 0
+good; fx "get nodes -o json" "{\"items\":[$(node a '"cloud.google.com/gke-nodepool":"p"')]}"; t "no instance type label: information only" "$(line "$(run)" 'node machine type')" "INFO  node machine type          no node.kubernetes.io/instance-type label on the Ready nodes, not checked"
+
+echo "# Spot nodes"
+good; fx "get nodes -o json" "{\"items\":[$(node a '"node.kubernetes.io/instance-type":"c3-standard-4","cloud.google.com/gke-spot":"true"'),$(node b '"node.kubernetes.io/instance-type":"c3-standard-4"')]}"; OUT=$(run)
+t "Spot nodes: an INFO line" "$(line "$OUT" 'Spot nodes')" "INFO  Spot nodes                 1 of 2 Ready nodes is a Spot VM (cloud.google.com/gke-spot=true): a preemption restarts the install's pods on another node, and the Substrate golden snapshot is rebuilt"
+t "Spot is not a warning" "$(line "$OUT" 'preflight:')" "preflight: 10 pass, 1 warn, 0 fail"
+good; fx "get nodes -o json" "{\"items\":[$(node a '"cloud.google.com/gke-spot":"true","node.kubernetes.io/instance-type":"c3-standard-4"'),$(node b '"cloud.google.com/gke-spot":"true","node.kubernetes.io/instance-type":"c3-standard-4"')]}"; t "2 of 2" "$(line "$(run)" 'Spot nodes' | tr -s ' ' | cut -c1-43)" "INFO Spot nodes 2 of 2 Ready nodes are Spot"
+
 echo "# Pod Security labels of the target namespaces"
 good; fx "get namespaces -o json" '{"items":[{"metadata":{"name":"ate-system","labels":{"pod-security.kubernetes.io/enforce":"baseline"}}},{"metadata":{"name":"kagent","labels":{"pod-security.kubernetes.io/enforce":"privileged"}}},{"metadata":{"name":"other","labels":{"pod-security.kubernetes.io/enforce":"restricted"}}}]}'; OUT=$(run)
 t "a restrictive label on a target namespace warns" "$(line "$OUT" 'Pod Security')" "WARN  Pod Security labels       ate-system enforces baseline"
@@ -134,4 +175,6 @@ t "no KUBE_CONTEXT is refused, nothing is called" "$RC $(wc -l < "$D/calls" | tr
 t "with the message" "$OUT" "ERROR: hack/preflight.sh needs KUBE_CONTEXT, the kubectl context of the cluster to check (kubectl config get-contexts)"
 t "install.sh calls it, for CLUSTER_TYPE=remote only" "$(grep -c 'REMOTE.*= 1.*hack/preflight.sh\|hack/preflight.sh.*REMOTE' install.sh)" 1
 t "install.sh has the SKIP_PREFLIGHT switch" "$(grep -c 'SKIP_PREFLIGHT' install.sh)" 3
+t "install.sh header documents SET_DEFAULT_STORAGECLASS" "$(grep -c '^#   SET_DEFAULT_STORAGECLASS=' install.sh)" 1
+t "install.sh checks the class before the builds and marks it in step 1, only when set" "$(grep -c 'hack/default-storageclass.sh' install.sh)" 2
 exit $F

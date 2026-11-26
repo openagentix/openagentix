@@ -98,7 +98,8 @@ for c in helm jq yq openssl shasum; do ln -s "$(command -v "$c")" "$RT/bin/$c"; 
 cat > "$RT/bin/kubectl" <<EOS
 #!/usr/bin/env bash
 echo "kubectl \$*" >> "$RT/calls"
-case "\$*" in *"get --raw /version"*) [ "\${FAKE_API:-}" = up ] || exit 1; echo '{}';; *"get secret"*) exit 1;; esac
+case "\$*" in *"get --raw /version"*) [ "\${FAKE_API:-}" = up ] || exit 1; echo '{}';; *"get secret"*) exit 1;;
+  *"get storageclass -o json"*) [ -n "\${FAKE_SC:-}" ] || exit 1; echo "\$FAKE_SC";; esac
 exit 0
 EOS
 cat > "$RT/bin/docker" <<EOS
@@ -130,6 +131,16 @@ else
   # the preflight (issue #168) is skipped above (SKIP_PREFLIGHT=1) so these cases reach the refusals; here it runs, and the fake API server's answer ("{}") has no version
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up SKIP_PREFLIGHT=0); eq "remote: the preflight runs and a FAIL stops the install before any change" "$(/usr/bin/grep -c 'the preflight found a problem in cluster .gke_p_z_c.' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
   eq "remote: the preflight only reads (every kubectl call is a get)" "$(/usr/bin/grep -v '^kubectl --context gke_p_z_c get ' "$RT/calls" | /usr/bin/grep -c .)" 0
+  # SET_DEFAULT_STORAGECLASS: a read-only check before anything changes; a refusal stops the install with no write
+  SC_NONE='{"items":[{"metadata":{"name":"standard-rwo"}},{"metadata":{"name":"premium-rwo"}}]}'
+  SC_OTHER='{"items":[{"metadata":{"name":"standard-rwo"}},{"metadata":{"name":"premium-rwo","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}]}'
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up SET_DEFAULT_STORAGECLASS=nope FAKE_SC="$SC_NONE"); eq "remote, SET_DEFAULT_STORAGECLASS names a missing class: refused, exit 1" "$(/usr/bin/grep -c 'SET_DEFAULT_STORAGECLASS=nope was refused' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  eq "remote, a refused class: no patch and no build" "$(/usr/bin/grep -cE ' patch |^docker build' "$RT/calls")" 0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up SET_DEFAULT_STORAGECLASS=standard-rwo FAKE_SC="$SC_OTHER"); eq "remote, another class is already default: refused" "$(/usr/bin/grep -c 'premium-rwo is already the default StorageClass' <<<"$OUT")/$(/usr/bin/grep -c 'SET_DEFAULT_STORAGECLASS=standard-rwo was refused' <<<"$OUT")" 1/1
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up SET_DEFAULT_STORAGECLASS=standard-rwo FAKE_SC="$SC_NONE"); eq "remote, a class that can be marked: the check passes, the later refusal still stops before any change" "$(/usr/bin/grep -c 'standard-rwo will be marked as the default in context gke_p_z_c' <<<"$OUT")/$(/usr/bin/grep -c 'IMAGE_REGISTRY, issue #162' <<<"$OUT")" 1/1
+  eq "remote, the check only reads: no patch before step 1" "$(/usr/bin/grep -c ' patch ' "$RT/calls")" 0
+  eq "remote, the check names the context" "$(/usr/bin/grep -c '^kubectl --context gke_p_z_c get storageclass -o json$' "$RT/calls")" 1
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up FAKE_SC="$SC_NONE"); eq "without SET_DEFAULT_STORAGECLASS the storage classes are not touched" "$(/usr/bin/grep -c 'storageclass' "$RT/calls")" 0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up NODE_SETTINGS=bogus); eq "an unknown NODE_SETTINGS is refused at the start" "$(/usr/bin/grep -c "unknown NODE_SETTINGS 'bogus'" <<<"$OUT")" 1
 fi
 eq "the install.sh header lists CLUSTER_TYPE=remote, ALLOW_LOCAL_CONTEXT and NODE_SETTINGS" "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -cE 'CLUSTER_TYPE=remote|ALLOW_LOCAL_CONTEXT=1|NODE_SETTINGS=daemonset' | awk '{print ($1>=3)?"yes":"no"}')" yes
