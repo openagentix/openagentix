@@ -46,7 +46,7 @@ case "\$a" in
   "get agentdefinition upgrade-check"*) if [ "\${FAKE:-}" = definition-refused ]; then case "\$a" in *violations*) echo 'model is not allowed';; *) printf False;; esac; else printf True; fi;;
   "apply -f "*) if [ "\${FAKE:-}" = quota-race ]; then c=\$(( \$(cat "$D/w/applies" 2>/dev/null || echo 0) + 1 )); echo \$c > "$D/w/applies"; [ \$c -ge 3 ] || { echo 'Error from server (Forbidden): status unknown for quota: openagentix-agentdefinitions'; exit 1; }; fi;;
   "wait agent.api.kagent.dev/assistant"*) [ -f "$D/w/notready" ] && exit 1;;
-  "wait agentdefinition/upgrade-check"*) [ -f "$D/w/defnotready" ] && exit 1;;
+  "wait agent.api.kagent.dev/upgrade-check"*) [ -f "$D/w/defnotready" ] && exit 1;;
   *"kagent-pg-0 -- psql"*) case "\$a" in *"insert into"*) ;; *) cat "$D/w/memory";; esac;;
 esac
 exit 0
@@ -119,7 +119,7 @@ OUT=$(U agent-not-ready);    t "an agent that is not Ready after upgrade A fails
 OUT=$(U old-fails);          t "a failing old install fails and stops" "$(n 'boom: old install failed')/$(n '^exit=1$')/$(n '^=== upgrade to this checkout')" 1/1/0
 OUT=$(U new-a-fails);        t "a failing upgrade fails and stops" "$(n 'boom: helm upgrade failed')/$(n '^exit=1$')/$(n '^# 3. upgrade B')" 1/1/0
 OUT=$(U crd-missing);        t "a CRD that did not arrive fails" "$(n '^FAIL  the CRD is Established')/$(n '^exit=1$')" 1/1
-OUT=$(U definition-not-ready); t "a definition that never gets Ready fails" "$(n '^FAIL  the AgentDefinition was Accepted but did not become Ready')/$(n '^exit=1$')" 1/1
+OUT=$(U definition-not-ready); t "a definition that never gets Ready fails" "$(n '^FAIL  the agent the control plane built did not become Ready')/$(n '^exit=1$')" 1/1
 OUT=$(U quota-race);         t "a quota race on the first definition is retried, and the attempt is reported" "$(n 'ok    an AgentDefinition is accepted by the API server (attempt 3')/$(n '^exit=0$')" 1/1
 OUT=$(U definition-refused); t "a refused definition fails and prints the violations" "$(n '^FAIL  the AgentDefinition was not Accepted')/$(n 'violations: model is not allowed')/$(n '^exit=1$')" 1/1/1
 OUT=$(U pvc-lost-at-b);      t "state lost at upgrade B is seen" "$(n '^FAIL  state still kept after upgrade B')/$(n '^exit=1$')" 1/1
