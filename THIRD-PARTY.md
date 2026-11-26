@@ -41,8 +41,8 @@ Status of the licences:
 
 | Component | Pinned in this repo | Licence | Source | How verified |
 |---|---|---|---|---|
-| distroless `static:nonroot` (final image of every Go service) | tag `nonroot` in each `Dockerfile`, **not pinned by version or digest** | Apache-2.0 for the build files; the image holds Debian packages (base files, CA certificates, tzdata) with their own licences | https://github.com/GoogleContainerTools/distroless | `LICENSE` on the default branch. **Image contents: unverified** |
-| Go toolchain image `golang:1.25` (build stage only, not shipped) | tag `1.25` | BSD-3-Clause (Go); the image also holds Debian packages | https://github.com/golang/go | **Unverified** (not shipped in any final image) |
+| distroless `static:nonroot` (final image of every Go service) | `nonroot` at `sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5` in each `Dockerfile` | Apache-2.0 for the build files; the image holds Debian packages (base files, CA certificates, tzdata) with their own licences | https://github.com/GoogleContainerTools/distroless | `LICENSE` on the default branch. **Image contents: unverified** |
+| Go toolchain image `golang:1.25` (build stage only, not shipped) | `1.25` at `sha256:699337d620559a59b4a2bb298ad59611e535d2ee755a34cf2d2a98f37578dc80` | BSD-3-Clause (Go); the image also holds Debian packages | https://github.com/golang/go | **Unverified** (not shipped in any final image) |
 | crane (`gcr.io/go-containerregistry/crane`, used by `install.sh` to push the example skill) | `latest` (`install.sh`, `components/tools/install.sh`), **not pinned** | Apache-2.0 | https://github.com/google/go-containerregistry | `LICENSE` on the default branch. **Version: not pinned** |
 | curl (`curlimages/curl:8.10.1`, README test commands only) | 8.10.1 | curl licence (MIT-style) | https://github.com/curl/curl | `COPYING` at tag `curl-8_10_1` |
 
@@ -81,7 +81,7 @@ The Anthropic API and the Telegram Bot API are used from your own accounts and a
 
 ## Flags
 
-1. **Not pinned, so the licence read may not match what runs:** crane (`latest`), distroless `static:nonroot` and `golang:1.25` (tags that move), the embedding model weights (no revision), rustfs and the gVisor build inside Substrate's images, and the pgvector version inside its image digest.
+1. **Not pinned, so the licence read may not match what runs:** crane (`latest`), the embedding model weights (no revision), rustfs and the gVisor build inside Substrate's images, and the pgvector version inside its image digest.
 2. **Unverified:** the licence of the rest of each container image's operating system layers (Debian or Ubuntu packages, with a mix of licences including copyleft ones, as in any such image; they are pulled at run time and not redistributed by this repository), the version-specific licence of `go.ate.dev/substrate` v1.0.0, `google/ax`, gVisor and rustfs, and the npm tree of the documentation site.
 3. **Mixed licence:** `modelcontextprotocol/go-sdk` v1.8.0 is partly MIT and partly Apache-2.0 per its `LICENSE`. Both are permissive. `gopkg.in/yaml.v3` is MIT and Apache-2.0.
 4. **Not clearly "permissive" by SPDX tooling:** several repositories showed `NOASSERTION` in the GitHub API even though the text is permissive (PostgreSQL licence, curl, Go modules, protobuf-go, yaml.v3, go-sdk). A scanner such as ScanCode or FOSSA would help to confirm it. I read the texts above. I found no copyleft or non-commercial licence among the components I could read.

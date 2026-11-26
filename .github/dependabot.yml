@@ -30,6 +30,23 @@ updates:
     schedule:
       interval: weekly
 
+  - package-ecosystem: docker
+    directories:
+      - /services/a2a-gate
+      - /services/control-plane
+      - /services/kb
+      - /services/notify
+      - /services/console
+      - /services/stub-model
+      - /bridges/telegram
+      - /bridges/ax-adapter
+      - /tools/a2a-call
+    schedule:
+      interval: weekly
+    groups:
+      docker-base-images:
+        patterns: ['*']
+
   - package-ecosystem: npm
     directories:
       - /console
