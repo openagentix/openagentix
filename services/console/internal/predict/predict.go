@@ -55,8 +55,8 @@ func Check(in Input) []model.Prediction {
 	prof, haveProf := platform.Profile{}, false
 	if s.ToolProfile != "" {
 		prof, haveProf = c.Profile(s.ToolProfile)
-		names := make([]string, len(c.Profiles))
-		for i, x := range c.Profiles {
+		names := make([]string, len(c.ToolProfiles()))
+		for i, x := range c.ToolProfiles() {
 			names[i] = x.Name
 		}
 		switch {

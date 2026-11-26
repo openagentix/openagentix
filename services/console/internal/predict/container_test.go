@@ -19,7 +19,7 @@ func containerPlatform() platform.Both {
 		}
 	}
 	must(json.Unmarshal([]byte(`{"adapters":{"runtime":"kagent","runtimes":{"builtin":"kagent","container":"container"}},
-		"models":["m"],"profiles":[{"name":"open","tools":["a"],"workload":{"url":"http://x"}},{"name":"closed","tools":["b"]}]}`), &b.Catalog))
+		"models":["m"],"tools":{"toolhive":{"profiles":[{"name":"open","tools":["a"],"workload":{"url":"http://x"}},{"name":"closed","tools":["b"]}]}}}`), &b.Catalog))
 	must(json.Unmarshal([]byte(`{"maxAgents":5,"allowedModels":["m"],"allowedProfiles":["open","closed"],"requireToolProfile":true,
 		"allowedRuntimes":["builtin","container"],"runtimes":{"container":{"images":["registry.example.com/agents/"],"maxAgents":2}}}`), &b.Policy))
 	return b

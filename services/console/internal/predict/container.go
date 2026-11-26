@@ -135,8 +135,8 @@ func containerRules(in Input, add func(field, f string, a ...any)) {
 	}
 	if s.ToolProfile != "" {
 		prof, ok := c.Profile(s.ToolProfile)
-		names := make([]string, len(c.Profiles))
-		for i, x := range c.Profiles {
+		names := make([]string, len(c.ToolProfiles()))
+		for i, x := range c.ToolProfiles() {
 			names[i] = x.Name
 		}
 		switch {

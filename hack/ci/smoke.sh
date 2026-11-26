@@ -4,7 +4,7 @@
 #   2. a question is answered through the A2A gate, with a tool call through the tool profile (hack/ask.sh)
 #   3. a tool that the profile does not offer gets no data (the tool profile refuses it)
 #   4. a definition that the policy forbids is refused (Accepted=False) and no agent is built for it
-#   5. the console API answers 401 without the token and lists the agent with it
+#   5. the console API answers 401 without the token, lists the agent with it, and lists the tool profiles the policy allows
 # SMOKE_CONSOLE=0 skips check 5 (PROFILE=minimal has no console).
 # SMOKE_STUB=1 (default) expects the stub model's scripted answers; SMOKE_STUB=0 (a real model) only checks that an answer arrives.
 # Prints one line per check; exit 1 on the first failure. Never prints the console token.
@@ -70,8 +70,16 @@ if [ "${SMOKE_CONSOLE:-1}" = 1 ]; then
   for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/healthz" 2>/dev/null && break; sleep 0.2; done
   check "GET /api/v1/agents without a token is 401" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/v1/agents")" 401
   TOKEN=$($K get secret -n "${SMOKE_CONSOLE_NS:-openagentix-system}" console-token -o jsonpath='{.data.token}' | base64 -d)
-  LIST=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/agents"); unset TOKEN
+  LIST=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/agents")
+  PLAT=$(curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/platform"); unset TOKEN
   grep -q '"quickstart"' <<<"$LIST" && ok "GET /api/v1/agents with the token lists quickstart" || bad "the console does not list quickstart" "$(printf '%s' "$LIST" | cut -c1-200)"
+  # The builder offers what this answer lists. An empty profiles list with requireToolProfile left no way to create an
+  # agent (the console once read a catalog shape the control plane never wrote). The install defines mcp.profiles, so the
+  # list must not be empty and must hold every profile the policy names.
+  NPROF=$(python3 -I -c 'import json,sys;print(len(json.load(sys.stdin).get("profiles") or []))' <<<"$PLAT" 2>/dev/null || echo error)
+  if [ "$NPROF" != error ] && [ "$NPROF" -gt 0 ]; then ok "GET /api/v1/platform lists $NPROF tool profile(s)"; else bad "GET /api/v1/platform lists no tool profile" "$(printf '%s' "$PLAT" | cut -c1-200)"; fi
+  MISSING=$(python3 -I -c 'import json,sys;d=json.load(sys.stdin);have={p["name"] for p in d.get("profiles") or []};print(" ".join(n for n in d["policy"].get("allowedProfiles") or [] if n!="*" and n not in have))' <<<"$PLAT" 2>/dev/null || echo error)
+  check "every profile the policy allows is in the console's platform answer" "$MISSING" ""
 else
   echo "# 5. console API (skipped: SMOKE_CONSOLE=0, the profile has no console)"
 fi
