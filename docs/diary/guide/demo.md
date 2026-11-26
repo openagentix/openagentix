@@ -141,5 +141,3 @@ To remove the whole cluster, see [Quick start](./quick-start.md).
 It shows the controls on a single-node quick start with the stub model: a definition is checked by policy, an agent has its own gateway key and a token budget, a caller is checked by the gate, every call leaves an audit line without content, and a call outside the rule is refused.
 
 It does not show a real model, a trace of one turn or an egress allowlist (the quick start agent has no egress). It does not show channels, schedules, the knowledge base or memory (they are off in the quick start). The quick start policy allows three definitions in all, so the demo needs one free slot. `hack/demo-test.sh` runs the script offline against a fake `kubectl`. The `e2e` job runs it on a cluster after the smoke test and passed on this run.
-
-Throwaway proof: [broken](./this-page-does-not-exist.md)
