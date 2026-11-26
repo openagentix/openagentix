@@ -18,7 +18,7 @@ endef
 .PHONY: help test test-go test-chart test-shell test-integration test-console test-console-e2e e2e lint lint-go lint-shell secrets cover
 
 help: ## List the targets
-	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z_-]+:.*## /{printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z0-9_-]+:.*## /{printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 test: test-go test-chart test-shell ## Everything that runs offline (no Docker, no cluster)
 
@@ -97,8 +97,10 @@ test-console-e2e: ## Console end-to-end in Chromium against the Go binary in dem
 	services/console/build-web.sh
 	cd console && pnpm exec playwright install --with-deps chromium && pnpm test:e2e
 
-e2e: ## Keyless end-to-end install on kind: not built yet
-	@echo "e2e: not built yet. install.sh needs ANTHROPIC_API_KEY and TELEGRAM_BOT_TOKEN today; see hack/ci/E2E-PLAN.md." >&2; exit 1
+e2e: ## Prints how to run the keyless end-to-end install (needs Docker, kind, kubectl; make does not start a cluster)
+	@echo "e2e: make does not create a cluster. With kind running, use your own KUBECONFIG and run:"
+	@echo "  PROFILE=quickstart ./install.sh && hack/ci/smoke.sh"
+	@echo "See hack/ci/README.md, section e2e."
 
 # ---- control plane guard tests (own targets: the heavy k8s.io/apiserver dependency stays in hack/ci/guardtest, not in any service module) ----
 .PHONY: test-guard test-apiserver test-python-samples
