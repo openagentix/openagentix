@@ -40,7 +40,7 @@ t "k3d network" "$(run k3d cluster_network)" k3d-alpha
 run k3d cluster_exists; t "k3d: alpha exists" "$?" 0
 CLUSTER=gamma run k3d cluster_exists; t "k3d: gamma does not exist" "$?" 1
 : > "$D/calls"; run k3d cluster_create . >/dev/null
-t "k3d create: one server, a volume for /var/lib/ate, no Traefik, no ServiceLB, the authentication config" "$(calls)" "k3d cluster create alpha --image rancher/k3s:v1.37.2-k3s1 --servers 1 --agents 0 --no-lb --wait --timeout 300s --volume k3d-alpha-ate:/var/lib/ate@server:0 --volume $PWD/hack/k3s-authn.yaml:/etc/openagentix/k3s-authn.yaml@server:0 --k3s-arg --disable=traefik@server:0 --k3s-arg --disable=servicelb@server:0 --k3s-arg --kube-apiserver-arg=authentication-config=/etc/openagentix/k3s-authn.yaml@server:0;"
+t "k3d create: one server, a volume for /var/lib/ate, no Traefik, no ServiceLB, the authentication config" "$(calls)" "k3d cluster create alpha --image rancher/k3s:v1.37.2-k3s1 --servers 1 --agents 0 --no-lb --wait --timeout 300s --volume k3d-alpha-ate:/var/lib/ate@server:0 --volume $PWD/hack/k3s-authn.yaml:/etc/openagentix/k3s-authn.yaml:ro@server:0 --k3s-arg --disable=traefik@server:0 --k3s-arg --disable=servicelb@server:0 --k3s-arg --kube-apiserver-arg=authentication-config=/etc/openagentix/k3s-authn.yaml@server:0;"
 # k3s turns anonymous authentication off (anonymous-auth=false) unless an authentication config is given. The workload tool server fetches the
 # public signing keys without a token (ADR 0019), so the config admits anonymous callers on the two discovery paths and nowhere else.
 run k3d cluster_create hack/.. >/dev/null; t "k3d create: a relative repo root becomes an absolute mount path" "$(calls | grep -o "\-\-volume $PWD/hack/k3s-authn.yaml" )" "--volume $PWD/hack/k3s-authn.yaml"
