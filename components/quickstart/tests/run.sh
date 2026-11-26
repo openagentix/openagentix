@@ -42,6 +42,16 @@ eq "ollama: OLLAMA_HOST without scheme or port"            "$(values MODEL_PROVI
 eq "ollama: OLLAMA_HOST as a full URL is kept"             "$(values MODEL_PROVIDER=ollama OLLAMA_HOST=http://box:9999/ MODEL_NAME=qwen | jq -c '.gateway.models[0]|[.baseURL,.upstreamModel]')" '["http://box:9999/v1","qwen"]'
 eq "a key is never written into the overlay"               "$(values ANTHROPIC_API_KEY=SENTINEL-KEY MODEL_API_KEY=SENTINEL-KEY | /usr/bin/grep -c SENTINEL)" 0
 
+echo "# a local Ollama on a remote cluster (issue #170)"
+eq "remote + ollama without MODEL_BASE_URL is refused"     "$(pick CLUSTER_TYPE=remote MODEL_PROVIDER=ollama | /usr/bin/grep -c 'MODEL_PROVIDER=ollama with CLUSTER_TYPE=remote needs MODEL_BASE_URL')" 1
+eq "the refusal names the stub and a provider key"         "$(pick CLUSTER_TYPE=remote MODEL_PROVIDER=ollama | /usr/bin/grep -c 'stub model.*provider key')" 1
+eq "remote + ollama with MODEL_BASE_URL passes"            "$(pick CLUSTER_TYPE=remote MODEL_PROVIDER=ollama MODEL_BASE_URL=http://ollama.example:11434/v1)" ollama
+eq "remote + ollama: MODEL_BASE_URL is the base URL"       "$(values CLUSTER_TYPE=remote MODEL_PROVIDER=ollama MODEL_BASE_URL=http://ollama.example:11434/v1 | jq -r '.gateway.models[0].baseURL')" http://ollama.example:11434/v1
+eq "ollama with a bad MODEL_BASE_URL scheme fails"         "$(pick CLUSTER_TYPE=remote MODEL_PROVIDER=ollama MODEL_BASE_URL=ftp://h)" "MODEL_BASE_URL must start with http:// or https://"
+eq "kind + ollama is unchanged"                            "$(pick CLUSTER_TYPE=kind MODEL_PROVIDER=ollama)/$(values CLUSTER_TYPE=kind MODEL_PROVIDER=ollama | jq -r '.gateway.models[0].baseURL')" ollama/http://host.docker.internal:11434/v1
+eq "k3d + ollama is unchanged"                             "$(pick CLUSTER_TYPE=k3d MODEL_PROVIDER=ollama)" ollama
+eq "remote with nothing set is still the stub"             "$(pick CLUSTER_TYPE=remote)" stub
+
 echo "# label"
 eq "stub label says it is not a model"                     "$(qs_model_label stub | /usr/bin/grep -c 'NOT a language model')" 1
 
@@ -80,6 +90,46 @@ OUT=$(inst ANTHROPIC_API_KEY=x TELEGRAM_BOT_TOKEN=y SKIP_SKILL=1); eq "SKIP_SKIL
 OUT=$(inst PROFILE=quickstart MODEL_PROVIDER=anthropic); eq "quickstart with MODEL_PROVIDER=anthropic and no key stops" "$(/usr/bin/grep -c 'needs ANTHROPIC_API_KEY' <<<"$OUT")" 1
 OUT=$(inst PROFILE=nope); eq "an unknown profile is refused"      "$(/usr/bin/grep -c "unknown PROFILE 'nope'" <<<"$OUT")" 1
 OUT=$(inst PROFILE=quickstart); eq "quickstart with no model env passes the preflight (stops only at the missing cluster)" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
+
+echo "# install.sh with CLUSTER_TYPE=remote (issues #161, #170): no kind, no k3d on PATH; fake kubectl and docker record every call"
+RT=$(mktemp -d); trap 'rm -rf "$RT"' EXIT
+mkdir -p "$RT/bin"
+for c in helm jq yq openssl shasum; do ln -s "$(command -v "$c")" "$RT/bin/$c"; done
+cat > "$RT/bin/kubectl" <<EOS
+#!/usr/bin/env bash
+echo "kubectl \$*" >> "$RT/calls"
+case "\$*" in *"get --raw /version"*) [ "\${FAKE_API:-}" = up ] || exit 1; echo '{}';; *"get secret"*) exit 1;; esac
+exit 0
+EOS
+cat > "$RT/bin/docker" <<EOS
+#!/usr/bin/env bash
+echo "docker \$*" >> "$RT/calls"
+exit 0
+EOS
+chmod +x "$RT/bin/kubectl" "$RT/bin/docker"
+RPATH="$RT/bin:/usr/bin:/bin"
+rinst() { : > "$RT/calls"; env -i PATH="$RPATH" HOME="$HOME" CLUSTER_TYPE=remote "$@" bash "$ROOT/install.sh" 2>&1; echo "exit=$?"; }
+if PATH="$RPATH" command -v kind >/dev/null || PATH="$RPATH" command -v k3d >/dev/null; then
+  echo "  skip the remote install.sh cases: kind or k3d is in /usr/bin or /bin"
+else
+  OUT=$(rinst PROFILE=quickstart); eq "remote without KUBE_CONTEXT stops with the reason" "$(/usr/bin/grep -c 'CLUSTER_TYPE=remote needs KUBE_CONTEXT' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  eq "remote without KUBE_CONTEXT calls nothing" "$(cat "$RT/calls")" ""
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=kind-openagentix FAKE_API=up); eq "remote with a local kind context is refused" "$(/usr/bin/grep -c 'ALLOW_LOCAL_CONTEXT=1' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  eq "a refused local context is never contacted" "$(cat "$RT/calls")" ""
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c); eq "remote, API server not reachable: stops, never creates" "$(/usr/bin/grep -c "cannot reach the API server of kube context 'gke_p_z_c'" <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  eq "remote preflight does not ask for kind or k3d" "$(/usr/bin/grep -c 'missing tools' <<<"$OUT")" 0
+  eq "remote asks the API server of the named context" "$(/usr/bin/grep -c '^kubectl --context gke_p_z_c get --raw /version$' "$RT/calls")" 1
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up); eq "remote quick start: refused before any build (no registry push yet)" "$(/usr/bin/grep -c 'IMAGE_REGISTRY, issue #162' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  eq "remote quick start: the refusal names the images" "$(/usr/bin/grep -c 'These would be built:.*openagentix/stub-model:dev-' <<<"$OUT")" 1
+  eq "remote quick start: no docker build, no docker exec, no load" "$(/usr/bin/grep -cE '^docker (build|exec)|^kind|^k3d' "$RT/calls")" 0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up QUICKSTART_BYO=1); eq "remote with QUICKSTART_BYO=1 is refused" "$(/usr/bin/grep -c 'QUICKSTART_BYO=1 does not work with CLUSTER_TYPE=remote yet' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up MODEL_PROVIDER=ollama); eq "remote with a local Ollama is refused (issue #170)" "$(/usr/bin/grep -c 'needs MODEL_BASE_URL' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  OUT=$(rinst KUBE_CONTEXT=gke_p_z_c FAKE_API=up ANTHROPIC_API_KEY=x TELEGRAM_BOT_TOKEN=y SKIP_BRIDGE_IMAGE=1 SKIP_KB_IMAGE=1); eq "remote with the example skill: refused, says SKIP_SKILL=1" "$(/usr/bin/grep -c 'example skill.*SKIP_SKILL=1' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")" 1/1
+  OUT=$(rinst KUBE_CONTEXT=gke_p_z_c FAKE_API=up)   # default chart, no key: the preflight looks for the key Secrets in the cluster
+  eq "the preflight reads Secrets from the named context only (never the current one)" "$(/usr/bin/grep -c ' get secret ' "$RT/calls" | awk '{print ($1>0)?"some":"none"}')/$(/usr/bin/grep ' get secret ' "$RT/calls" | /usr/bin/grep -vc -- '--context=gke_p_z_c')" some/0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up NODE_SETTINGS=bogus); eq "an unknown NODE_SETTINGS is refused at the start" "$(/usr/bin/grep -c "unknown NODE_SETTINGS 'bogus'" <<<"$OUT")" 1
+fi
+eq "the install.sh header lists CLUSTER_TYPE=remote, ALLOW_LOCAL_CONTEXT and NODE_SETTINGS" "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -cE 'CLUSTER_TYPE=remote|ALLOW_LOCAL_CONTEXT=1|NODE_SETTINGS=daemonset' | awk '{print ($1>=3)?"yes":"no"}')" yes
 
 echo "# the minimal profile and the install order (issue #29)"
 OUT=$(inst PROFILE=minimal); eq "PROFILE=minimal passes the preflight (stops only at the missing cluster)" "$(/usr/bin/grep -c 'does not exist and CREATE_CLUSTER=0' <<<"$OUT")" 1
