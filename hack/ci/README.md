@@ -38,6 +38,27 @@ The branch protection rule for `main` requires **`ci-ok`** and **`DCO`** (the DC
 
 `.github/workflows/e2e-k3s.yml` is the same install and smoke test as `e2e`, on k3s in Docker made by k3d (`CLUSTER_TYPE=k3d`, `hack/cluster.sh`), with the sample container agent (`QUICKSTART_BYO=1`, `SMOKE_BYO=1`). It then runs `hack/ci/netpol-test.sh`, which checks live whether the cluster enforces NetworkPolicy for ingress and for egress to the internet. The job shows its real result (issue #195: `continue-on-error` is gone, so it is no longer always green). It is not in `ci-ok` and is not a required check of `main` (those are `ci-ok` and `DCO`), so a red run does not block a merge. A red run means the install, the anonymous-access check (issue #189), the smoke test or the NetworkPolicy test failed on k3s: open the failed step and the job summary. Before this change the job was green even when it failed (13 of 23 completed runs failed unseen), so older runs of it say nothing; the four runs after the fix of #189 were green. Do not merge a pull request that touches the installer with this check red unless you know why. It runs nightly, by hand, and on pull requests that touch the installer or the cluster helper. Local equivalent: `CLUSTER_TYPE=k3d CLUSTER=oa-k3s-test PROFILE=quickstart ./install.sh && hack/ci/smoke.sh` (use a `KUBECONFIG` file of your own; do not run it beside another cluster in a small Docker VM). The record of the runs is in [Install on k3s](../../docs/diary/guide/install-k3s.md).
 
+## Nightly runs and the green streak
+
+`e2e.yml` (03:17 UTC) and `e2e-k3s.yml` (03:47 UTC) have a `schedule:` trigger. The cron lines are valid, both files are on `main`, Actions is enabled for the repository with all actions allowed, and both workflows are active. Even so, the Actions API listed no run with event `schedule` for either workflow on 2026-11-26, about 22 hours after the first possible tick. We could not find a setting that explains it. GitHub does not promise that a scheduled run starts on time, and it can drop one when its queue is busy. So the claim is only this: no nightly run has been seen yet. Check again after 03:50 UTC on the next day: `hack/ci/green-streak.sh` prints a warning for `e2e` and `e2e-k3s` while the window holds no `schedule` run, and it prints the date of the newest one when there is one. If a night passes with no run, start the workflow by hand (`gh workflow run e2e.yml`) and record the gap in issue #196.
+
+`hack/ci/green-streak.sh` counts the green runs in a row on `main` for `ci`, `docs`, `e2e` and `e2e-k3s`. It is the check for the release 0.3 exit criterion "30 green runs on main".
+
+```
+hack/ci/green-streak.sh                    # text, one line per workflow
+hack/ci/green-streak.sh --json             # the same as JSON
+hack/ci/green-streak.sh --target 30 --check ci docs   # exit 1 when ci or docs is below 30
+```
+
+How to read a line, for example `ci  17 in a row  (target 30, not met)  counted 62  last red: <run url>`:
+
+- The streak is the number of green runs before the first red one, newest first. The link is the run that ended it.
+- Cancelled, skipped and still running runs are ignored. They do not add to the streak and they do not break it. Pull request runs are ignored too.
+- `counted` is how many runs the window held (`--limit`, default 100). A streak equal to `counted` may be longer than shown.
+- `e2e` and `e2e-k3s` run on `main` only at night or by hand, so 30 green runs of them take 30 nights. A manual run counts like a nightly one.
+
+The offline test is `hack/ci/green-streak-test.sh` (in `make test-shell`).
+
 ## Tools and pins
 
 `helm` v3.22.0 (`azure/setup-helm`), `jq` from the runner image (1.7.x), `yq` **kislyuk 3.4.3** (the Python jq wrapper that

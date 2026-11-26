@@ -2221,6 +2221,34 @@ HI0=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" 2>
 HI1=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" --set-string bridge.image.digest= --set-string scheduling.image.digest= --set-string gateway.stubModel.image.digest= --set-string knowledge.kb.image.digest= --set-string notify.image.digest= --set-string governance.a2a.image.digest= --set-string controlPlane.image.digest= --set-string console.image.digest= 2>&1 | shasum -a 256)
 eq "every image.digest empty: byte-identical to the render without them" "$HI1" "$HI0"
 eq "default values: every installer-built image path has image.digest \"\"" "$(yq -r '[.bridge, .scheduling, .gateway.stubModel, .knowledge.kb, .notify, .governance.a2a, .controlPlane, .console]|map(.image.digest)|map(.=="")|all' "$CHART/values.yaml")" true
+echo "# every container of our workloads has probes and requests and limits (issue #201)"
+# Every container of every Deployment, StatefulSet and DaemonSet needs liveness, readiness and startup probes and CPU and memory
+# requests and limits. Init containers and CronJob containers are out of scope. Workloads of upstream projects are not rendered by
+# this chart, so nothing needs an allowlist except the entries below (an entry is "kind/name/container/missing", with the reason).
+# Issue #211 tracks anything we cannot fix because the image is not ours.
+PROBE_ALLOW=(
+)
+RC="$REPO/components"
+RCDEMO=(-f "$RC/channels/demo-values.yaml" -f "$RC/schedules/demo-values.yaml" -f "$RC/notify/demo-values.yaml" -f "$RC/observability/demo-values.yaml" -f "$RC/knowledge/graph-demo-values.yaml" -f "$RC/governance/demo-values.yaml" -f "$RC/governance/profiles-demo-values.yaml" -f "$RC/governance/memory-demo-values.yaml" -f "$RC/control-plane/demo-values.yaml" -f "$RC/console/demo-values.yaml" --set gateway.stubModel.enabled=true)
+# gaps <docs-json> -> one line per missing item: kind/name/container/what
+GAPS='.[]|select(.kind=="Deployment" or .kind=="StatefulSet" or .kind=="DaemonSet")|. as $w|.spec.template.spec.containers[]|. as $c|
+  ([["livenessProbe",$c.livenessProbe],["readinessProbe",$c.readinessProbe],["startupProbe",$c.startupProbe],
+    ["requests.cpu",$c.resources.requests.cpu],["requests.memory",$c.resources.requests.memory],
+    ["limits.cpu",$c.resources.limits.cpu],["limits.memory",$c.resources.limits.memory]]|.[]|select(.[1]==null)|.[0])
+  as $m|$w.kind+"/"+$w.metadata.name+"/"+$c.name+"/"+$m'
+probe_check() {   # probe_check <label> <helm args...>
+  local label=$1; shift
+  local rendered; rendered=$(docs "$@")
+  local missing; missing=$(jq -r "$GAPS" <<<"$rendered" | sort)
+  local a; for a in "${PROBE_ALLOW[@]+"${PROBE_ALLOW[@]}"}"; do missing=$(printf '%s\n' "$missing" | /usr/bin/grep -vxF "$a"); done
+  eq "$label: workloads rendered (the check is not empty)" "$(q "$rendered" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet" or .kind=="DaemonSet")]|length>0')" true
+  eq "$label: every container has liveness, readiness and startup probes and requests and limits" "$missing" ""
+}
+probe_check "defaults"
+probe_check "quick start" -f "$RC/quickstart/values.yaml"
+probe_check "minimal" -f "$RC/quickstart/minimal-values.yaml"
+probe_check "bring your own agent" -f "$RC/quickstart/byo-values.yaml"
+probe_check "full demo" "${RCDEMO[@]}" $GKAPI
 
 echo
 echo "passed=$PASS failed=$FAIL"
