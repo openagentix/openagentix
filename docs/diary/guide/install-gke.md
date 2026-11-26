@@ -197,7 +197,9 @@ Workaround, one manual patch:
 kubectl patch storageclass standard-rwo -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 ```
 
-Then the preflight gave 9 pass, 1 warn, 0 fail. The other checks that passed: Kubernetes 1.37 or newer, the `certificates.k8s.io` resources, `validatingadmissionpolicies` at `v1`, the Gateway API CRDs, node architecture, node capacity, Pod Security labels and the context name. Which `certificates.k8s.io` version was served, and whether GKE had its own Gateway API CRDs, was not written down.
+Then the preflight gave 9 pass, 1 warn, 0 fail.
+
+Since the run, the typo is fixed and the installer has an opt-in for this ([PR 185](https://github.com/openagentix/openagentix/pull/185)): add `SET_DEFAULT_STORAGECLASS=standard-rwo` to the install command and it marks the class itself, after a read-only check. That opt-in was not run on a cluster yet. `hack/gke/install.sh` sets it when the cluster has no default. The other checks that passed: Kubernetes 1.37 or newer, the `certificates.k8s.io` resources, `validatingadmissionpolicies` at `v1`, the Gateway API CRDs, node architecture, node capacity, Pod Security labels and the context name. Which `certificates.k8s.io` version was served, and whether GKE had its own Gateway API CRDs, was not written down.
 
 ### 7. Install
 
@@ -245,7 +247,7 @@ If you must keep the project, delete the LoadBalancer Services and the PVCs befo
 
 ## Helper scripts
 
-[`hack/gke/`](https://github.com/openagentix/openagentix/tree/main/hack/gke) has `up.sh` (steps 1 to 5), `install.sh` (steps 6 and 7, including the StorageClass workaround) and `down.sh` (the teardown). `up.sh` always makes a new project, refuses to run without `PROJECT_PREFIX`, `ORG_ID`, `BILLING_ACCOUNT`, `MAX_HOURS` and `AUTHORIZED_CIDR`, prints the teardown command before it creates anything, and prints no credential or billing id. `down.sh` deletes only a project with the label that `up.sh` sets. They are tested offline with a fake `gcloud` (`hack/gke/tests/run.sh`) and have **not** been run against a real project. See the [README](https://github.com/openagentix/openagentix/blob/main/hack/gke/README.md).
+[`hack/gke/`](https://github.com/openagentix/openagentix/tree/main/hack/gke) has `up.sh` (steps 1 to 5), `install.sh` (steps 6 and 7; it sets `SET_DEFAULT_STORAGECLASS=standard-rwo` when the cluster has no default) and `down.sh` (the teardown). `up.sh` always makes a new project, refuses to run without `PROJECT_PREFIX`, `ORG_ID`, `BILLING_ACCOUNT`, `MAX_HOURS` and `AUTHORIZED_CIDR`, prints the teardown command before it creates anything, and prints no credential or billing id. `down.sh` deletes only a project with the label that `up.sh` sets. They are tested offline with a fake `gcloud` (`hack/gke/tests/run.sh`) and have **not** been run against a real project. See the [README](https://github.com/openagentix/openagentix/blob/main/hack/gke/README.md).
 
 ## What was proven
 

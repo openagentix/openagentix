@@ -3,7 +3,7 @@
 #   KUBE_CONTEXT=<context> hack/preflight.sh
 # install.sh runs it when CLUSTER_TYPE=remote (SKIP_PREFLIGHT=1 skips it). You can run it alone, for any cluster you can reach.
 # It only reads: every call is `kubectl get` (or `get --raw`); it never creates, patches or deletes anything.
-# Prints one line per check, PASS, WARN or FAIL, and a "fix:" line under each WARN and FAIL. Exit 0 when nothing fails (warnings do
+# Prints one line per check, PASS, WARN, FAIL or INFO, and a "fix:" line under each WARN and FAIL. Exit 0 when nothing fails (warnings do
 # not fail), 1 when a check fails, 2 when KUBE_CONTEXT is not set. Tests: hack/ci/preflight-test.sh (fake kubectl, no cluster).
 #
 # Checks (the minimums come from docs/diary/guide/install-gke.md and docs/diary/features/install.md):
@@ -11,7 +11,11 @@
 #   certificates.k8s.io          clustertrustbundles and podcertificaterequests served, at v1 or v1beta1
 #   ValidatingAdmissionPolicy    validatingadmissionpolicies served at admissionregistration.k8s.io/v1 (the admission guards)
 #   Gateway API CRDs             none (the installer applies v1.6.3), or a bundle of 1.6.3 or newer (the installer keeps what it finds)
-#   default StorageClass         one class is marked default (the databases and the snapshot store use it)
+#   default StorageClass         one class is marked default (the databases and the snapshot store use it), or SET_DEFAULT_STORAGECLASS names an
+#                                existing class and no other is default (the installer then marks it; hack/default-storageclass.sh)
+#   node machine type            WARN on an E2 node (Google's Agent Substrate page: c3-standard-4 or larger, no E2); INFO when nodes carry no type label
+#   Spot nodes, GKE mode         INFO only, never counted: Spot VMs (cloud.google.com/gke-spot=true) restart pods on preemption; on GKE, Autopilot is
+#                                not supported and cannot be detected with reads, so the line says how to check it
 #   NetworkPolicy                a HINT only: names the dataplane it finds. It never says "enforced"; hack/ci/netpol-test.sh checks that live
 #   node architecture/capacity   Ready nodes; amd64 expected; allocatable CPU and memory in total (PREFLIGHT_MIN_CPU_M=3000, PREFLIGHT_MIN_MEM_GI=6)
 #   Pod Security labels          the target namespaces (PREFLIGHT_NAMESPACES) must not enforce baseline or restricted
@@ -31,8 +35,10 @@ row(){ printf '%-6s%-28s%s\n' "$1" "$2" "$3"; }   # status label detail
 pass(){ NP=$((NP+1)); row PASS "$1" "$2"; }
 warn(){ NW=$((NW+1)); row WARN "$1" "$2"; printf '      fix: %s\n' "$3"; }
 fail(){ NF=$((NF+1)); row FAIL "$1" "$2"; printf '      fix: %s\n' "$3"; }
+info(){ row INFO "$1" "$2"; }   # information only: not counted, never a fix
 summary(){ echo "preflight: $NP pass, $NW warn, $NF fail"; [ "$NF" = 0 ]; }
-plural(){ if [ "$1" = 1 ]; then echo "$1 $2"; else echo "$1 ${2}s"; fi; }
+# "1 class", "2 classes", "0 nodes", "3 Ready nodes"
+plural(){ if [ "$1" = 1 ]; then echo "$1 $2"; else case "$2" in *s|*x|*ch|*sh) echo "$1 ${2}es";; *) echo "$1 ${2}s";; esac; fi; }
 
 # --- Kubernetes version (when the API server does not answer, nothing else can be checked) ---
 VJ=$(kc get --raw /version 2>/dev/null) || VJ=""
@@ -90,14 +96,35 @@ else
   pass "Gateway API CRDs" "not installed, the installer applies v$MIN_GATEWAY"
 fi
 
-# --- default StorageClass ---
+# The nodes are read once here: the StorageClass hint and the node checks below use them.
+ND=$(kc get nodes -o json 2>/dev/null || true)
+# GKE: a node pool label or a gce:// provider id on any node
+GKE=0; [ "$(jq -r '[.items[]? | select((.metadata.labels // {} | has("cloud.google.com/gke-nodepool")) or ((.spec.providerID // "") | startswith("gce://")))] | length' <<<"$ND" 2>/dev/null || echo 0)" = 0 ] || GKE=1
+
+# --- default StorageClass (SET_DEFAULT_STORAGECLASS=<name>: the installer marks that class, see hack/default-storageclass.sh) ---
+WANT_SC=${SET_DEFAULT_STORAGECLASS:-}
 SC=$(kc get storageclass -o json 2>/dev/null || true)
 SCN=$(jq -r '[.items[]? | select(.metadata.annotations["storageclass.kubernetes.io/is-default-class"] == "true" or .metadata.annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true") | .metadata.name] | first // empty' <<<"$SC" 2>/dev/null || true)
-if [ -n "$SCN" ]; then
+SC_ALL=$(jq -r '[.items[]?.metadata.name] | join(" ")' <<<"$SC" 2>/dev/null || true)
+n=$(jq -r '.items | length' <<<"$SC" 2>/dev/null || echo 0); n=${n:-0}
+if [ -n "$SCN" ] && { [ -z "$WANT_SC" ] || [ "$WANT_SC" = "$SCN" ]; }; then
   pass "default StorageClass" "$SCN"
+elif [ -n "$SCN" ]; then
+  fail "default StorageClass" "$SCN is already default; SET_DEFAULT_STORAGECLASS=$WANT_SC would make a second default" "leave SET_DEFAULT_STORAGECLASS unset ($SCN is used), or remove the default mark from $SCN yourself first."
+elif [ -n "$WANT_SC" ] && [[ " $SC_ALL " == *" $WANT_SC "* ]]; then
+  pass "default StorageClass" "none marked default yet; the installer marks $WANT_SC (SET_DEFAULT_STORAGECLASS)"
+elif [ -n "$WANT_SC" ]; then
+  fail "default StorageClass" "SET_DEFAULT_STORAGECLASS=$WANT_SC, but no StorageClass $WANT_SC exists ($(plural "$n" class))" "set SET_DEFAULT_STORAGECLASS to one of: ${SC_ALL:-none (create a StorageClass first)}"
 else
-  n=$(jq -r '.items | length' <<<"$SC" 2>/dev/null || echo 0)
-  fail "default StorageClass" "none ($(plural "${n:-0}" class), none marked default)" "mark one as default: kubectl patch storageclass <name> -p '{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'"
+  case "$n" in 0) d="no StorageClass exists";; 1) d="1 class, not marked default";; *) d="$(plural "$n" class), none marked default";; esac
+  if [ "$n" = 0 ]; then
+    hint="create a StorageClass for the cluster's disks and mark it default; the databases and the snapshot store need one."
+  elif [ "$GKE" = 1 ] && [[ " $SC_ALL " == *" standard-rwo "* ]]; then
+    hint="on GKE the usual choice is standard-rwo (pd-balanced): run the installer with SET_DEFAULT_STORAGECLASS=standard-rwo, which marks it default (nothing is marked without it), or alone: KUBE_CONTEXT=$CTX hack/default-storageclass.sh standard-rwo"
+  else
+    hint="run the installer with SET_DEFAULT_STORAGECLASS=<name> (one of: $SC_ALL), which marks it default (nothing is marked without it), or alone: KUBE_CONTEXT=$CTX hack/default-storageclass.sh <name>"
+  fi
+  fail "default StorageClass" "none ($d)" "$hint"
 fi
 
 # --- NetworkPolicy: a hint from the DaemonSet names in kube-system. A name is not proof, so this is always a warning. ---
@@ -116,8 +143,7 @@ else
   warn "NetworkPolicy" "no known NetworkPolicy dataplane found in kube-system (some clusters enforce it in the kernel or the CNI without a DaemonSet there)" "run hack/ci/netpol-test.sh against this cluster; it checks ingress and egress to the internet."
 fi
 
-# --- nodes: Ready, architecture, allocatable CPU and memory ---
-ND=$(kc get nodes -o json 2>/dev/null || true)
+# --- nodes: Ready, architecture, allocatable CPU and memory, machine type, Spot ---
 TOTAL=$(jq -r '.items | length' <<<"$ND" 2>/dev/null || echo 0); TOTAL=${TOTAL:-0}
 RDY=$(jq -r '[.items[]? | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))] | length' <<<"$ND" 2>/dev/null || echo 0); RDY=${RDY:-0}
 if [ "$RDY" = 0 ]; then
@@ -149,6 +175,28 @@ else
   else
     warn "node capacity" "could not read the allocatable CPU and memory of the nodes" "check: kubectl --context $CTX get nodes -o json"
   fi
+  # Machine type. Google's Agent Substrate page asks for c3-standard-4 or larger and refuses E2 (mixed CPU architectures). That is the
+  # only source, and it is about GKE, so an E2 node is a warning, not a failure.
+  READY='[.items[]? | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))]'
+  TYPES=$(jq -r "$READY | [.[].metadata.labels[\"node.kubernetes.io/instance-type\"] // empty] | unique | join(\" and \")" <<<"$ND" 2>/dev/null || true)
+  if [ -z "$TYPES" ]; then
+    info "node machine type" "no node.kubernetes.io/instance-type label on the Ready nodes, not checked"
+  elif jq -e "$READY | any(.[]; (.metadata.labels[\"node.kubernetes.io/instance-type\"] // \"\") | startswith(\"e2-\"))" <<<"$ND" >/dev/null 2>&1; then
+    warn "node machine type" "$TYPES: Google's Agent Substrate page refuses E2 machine types (mixed CPU architectures) and asks for c3-standard-4 or larger" "use a node pool of c3-standard-4 or larger (C3, C4, N2 or N4). Source: https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate (GKE Standard only, not Autopilot); not verified for other install paths."
+  else
+    pass "node machine type" "$TYPES (no E2 machine type)"
+  fi
+  # Spot VMs: information only
+  SPOT=$(jq -r "$READY | map(select(.metadata.labels[\"cloud.google.com/gke-spot\"] == \"true\")) | length" <<<"$ND" 2>/dev/null || echo 0)
+  if [ "${SPOT:-0}" != 0 ]; then
+    if [ "$SPOT" = 1 ]; then vm="is a Spot VM"; else vm="are Spot VMs"; fi
+    info "Spot nodes" "$SPOT of $(plural "$RDY" "Ready node") $vm (cloud.google.com/gke-spot=true): a preemption restarts the install's pods on another node, and the Substrate golden snapshot is rebuilt"
+  fi
+fi
+
+# --- GKE: Standard or Autopilot? No read-only signal for Autopilot was verified, so this only says what to check. ---
+if [ "$GKE" = 1 ]; then
+  info "GKE mode" "Agent Substrate on GKE needs a Standard cluster; Autopilot is not supported. Reads alone cannot tell Autopilot apart, so check it: gcloud container clusters describe <cluster> --format='value(autopilot.enabled)'"
 fi
 
 # --- Pod Security labels of the namespaces the installer uses ---

@@ -25,6 +25,11 @@
 #   SKIP_PREFLIGHT=1     with CLUSTER_TYPE=remote, do not run hack/preflight.sh first. It reads the cluster (Kubernetes 1.37 or newer, the certificates and
 #                        admission policy APIs, Gateway API CRD bundle, default StorageClass, nodes, Pod Security labels), prints PASS/WARN/FAIL with a fix
 #                        for each, changes nothing, and stops the install on a FAIL. You can run it alone: KUBE_CONTEXT=<context> hack/preflight.sh
+#                        It also prints INFO lines (not counted): Spot nodes, and on GKE that Autopilot is not supported (it cannot detect Autopilot).
+#   SET_DEFAULT_STORAGECLASS=<name>  mark that StorageClass as the cluster default (any CLUSTER_TYPE; never done without this). For a cluster that
+#                        has classes but no default, such as GKE 1.37 rapid (usual choice there: standard-rwo, pd-balanced). Checked (read only) before
+#                        anything changes, changed in step 1 with one kubectl patch on KUBE_CONTEXT. Refused, with nothing changed, when the class does not exist
+#                        or another class is the default; nothing to do when it already is. Prints what it changed and how to undo it.
 #   SERVICE_ACCOUNT_ISSUER=https://...  the service account issuer the workload tool server trusts (container agents with a tool profile). Default: read
 #                        from the cluster (/.well-known/openid-configuration, then the kube-apiserver flag) and passed only when the chart value is not
 #                        set in a values file and differs from the chart default (kind and k3s), so the default render does not change (hack/sa-issuer.sh)
@@ -124,6 +129,8 @@ CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
 [ "$REMOTE" = 0 ] || [ "$CLUSTER_UP" = 1 ] || die "cannot reach the API server of kube context '$CTX' (CLUSTER_TYPE=remote never creates a cluster; check: kubectl --context $CTX get --raw /version). Nothing was changed."
 # remote: read-only checks of the cluster (hack/preflight.sh, issue #168), before anything is created. A FAIL stops here; SKIP_PREFLIGHT=1 skips it.
 if [ "$REMOTE" = 1 ] && [ "${SKIP_PREFLIGHT:-0}" != 1 ]; then log "preflight: the remote cluster"; KUBE_CONTEXT=$CTX bash hack/preflight.sh || die "the preflight found a problem in cluster '$CTX' (see the FAIL lines and their fixes above). Nothing was changed. SKIP_PREFLIGHT=1 skips the checks."; fi
+# SET_DEFAULT_STORAGECLASS (opt-in): a read-only check now, when the cluster exists; the change is made in step 1.
+if [ -n "${SET_DEFAULT_STORAGECLASS:-}" ] && [ "$CLUSTER_UP" = 1 ]; then KUBECTL=$K KUBE_CONTEXT=$CTX bash hack/default-storageclass.sh --check "$SET_DEFAULT_STORAGECLASS" || die "SET_DEFAULT_STORAGECLASS=$SET_DEFAULT_STORAGECLASS was refused (see above). Nothing was changed."; fi
 secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K --context="$CTX" get secret -n "$1" "$2" >/dev/null 2>&1; }   # named context: this runs before the switch below
 
 # The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
@@ -297,6 +304,7 @@ if [ "$CLUSTER_UP" = 0 ]; then
   cluster_create "$ROOT"
 fi
 $K config use-context "$CTX" >/dev/null || die "kube context $CTX not found"
+if [ -n "${SET_DEFAULT_STORAGECLASS:-}" ]; then KUBECTL=$K KUBE_CONTEXT=$CTX bash hack/default-storageclass.sh "$SET_DEFAULT_STORAGECLASS" || die "could not mark StorageClass $SET_DEFAULT_STORAGECLASS as the default (see above)"; fi
 # gVisor pod networking (components/runtime/NOTES.md): kind and k3d set two node sysctls with docker exec; remote skips them, or uses the
 # DaemonSet components/runtime/node-settings.yaml with NODE_SETTINGS=daemonset (hack/cluster.sh)
 cluster_node_settings "$ROOT"

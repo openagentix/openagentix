@@ -39,7 +39,7 @@ exit 0
 EOS
 cat > "$D/fake-install.sh" <<EOS
 #!/usr/bin/env bash
-env | grep -E '^(CLUSTER_TYPE|PROFILE|KUBE_CONTEXT|KUBECONFIG|NODE_SETTINGS|SKIP_[A-Z0-9_]+|VALUES_FILE)=' | sort > "$D/install-env"
+env | grep -E '^(CLUSTER_TYPE|PROFILE|KUBE_CONTEXT|KUBECONFIG|NODE_SETTINGS|SET_DEFAULT_STORAGECLASS|SKIP_[A-Z0-9_]+|VALUES_FILE)=' | sort > "$D/install-env"
 EOS
 chmod +x "$D/bin/"* "$D/fake-install.sh"
 calls(){ cat "$D/calls" 2>/dev/null; }
@@ -134,16 +134,16 @@ echo '{"items":[{"metadata":{"name":"premium-rwo"}},{"metadata":{"name":"standar
 echo '{"items":[{"metadata":{"name":"standard-rwo","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}]}' > "$D/sc-ok.json"
 OUT=$(inst FAKE_SC="$D/sc-none.json")
 t "exit 0" "$(grep -c '^exit=0$' <<<"$OUT")" 1
-t "no default StorageClass: marks standard-rwo" "$(calls | grep -c '^kubectl --context=gke_.* patch storageclass standard-rwo ')" 1
+t "no default StorageClass: asks the installer to mark standard-rwo (SET_DEFAULT_STORAGECLASS), no patch of its own" "$(grep -cx SET_DEFAULT_STORAGECLASS=standard-rwo "$D/install-env")/$(calls | grep -c ' patch ')" 1/0
 CTX="gke_${P}_us-central1-a_oa-gke"
 for kv in CLUSTER_TYPE=remote PROFILE=quickstart "KUBE_CONTEXT=$CTX" NODE_SETTINGS=daemonset SKIP_SKILL=1 SKIP_A2A_GATE_IMAGE=1 SKIP_STUB_MODEL_IMAGE=1 \
           SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 "VALUES_FILE=$V" "KUBECONFIG=$(dirname "$STATE")/kubeconfig"; do
   t "install env $kv" "$(grep -cx -- "$kv" "$D/install-env")" 1
 done
 inst FAKE_SC="$D/sc-ok.json" >/dev/null
-t "a default StorageClass exists: no patch" "$(calls | grep -c ' patch ')" 0
+t "a default StorageClass exists: SET_DEFAULT_STORAGECLASS not set" "$(grep -c '^SET_DEFAULT_STORAGECLASS=' "$D/install-env")" 0
 inst FAKE_SC="$D/sc-none.json" GKE_KEEP_STORAGECLASS=1 >/dev/null
-t "GKE_KEEP_STORAGECLASS=1: no patch" "$(calls | grep -c ' patch ')" 0
+t "GKE_KEEP_STORAGECLASS=1: SET_DEFAULT_STORAGECLASS not set" "$(grep -c '^SET_DEFAULT_STORAGECLASS=' "$D/install-env")" 0
 inst FAKE_SC="$D/sc-ok.json" NODE_SETTINGS=none >/dev/null
 t "NODE_SETTINGS=none reaches install.sh as empty (the installer skips the DaemonSet; for the A/B run)" "$(grep -cx NODE_SETTINGS= "$D/install-env")" 1
 cp "$STATE" "$D/past.env"; sed -i.bak 's/^DEADLINE=.*/DEADLINE=1000/' "$D/past.env"
