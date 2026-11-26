@@ -111,7 +111,6 @@ Reviews and tests:
 - Memory for built agents needs a chart agent with memory, so that the memory stack is installed.
 - The quota was counted, but enforcement at the limit was not tried.
 - The controller does not read Secrets, so a key Secret deleted by hand is not noticed until the definition or its key entry changes.
-- Bring your own agent (an agent built with another framework, speaking A2A) is planned for release 0.3 (ADR 0013). It is not built.
-- The end-to-end install in CI does not work yet.
+- Bring your own agent (a container built with another framework, speaking A2A 1.0) is built and proven in CI on kind only, off by default. See [Bring your own agent](../guide/bring-your-own-agent.md) and [what works](../what-works.md).
 
 Sources: `services/control-plane/README.md`, `docs/decisions/0007-control-plane-and-agent-builder.md`, `docs/decisions/0012-platform-primitives-for-agentic-delivery.md`, `docs/decisions/0013-focus-and-runtime-neutrality.md`.

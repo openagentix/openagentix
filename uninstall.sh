@@ -23,10 +23,26 @@
 # ConfigMap (llm-api-keys-control-plane); the key Secrets of built agents are deleted with their definitions (owner reference).
 # Console (ADR 0007, slice 3): the Deployment, Service, NetworkPolicy, ServiceAccount, Role and RoleBinding go with the release. The login token Secret
 # (console-token) is kept, so a later ./install.sh keeps the same token; PURGE_SECRETS=1 deletes it.
+# NODE_SETTINGS=daemonset: the namespace openagentix-node-settings (its privileged DaemonSet) is always deleted.
+# Context (issue #169): CLUSTER_TYPE=kind (default) or k3d use <type>-$CLUSTER unless KUBE_CONTEXT is set; CLUSTER_TYPE=remote needs KUBE_CONTEXT
+# (a local context name is refused unless ALLOW_LOCAL_CONTEXT=1, see hack/cluster.sh). Every kubectl and helm call names that context, and nothing
+# is removed unless it exists, is the current context after the switch and (remote) its API server answers. This script never deletes a cluster;
+# on remote it prints the cloud teardown reminder (load balancers and disks first, then the cluster: docs/diary/guide/install-gke.md#teardown).
 set -euo pipefail
-CLUSTER=${CLUSTER:-openagentix}; CLUSTER_TYPE=${CLUSTER_TYPE:-kind}; CTX=${KUBE_CONTEXT:-$CLUSTER_TYPE-$CLUSTER}
-K=${KUBECTL:-kubectl}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
-$K config use-context "$CTX" >/dev/null || { echo "ERROR: kube context $CTX not found" >&2; exit 1; }
+CLUSTER=${CLUSTER:-openagentix}
+# shellcheck source=hack/cluster.sh
+. "$(dirname "$0")/hack/cluster.sh"   # CLUSTER_TYPE=kind (default), k3d or remote
+cluster_check_type || exit 1
+CTX=${KUBE_CONTEXT:-$(cluster_ctx)}
+KB=${KUBECTL:-kubectl}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
+$KB config use-context "$CTX" >/dev/null || { echo "ERROR: kube context $CTX not found. Nothing was removed." >&2; exit 1; }
+CUR=$($KB config current-context 2>/dev/null || true)
+[ "$CUR" = "$CTX" ] || { echo "ERROR: the current context is '$CUR', not '$CTX'. Nothing was removed." >&2; exit 1; }
+if [ "$CLUSTER_TYPE" = remote ] && ! KUBE_CONTEXT=$CTX cluster_exists; then
+  echo "ERROR: cannot reach the API server of kube context '$CTX'. Nothing was removed." >&2; exit 1
+fi
+K="$KB --context=$CTX"                       # every call below names the context, so a later context switch elsewhere changes nothing here
+helm(){ command helm --kube-context "$CTX" "$@"; }
 if $K get crd agentdefinitions.openagentix.io >/dev/null 2>&1 && [ -n "$($K get agentdefinitions.openagentix.io -A -o name 2>/dev/null)" ]; then
   echo "deleting the AgentDefinitions first (the controller removes their agents, keys and registrations)"
   $K delete agentdefinitions.openagentix.io --all -A --wait=true --timeout="${DEFINITIONS_WAIT:-300s}" \
@@ -49,7 +65,7 @@ if helm status openagentix -n "$RELEASE_NS" >/dev/null 2>&1; then
 else
   echo "release openagentix not found in $RELEASE_NS; nothing to do"
 fi
-KOURIER_NS=${KOURIER_NS:-agent-kourier} CLUSTER="$CLUSTER" KUBE_CONTEXT="$CTX" KUBECTL="$K" bash "$(dirname "$0")/components/channels/kourier.sh" uninstall
+KOURIER_NS=${KOURIER_NS:-agent-kourier} CLUSTER="$CLUSTER" KUBE_CONTEXT="$CTX" KUBECTL="$KB" bash "$(dirname "$0")/components/channels/kourier.sh" uninstall
 if [ "${PURGE_SECRETS:-0}" = 1 ]; then
   for row in $WHSECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done
   for row in $GATESECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done   # gate keys and their hashes
@@ -68,4 +84,10 @@ if [ "${PURGE_DATA:-0}" = 1 ]; then   # the knowledge base's data: database volu
   $K delete pvc memory-embeddings-models -n openagentix-memory --ignore-not-found   # memory embedding model cache (saved memories live in kagent's PostgreSQL)
   $K delete crd agentdefinitions.openagentix.io --ignore-not-found   # kept by the release; deleting it deletes any definition left (there should be none)
 fi
+# the opt-in node settings (NODE_SETTINGS=daemonset): a privileged DaemonSet must not outlive the platform. The sysctls stay set until a node restarts.
+$K delete namespace openagentix-node-settings --ignore-not-found
 echo "removed release openagentix. Upstream components and namespaces were left in place."
+if [ "$CLUSTER_TYPE" = remote ]; then
+  echo "remote cluster ($CTX): this script deletes no cluster. Cloud load balancers and disks can outlive a deleted cluster and keep costing money:"
+  echo "delete the LoadBalancer Services and the PVCs first, then the cluster with the cloud's own tool (docs/diary/guide/install-gke.md#teardown)."
+fi

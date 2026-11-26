@@ -42,15 +42,15 @@ The platform policy is what the platform team allows: for example which models, 
 
 ## Runtime
 
-The runtime runs the agent. Today this is kagent on Agent Substrate: each conversation runs in its own gVisor sandbox. The control plane talks to the runtime through an adapter. A plain adapter for any agent that speaks A2A is planned for release 0.3.
+The runtime runs the agent. Today this is kagent on Agent Substrate: each conversation runs in its own gVisor sandbox. The control plane talks to the runtime through an adapter. With **bring your own agent** (opt-in), the runtime can also be your own digest-pinned container that speaks A2A 1.0; it is proven in CI on kind only. See [Bring your own agent](./bring-your-own-agent.md).
 
 ## Model gateway and virtual key
 
-The model gateway (agentgateway) is the only way an agent reaches a model. Each agent holds its own **virtual key** for the gateway, never the provider's key. The gateway uses the virtual key to apply a token budget per agent (by default 1,000,000 tokens per hour) and to record tokens and cost per agent.
+The model gateway (agentgateway; other projects call this an LLM gateway or AI gateway) is the only way an agent reaches a model. Each agent holds its own **virtual key** for the gateway, never the provider's key. The gateway uses the virtual key to apply a token budget per agent (by default 1,000,000 tokens per hour) and to record tokens and cost per agent.
 
 ## Tool gateway and tool profile
 
-Tools are MCP servers behind a tool gateway (ToolHive virtual MCP server). A **tool profile** is a named list of approved tools with its own endpoint. An agent with a profile sees only those tools. A tool outside the profile is not found, even from code the agent runs.
+Tools are MCP (Model Context Protocol) servers behind a tool gateway. The tool gateway is an MCP gateway: a ToolHive virtual MCP server that serves many tool servers on one endpoint. A **tool profile** is a named list of approved tools with its own endpoint. An agent with a profile sees only those tools. A tool outside the profile is not found, even from code the agent runs.
 
 ## Egress allowlist
 
@@ -58,11 +58,11 @@ Each agent sandbox can reach only what its model and tools need, plus the hosts 
 
 ## A2A and the A2A gate
 
-A2A (Agent2Agent) is an open protocol for calling an agent. The **A2A gate** is a small proxy in front of the agents. Every caller must prove who it is (a Kubernetes ServiceAccount token or a key). A **caller rule** says which agents that caller may call and which user ids it may use. The gate writes one audit line per request.
+A2A (Agent2Agent) is an open protocol for calling an agent, run as a Linux Foundation project. The gate and the bring-your-own-agent path use A2A 1.0. The **A2A gate** is a small proxy in front of the agents. Every caller must prove who it is (a Kubernetes ServiceAccount token or a key). A **caller rule** says which agents that caller may call and which user ids it may use. The gate writes one audit line per request.
 
-## Audit record
+## Audit trail
 
-Two records exist today: the A2A gate's audit line for each request (the user id is stored as a hash, never the message text), and the tool gateway's `AUDIT` line for each tool call (tool, outcome, session, duration, no arguments). Both are pod logs, not a tamper-evident store.
+The audit trail is made of two kinds of audit line today: the A2A gate's audit line for each request (the user id is stored as a hash, never the message text), and the tool gateway's `AUDIT` line for each tool call (tool, outcome, session, duration, no arguments). Both are pod logs, not a tamper-evident store.
 
 ## Console
 

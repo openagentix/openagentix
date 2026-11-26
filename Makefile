@@ -55,6 +55,12 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/verify-release-test.sh
 	hack/ci/kind-image-digest-test.sh
 	hack/ci/cluster-test.sh
+	hack/ci/preflight-test.sh
+	hack/ci/default-storageclass-test.sh
+	hack/ci/sa-issuer-test.sh
+	hack/ci/uninstall-test.sh
+	hack/gke/tests/run.sh
+	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'

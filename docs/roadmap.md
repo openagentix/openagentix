@@ -27,7 +27,7 @@ The comparison below was made from the vendors' public documentation on 2026-11-
 
 | Area | The managed platforms offer | OpenAgentix today |
 |---|---|---|
-| Runtime | hosted agents, an isolated sandbox per session, long-running sessions, many frameworks, your own container | **built**: kagent on Agent Substrate (gVisor, per-session identity). **Missing**: long-running and resumable runs, your own container, other frameworks wired in |
+| Runtime | hosted agents, an isolated sandbox per session, long-running sessions, many frameworks, your own container | **built**: kagent on Agent Substrate (gVisor, per-session identity); your own A2A 1.0 container, proven in CI on kind only (ADR 0015). **Missing**: long-running and resumable runs, a registry pull and private registries for your own container, other frameworks checked |
 | Identity | an identity per agent, inbound authentication, a credential vault, acting on behalf of a user with OAuth | **partly**: per-session identity, tool-layer tokens, the A2A gate. **Missing**: credential vault, on-behalf-of-user |
 | Tools | an MCP gateway, OpenAPI as tools, tool search, per-agent filtering, registries | **built**: MCP gateway, tool profiles, tool access rules. **Missing**: OpenAPI as tools, a registry |
 | Built-in tools | code interpreter, browser, computer use, file search | **built**: knowledge search. **Missing**: code interpreter, browser |
@@ -42,7 +42,7 @@ The comparison below was made from the vendors' public documentation on 2026-11-
 | Channels | chat products, schedules | **built**: Telegram, signed webhooks, schedules. **Untested**: Slack |
 | Platform | tenancy, private networking, compliance attestations | **built**: network policies, one-command install. **Missing**: tenancy, more than one cluster. No attestations |
 
-Short version: the plumbing works (runtime, gateways, tools, memory, knowledge, observability, egress control). What a buyer sees first does not exist yet: a builder, evaluation, guardrails, approvals, versions, teams. Everything proven so far ran on one kind node.
+Short version: the plumbing works (runtime, gateways, tools, memory, knowledge, observability, egress control). What a buyer sees first does not exist yet: a builder, evaluation, guardrails, approvals, versions, teams. Everything proven so far ran on one kind node, or in CI on hosted runners (kind and k3s, one node each). Nothing ran on a managed cloud or OpenShift.
 
 ## Where this approach can be better, and where it cannot
 

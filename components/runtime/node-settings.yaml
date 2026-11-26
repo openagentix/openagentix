@@ -1,0 +1,77 @@
+# Opt-in node settings for a cluster without a node shell (issue #163). Applied ONLY with NODE_SETTINGS=daemonset (hack/cluster.sh,
+# cluster_node_settings); nothing applies it by default. On kind and k3d the installer sets the same two sysctls with `docker exec`.
+#
+# What it does: on every node, in the node's network namespace (hostNetwork), it sets net.ipv4.conf.all.proxy_arp=1 and, when the node has
+# IPv6, net.ipv6.conf.all.proxy_ndp=1 (upstream Substrate's hack/create-kind-cluster.sh sets them for gVisor pod networking), then sleeps.
+# Why privileged: these sysctls are not namespaced for a pod and are not on GKE's list of node system settings, so only a privileged pod on
+# the host network can write them. Only the init container is privileged, and only for the two writes; the container that stays is a
+# non-root, read-only sleep with no capabilities. The privilege is confined to this namespace (Pod Security "privileged" here only), the pod
+# has no API token, it tolerates no taint (dedicated or tainted node pools are left alone), and the image is the one Substrate's PostgreSQL
+# already uses (pinned by digest; its busybox has sysctl). Anyone who may create or exec into pods in this namespace is root on the node:
+# give nobody that right. GKE Autopilot refuses it (Substrate does not support Autopilot either). uninstall.sh deletes the namespace.
+#
+# Status: applied once on GKE (it rolled out; docs/diary/guide/install-gke.md). components/runtime/NOTES.md says the sysctls were never proven necessary even on kind;
+# whether GKE needs it is still open: no run without it yet. Remove with:
+#   kubectl delete namespace openagentix-node-settings   (the sysctls stay set until the node restarts)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openagentix-node-settings
+  labels:
+    app.kubernetes.io/part-of: openagentix
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-settings
+  namespace: openagentix-node-settings
+  labels:
+    app.kubernetes.io/name: node-settings
+    app.kubernetes.io/part-of: openagentix
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-settings
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: node-settings
+        app.kubernetes.io/part-of: openagentix
+    spec:
+      hostNetwork: true
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 1
+      initContainers:
+        - name: sysctl
+          image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              set -e;
+              sysctl -w net.ipv4.conf.all.proxy_arp=1;
+              if [ -e /proc/sys/net/ipv6/conf/all/proxy_ndp ]; then sysctl -w net.ipv6.conf.all.proxy_ndp=1; fi
+          securityContext:
+            privileged: true
+          resources:
+            requests: {cpu: 1m, memory: 8Mi}
+            limits: {memory: 32Mi}
+      containers:
+        - name: sleep
+          image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          command: ["/bin/sh", "-c"]
+          args: ["exec sleep 2147483647"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: 1m, memory: 4Mi}
+            limits: {memory: 16Mi}
