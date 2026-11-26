@@ -44,6 +44,7 @@ case "\$a" in
   "get crd agentdefinitions.openagentix.io -o jsonpath="*) [ -f "$D/w/crd" ] && printf True;;
   "get crd agentdefinitions.openagentix.io") [ -f "$D/w/crd" ] || exit 1;;
   "get agentdefinition upgrade-check"*) echo '{}';;
+  "apply -f "*) if [ "\${FAKE:-}" = quota-race ]; then c=\$(( \$(cat "$D/w/applies" 2>/dev/null || echo 0) + 1 )); echo \$c > "$D/w/applies"; [ \$c -ge 3 ] || { echo 'Error from server (Forbidden): status unknown for quota: openagentix-agentdefinitions'; exit 1; }; fi;;
   "wait agent.api.kagent.dev/assistant"*) [ -f "$D/w/notready" ] && exit 1;;
   "wait agentdefinition/upgrade-check"*) [ -f "$D/w/defnotready" ] && exit 1;;
   *"kagent-pg-0 -- psql"*) case "\$a" in *"insert into"*) ;; *) cat "$D/w/memory";; esac;;
@@ -95,7 +96,7 @@ chmod +x "$D/bin/"* "$D/kb" "$D/old" "$D/new-a" "$D/new-b"
 
 U(){ rm -rf "$D/w"; cp -R "$G" "$D/w"
   FAKE=$1 PATH="$D/bin:$PATH" KUBECTL="$D/bin/kubectl" HELM="$D/bin/helm" KB_CALL="$D/kb" HEALTH_WAIT=1 \
-    UPGRADE_OLD_INSTALL="$D/old" UPGRADE_NEW_INSTALL="$D/new-a" UPGRADE_NEW_INSTALL_B="$D/new-b" \
+    APPLY_TRIES=5 APPLY_SLEEP=0 UPGRADE_OLD_INSTALL="$D/old" UPGRADE_NEW_INSTALL="$D/new-a" UPGRADE_NEW_INSTALL_B="$D/new-b" \
     bash hack/ci/upgrade-test.sh 2>&1; echo "exit=$?"; }
 n(){ grep -c -- "$1" <<<"$OUT"; }
 
@@ -119,5 +120,6 @@ OUT=$(U old-fails);          t "a failing old install fails and stops" "$(n 'boo
 OUT=$(U new-a-fails);        t "a failing upgrade fails and stops" "$(n 'boom: helm upgrade failed')/$(n '^exit=1$')/$(n '^# 3. upgrade B')" 1/1/0
 OUT=$(U crd-missing);        t "a CRD that did not arrive fails" "$(n '^FAIL  the CRD is Established')/$(n '^exit=1$')" 1/1
 OUT=$(U definition-not-ready); t "a definition that never gets Ready fails" "$(n '^FAIL  the AgentDefinition did not become Ready')/$(n '^exit=1$')" 1/1
+OUT=$(U quota-race);         t "a quota race on the first definition is retried, and the attempt is reported" "$(n 'ok    an AgentDefinition is accepted by the API server (attempt 3')/$(n '^exit=0$')" 1/1
 OUT=$(U pvc-lost-at-b);      t "state lost at upgrade B is seen" "$(n '^FAIL  state still kept after upgrade B')/$(n '^exit=1$')" 1/1
 exit $F

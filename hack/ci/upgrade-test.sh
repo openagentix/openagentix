@@ -209,7 +209,16 @@ if [ "${UPGRADE_SKIP_B:-0}" != 1 ]; then
   $K get crd agentdefinitions.openagentix.io >/dev/null 2>&1 && bad "the CRD already exists before upgrade B (the test cannot show it arriving)" || ok "the CRD does not exist on $FROM or after upgrade A"
   run "upgrade B (control plane on)" $NEW_INSTALL_B
   check "the CRD is Established" "$($K get crd agentdefinitions.openagentix.io -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null)" True
-  $K apply -f "$W/definition.yaml" >"$W/apply.log" 2>&1 && ok "an AgentDefinition is accepted by the API server" || bad "kubectl apply of an AgentDefinition failed" "$(cat "$W/apply.log")"
+  # A CRD that is new in the cluster is not known to the Kubernetes quota controller until its next discovery pass, so the first writes are refused with
+  # "status unknown for quota" (known start-up race, see the stability audit; install.sh retries for its own definition). A user meets it too: retry, and say how long it took.
+  applied=0
+  for i in $(seq 1 "${APPLY_TRIES:-60}"); do
+    if $K apply -f "$W/definition.yaml" >"$W/apply.log" 2>&1; then applied=$i; break; fi
+    grep -q "status unknown for quota" "$W/apply.log" || break
+    sleep "${APPLY_SLEEP:-5}"
+  done
+  if [ "$applied" -gt 0 ]; then ok "an AgentDefinition is accepted by the API server (attempt $applied; attempts before the first success are the quota controller learning the new CRD)"
+  else bad "kubectl apply of an AgentDefinition failed" "$(cat "$W/apply.log")"; fi
   $K wait agentdefinition/upgrade-check -n "$KAGENT_NS" --for=condition=Ready --timeout=600s >/dev/null 2>&1 && ok "the AgentDefinition is Ready (the control plane built its agent)" \
     || bad "the AgentDefinition did not become Ready" "$($K get agentdefinition upgrade-check -n "$KAGENT_NS" -o jsonpath='{.status}' 2>&1 | cut -c1-800)"
   agent_ready && ok "the old agent $AGENT is still Ready" || bad "the old agent $AGENT is not Ready after upgrade B"
