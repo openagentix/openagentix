@@ -10,8 +10,8 @@
 # already uses (pinned by digest; its busybox has sysctl). Anyone who may create or exec into pods in this namespace is root on the node:
 # give nobody that right. GKE Autopilot refuses it (Substrate does not support Autopilot either). uninstall.sh deletes the namespace.
 #
-# Status: NOT run on GKE or any managed cluster. components/runtime/NOTES.md says the sysctls were never proven necessary even on kind;
-# the first live run decides whether this is needed at all (docs/diary/guide/install-gke.md). Remove with:
+# Status: applied once on GKE (it rolled out; docs/diary/guide/install-gke.md). components/runtime/NOTES.md says the sysctls were never proven necessary even on kind;
+# whether GKE needs it is still open: no run without it yet. Remove with:
 #   kubectl delete namespace openagentix-node-settings   (the sysctls stay set until the node restarts)
 apiVersion: v1
 kind: Namespace

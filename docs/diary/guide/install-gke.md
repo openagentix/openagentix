@@ -1,26 +1,277 @@
 ---
-title: Install on GKE (draft, not run)
+title: Install on GKE (run once)
 sidebar_position: 3.7
-description: A desk study for issue 31. What a GKE Standard cluster needs that kind and k3s do not, current GKE facts with sources, the installer changes to make first, a runbook with teardown and a budget, and the live proof plan. Nothing on this page has been run.
+description: The quick start was installed once on a GKE Standard cluster on 2026-11-26, with the images built in Cloud Build by hand. The runbook as it was run, the timings, what it proved and what it did not, the teardown, and the helper scripts in hack/gke.
 ---
 
-# Install on GKE (draft, not run)
+# Install on GKE (run once)
 
-**Status: DRAFT. Not run. Nothing on this page has been tried on a GKE cluster.** It is a desk study for [issue 31](https://github.com/openagentix/openagentix/issues/31). It was written by reading the installer, the chart, the upstream charts (kagent 1.0.1, Agent Substrate 1.0.1) and Google's public documentation on 2026-11-26. No `gcloud`, `kubectl` or cluster command was run for it. Every command below is a plan. Every GKE fact is from a cited page, and the ones the sources did not confirm are marked *unverified*. Do not read this page as "GKE is supported".
+**Status: run once on 2026-11-26; result recorded.** The quick start (stub model, no provider key) installed on one GKE Standard cluster and passed the smoke test, the NetworkPolicy test and the demo. The cluster lived about 21 minutes; then the whole project was deleted. This is [issue 31](https://github.com/openagentix/openagentix/issues/31).
 
-The quick start does **not** install on GKE today. `install.sh` assumes a kind or k3d cluster in local Docker. The list of those assumptions, with file and line, is in [Install: managed cloud, known gaps](../features/install.md#managed-cloud-known-gaps-not-yet-run). The blockers must be fixed first (see [Installer changes to make first](#installer-changes-to-make-first)).
+Read the limits before you read this as "GKE is supported":
 
-## The short answer
+- **The images were a manual step.** They were built in Cloud Build and passed to the chart in a values file, and the installer was told not to build them (`SKIP_*_IMAGE=1`). The installer's own registry mode does not exist yet ([issue 162](https://github.com/openagentix/openagentix/issues/162)).
+- **One manual `kubectl` patch was needed:** the new cluster had no default StorageClass, and the preflight stopped the install until one was marked.
+- **The model gateway's Service got a public load balancer address.** This is the known gap ([issue 165](https://github.com/openagentix/openagentix/issues/165), ADR 0023 in [PR 173](https://github.com/openagentix/openagentix/pull/173)). Nothing else of the install was exposed.
+- One run, one node, one zone, about 21 minutes. Not shown: a real model, bring your own agent, Autopilot, GKE Sandbox, arm64, a long run, the console in a browser. The full list is in [What was not shown](#what-was-not-shown).
 
-| Question | Answer from the desk study |
+The helper scripts in [`hack/gke/`](https://github.com/openagentix/openagentix/tree/main/hack/gke) repeat the run in a new project and delete it at the end. They were written from this run afterwards and are tested offline only (a fake `gcloud`); they have not been run against a real project yet.
+
+## Result at a glance
+
+| Item | Value |
 |---|---|
-| Standard or Autopilot? | **Standard.** Google's Agent Substrate page says Autopilot is not supported. The atelet DaemonSet mounts host paths (`/var/lib/ate`, `/dev`, the kubelet plugin directories) and runs as root, which Autopilot refuses unless an allowlist covers it. |
-| Node type | **`c3-standard-4`** (4 vCPU, 16 GB) or larger. Google's page says machine series with mixed CPU types, such as E2, cannot be used. So `e2-standard-4` is **not** a choice for the node that runs agents, although it is cheaper. |
-| Node image | Container-Optimized OS with containerd (`COS_CONTAINERD`, the GKE default). Substrate's own guide talks about COS settings, so COS looks tested upstream. *Unverified* for our install. |
-| Kubernetes version | 1.37 or newer on the control plane and every node pool (Substrate needs it; our installer pins 1.37 too). GKE 1.37 is in the Rapid channel since 2026-09-02 and in Regular since 2026-10-22 (release schedule page). |
-| Network policy | GKE Dataplane V2 (Cilium based). Google's Substrate page lists it as a requirement, and NetworkPolicy is always enforced with it. |
-| Images | Build for `linux/amd64`, push to Artifact Registry in the same project, give the node service account read access. No `imagePullSecrets` needed in that case. |
-| Cost of one test | About 1.30 USD for a four-hour session on one `c3-standard-4` node (see [Cost estimate](#cost-estimate)). A cluster that is forgotten for a month costs about 230 USD (prices *unverified*). Use a budget alert and the teardown below. |
+| Cluster | GKE Standard, zonal, `us-central1-a`, release channel `rapid` |
+| Kubernetes | `1.37.2-gke.1606000` |
+| Node | 1 × `c3-standard-4` Spot, `COS_CONTAINERD`, `pd-balanced` 60 GB boot disk |
+| Network | Dataplane V2; `hack/ci/netpol-test.sh`: ingress **enforced**, egress to the internet **enforced** |
+| Control plane access | master authorized networks limited to the operator's address; managed Prometheus off |
+| Images | 4 (`a2a-gate`, `stub-model`, `control-plane`, `console`) for `linux/amd64` from Cloud Build, in Artifact Registry, tag `gke1` |
+| Preflight (`hack/preflight.sh`) | first: 8 pass, 1 warn, 1 fail (no default StorageClass); after the patch: 9 pass, 1 warn, 0 fail |
+| Install | `install.sh` in remote mode, exit 0 in 625 s; `AgentDefinition quickstart` Ready at +625 s |
+| Smoke test | `hack/ci/smoke.sh`: 13 passed, 0 failed, 32 s |
+| Demo | `hack/demo.sh`: "every step showed what it should" |
+| Pods | 49, all Running |
+| Public addresses | one: the model gateway Service (type `LoadBalancer`, the known gap) |
+| Teardown | `gcloud projects delete`: 37 s to `DELETE_REQUESTED`; billing disabled |
+| Cost | not read yet (billing data comes with a delay); expected well under 1 USD, **not measured** |
+
+## Timings
+
+| Step | Time | Note |
+|---|---|---|
+| `gcloud container clusters create` | 7.4 min (about 442 s to `RUNNING`) | one node |
+| Cloud Build, four images, built and pushed | 1 min 21 s | ran at the same time as the cluster create |
+| `install.sh` (remote, quick start) | 625 s (10 min 26 s) | `AgentDefinition quickstart` Ready at +625 s |
+| `hack/ci/smoke.sh` | 32 s | 13 passed, 0 failed |
+| `gcloud projects delete` | 37 s | to `DELETE_REQUESTED` |
+| Cluster lifetime | about 21 min | from the create command to the project delete |
+
+For comparison, the same quick start reaches its first answer in 301 to 320 s on kind in CI. Why the install took longer on GKE was not analysed.
+
+## Runbook, as it was run
+
+Values in angle brackets are yours. Do not paste project ids, billing account ids, organisation ids, addresses or emails into issues. Use a **new, dedicated project**: deleting it removes everything, and the test cannot touch anything else. `hack/gke/up.sh` does steps 1 to 5 for you (see [Helper scripts](#helper-scripts)).
+
+### 0. Tools on your machine
+
+`gcloud` with the `gke-gcloud-auth-plugin` component, `kubectl` 1.37 or newer, `helm` 3, `jq`, the Python `yq`, `openssl`, `curl`, `python3`. No local Docker build is needed for this path: Cloud Build builds the images. You do not need `kind`.
+
+### 1. A new project, billing, APIs and a budget
+
+```sh
+export PROJECT=<new-project-id> REGION=us-central1 ZONE=us-central1-a CLUSTER=<cluster>
+gcloud projects create "$PROJECT" --organization=<organisation id>
+gcloud billing projects link "$PROJECT" --billing-account=<billing account>
+gcloud services enable container.googleapis.com compute.googleapis.com artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com billingbudgets.googleapis.com --project="$PROJECT"
+
+gcloud billing budgets create --billing-account=<billing account> --display-name="$PROJECT" \
+  --budget-amount=10USD --filter-projects="projects/$PROJECT" \
+  --threshold-rule=percent=0.5 --threshold-rule=percent=0.9 --threshold-rule=percent=1.0 \
+  --threshold-rule=percent=1.0,basis=forecasted-spend --billing-project="$PROJECT"
+```
+
+- `--billing-project="$PROJECT"` was needed. Without it, gcloud billed the budget API call to another project, the one set as its quota project.
+- **A budget only sends alerts. It does not stop spending.** The teardown is the only thing that stops the cost.
+
+### 2. Grants for the default compute service account
+
+In a new project, Cloud Build and the nodes both run as the default compute service account, and it had none of the roles they need. Without the first grant, Cloud Build failed with a 403 on its source bucket.
+
+```sh
+NUM=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+SA=$NUM-compute@developer.gserviceaccount.com
+for role in roles/storage.objectViewer roles/artifactregistry.writer roles/logging.logWriter roles/container.defaultNodeServiceAccount; do
+  gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SA" --role="$role" --condition=None
+done
+```
+
+| Role | Why |
+|---|---|
+| `roles/storage.objectViewer` | Cloud Build reads the uploaded source from a bucket (403 without it) |
+| `roles/artifactregistry.writer` | Cloud Build pushes the images |
+| `roles/logging.logWriter` | build and node logs |
+| `roles/container.defaultNodeServiceAccount` | what GKE nodes need; with it the node pulled the four images from Artifact Registry |
+
+### 3. Start the cluster (in the background)
+
+```sh
+gcloud container clusters create "$CLUSTER" --project="$PROJECT" --zone="$ZONE" --release-channel=rapid \
+  --machine-type=c3-standard-4 --num-nodes=1 --spot --image-type=COS_CONTAINERD --enable-dataplane-v2 \
+  --disk-type=pd-balanced --disk-size=60 \
+  --enable-master-authorized-networks --master-authorized-networks=<your IP>/32 \
+  --no-enable-managed-prometheus > cluster-create.log 2>&1 &
+```
+
+- `rapid`: on 2026-11-26 it gave `1.37.2-gke.1606000`. Agent Substrate needs 1.37 or newer.
+- `c3-standard-4`: Google's Substrate page refuses mixed CPU series such as E2.
+- `--spot`: cheaper, and a preemption only ends a short test. Upstream advises against Spot and node auto-upgrade for nodes that run Substrate workers (a suspended actor can end up crashed). Use `SPOT=0` (on-demand) and think about the channel for anything longer than a short test.
+- Master authorized networks: only your address reaches the control plane.
+
+### 4. Build the four images in Cloud Build (at the same time)
+
+Create an Artifact Registry repository and submit the build while the cluster is being made:
+
+```sh
+gcloud artifacts repositories create oa --repository-format=docker --location="$REGION" --project="$PROJECT"
+REPO=$REGION-docker.pkg.dev/$PROJECT/oa
+git archive --format=tar.gz -o source.tgz HEAD -- services/a2a-gate services/stub-model services/control-plane services/console console .dockerignore
+gcloud builds submit source.tgz --project="$PROJECT" --config=hack/gke/cloudbuild.yaml --substitutions="_REPO=$REPO,_TAG=gke1"
+```
+
+The recipe (`hack/gke/cloudbuild.yaml`): four `docker build` steps that all start at once (`waitFor: ['-']`), on an `E2_HIGHCPU_8` build machine. Cloud Build workers are `linux/amd64`, which is what C3 nodes run.
+
+```yaml
+steps:
+  - id: a2a-gate
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    args: ['build', '-t', '${_REPO}/a2a-gate:${_TAG}', 'services/a2a-gate']
+  - id: stub-model
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    args: ['build', '-t', '${_REPO}/stub-model:${_TAG}', 'services/stub-model']
+  - id: control-plane
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    args: ['build', '-t', '${_REPO}/control-plane:${_TAG}', 'services/control-plane']
+  - id: console
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    args: ['build', '-t', '${_REPO}/console:${_TAG}', '-f', 'services/console/Dockerfile', '.']
+images:
+  - '${_REPO}/a2a-gate:${_TAG}'
+  - '${_REPO}/stub-model:${_TAG}'
+  - '${_REPO}/control-plane:${_TAG}'
+  - '${_REPO}/console:${_TAG}'
+options:
+  machineType: E2_HIGHCPU_8
+substitutions:
+  _REPO: ''
+  _TAG: gke1
+```
+
+The run used this recipe: four parallel steps, `E2_HIGHCPU_8`, tag `gke1`, done in 1 min 21 s. The file in `hack/gke/` and the `git archive` line were written down from it afterwards.
+
+### 5. Credentials and the image values
+
+Wait for the cluster create, then fetch its credentials into a **separate** kubeconfig, so your default one is not touched:
+
+```sh
+wait
+export KUBECONFIG=$PWD/gke-kubeconfig
+gcloud container clusters get-credentials "$CLUSTER" --zone="$ZONE" --project="$PROJECT"
+export KUBE_CONTEXT=gke_${PROJECT}_${ZONE}_${CLUSTER}
+```
+
+A values file points the four chart images at Artifact Registry (`gke-images.yaml`):
+
+```yaml
+governance:
+  a2a:
+    image: {repository: <region>-docker.pkg.dev/<project>/oa/a2a-gate, tag: "gke1"}
+gateway:
+  stubModel:
+    image: {repository: <region>-docker.pkg.dev/<project>/oa/stub-model, tag: "gke1"}
+controlPlane:
+  image: {repository: <region>-docker.pkg.dev/<project>/oa/control-plane, tag: "gke1"}
+console:
+  image: {repository: <region>-docker.pkg.dev/<project>/oa/console, tag: "gke1"}
+```
+
+### 6. Preflight, and the StorageClass workaround
+
+```sh
+hack/preflight.sh
+```
+
+The first run gave 8 pass, 1 warn, 1 fail:
+
+- WARN NetworkPolicy: it found `anetd` (Dataplane V2). This line is always a warning; step 8 checks enforcement.
+- **FAIL default StorageClass**: the cluster had 10 StorageClasses and none was marked default. (The message printed "10 classs", a plural bug.)
+
+Workaround, one manual patch:
+
+```sh
+kubectl patch storageclass standard-rwo -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+```
+
+Then the preflight gave 9 pass, 1 warn, 0 fail. The other checks that passed: Kubernetes 1.37 or newer, the `certificates.k8s.io` resources, `validatingadmissionpolicies` at `v1`, the Gateway API CRDs, node architecture, node capacity, Pod Security labels and the context name. Which `certificates.k8s.io` version was served, and whether GKE had its own Gateway API CRDs, was not written down.
+
+### 7. Install
+
+Remote mode, stub model, no provider key in the environment, and the images from step 4:
+
+```sh
+KUBE_CONTEXT=$KUBE_CONTEXT CLUSTER_TYPE=remote PROFILE=quickstart NODE_SETTINGS=daemonset SKIP_SKILL=1 \
+SKIP_A2A_GATE_IMAGE=1 SKIP_STUB_MODEL_IMAGE=1 SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 \
+VALUES_FILE=gke-images.yaml ./install.sh 2>&1 | tee gke-install.log
+```
+
+- `NODE_SETTINGS=daemonset` applies the DaemonSet that sets `proxy_arp` and `proxy_ndp` on the node. It rolled out on GKE. Whether it is needed there was **not** tested (no run without it).
+- `SKIP_SKILL=1`: the example skill needs a local registry; the quick start does not use it.
+- Result: exit 0 after 625 s; `AgentDefinition quickstart` Ready at +625 s; 49 pods Running; the four images were pulled from Artifact Registry.
+
+### 8. Checks
+
+```sh
+hack/ci/smoke.sh 2>&1 | tee gke-smoke.log
+hack/ci/netpol-test.sh
+hack/demo.sh
+kubectl get svc -A -o json | jq -r '.items[]|select(.spec.type=="LoadBalancer")|.metadata.namespace+"/"+.metadata.name'
+```
+
+| Check | Result on GKE |
+|---|---|
+| `hack/ci/smoke.sh` | 13 passed, 0 failed, 32 s: `AgentDefinition` and agent `quickstart` Ready; `RemoteMCPServer kagent-api` Accepted; the A2A gate returned the stub's answer; the agent used `osv_query_vulnerability` through its tool profile; a tool outside the profile got no data; a definition with a model that is not allowed was refused (`Accepted=False`, no agent built); the console API answered 401 without a token and listed `quickstart` and one tool profile with it |
+| `hack/ci/netpol-test.sh` | ingress ENFORCED, egress to the internet ENFORCED (Dataplane V2) |
+| `hack/demo.sh` | "every step showed what it should" |
+| LoadBalancer Services | the model gateway Service had a public IP: the known gap ([issue 165](https://github.com/openagentix/openagentix/issues/165)) |
+
+## Teardown
+
+The run deleted the **whole project**. That removes the cluster, the node, its disks, the load balancer, the images and the grants in one step, and disables billing for the project.
+
+```sh
+gcloud projects delete "$PROJECT" --quiet
+gcloud projects describe "$PROJECT" --format='value(lifecycleState)'   # DELETE_REQUESTED
+rm -f gke-kubeconfig
+```
+
+It took 37 s. After it, the project state was `DELETE_REQUESTED`, billing was disabled, and API calls to the project were refused with "billing must be enabled". Google keeps a deleted project recoverable for about 30 days. Delete the budget when the billing report shows no new charge for the project (`gcloud billing budgets list --billing-account=<billing account>`). `hack/gke/down.sh` does the delete, the check and the kubeconfig cleanup.
+
+If you must keep the project, delete the LoadBalancer Services and the PVCs before the cluster (load balancers and disks outlive a cluster and cost money), delete the cluster, then check that `gcloud compute instances list`, `disks list`, `forwarding-rules list`, `addresses list` and `target-pools list` are empty for the project. That path was not run.
+
+## Helper scripts
+
+[`hack/gke/`](https://github.com/openagentix/openagentix/tree/main/hack/gke) has `up.sh` (steps 1 to 5), `install.sh` (steps 6 and 7, including the StorageClass workaround) and `down.sh` (the teardown). `up.sh` always makes a new project, refuses to run without `PROJECT_PREFIX`, `ORG_ID`, `BILLING_ACCOUNT`, `MAX_HOURS` and `AUTHORIZED_CIDR`, prints the teardown command before it creates anything, and prints no credential or billing id. `down.sh` deletes only a project with the label that `up.sh` sets. They are tested offline with a fake `gcloud` (`hack/gke/tests/run.sh`) and have **not** been run against a real project. See the [README](https://github.com/openagentix/openagentix/blob/main/hack/gke/README.md).
+
+## What was proven
+
+On one GKE Standard cluster (Kubernetes 1.37.2, one Spot `c3-standard-4`, Dataplane V2), once:
+
+- `CLUSTER_TYPE=remote` with `KUBE_CONTEXT` installs the quick start on a managed cluster, when the images are given in a values file.
+- `hack/preflight.sh` ran against a real cluster for the first time, and its FAIL for a missing default StorageClass was correct.
+- Agent Substrate's node agent and its own gVisor ran on a COS node (the quick start agent became Ready and answered).
+- The control plane, the A2A gate with the model gateway key, the tool profile, the policy refusal and the console API worked on GKE, through the NetworkPolicies the chart sets (the API server `/32` rule included).
+- Dataplane V2 enforced the NetworkPolicy test for ingress and for egress to the internet.
+- The node settings DaemonSet (`NODE_SETTINGS=daemonset`) rolls out on GKE.
+- Deleting the project removed everything that costs money in 37 s.
+
+## What was not shown
+
+- A real model (the stub answered).
+- Bring your own agent (container agents) on GKE: `QUICKSTART_BYO=1` is still refused in remote mode, and the service account issuer path for it was not exercised.
+- The installer's registry mode ([issue 162](https://github.com/openagentix/openagentix/issues/162)); the images were a manual step.
+- Whether the node sysctls DaemonSet is needed on GKE (no run without it).
+- The model gateway Service as `ClusterIP` (ADR 0023 is not merged).
+- GKE Sandbox, Autopilot, arm64 nodes, more than one node, Calico.
+- Long-run stability, node upgrades, Spot preemption.
+- The console in a browser (only its API was checked).
+- `uninstall.sh` on GKE (the project was deleted instead).
+- The cost (not read from billing yet).
+- `hack/gke/` scripts against a real project.
 
 ## How Agent Substrate's gVisor relates to GKE Sandbox
 
@@ -33,16 +284,16 @@ These are two different things. Do not mix them up.
 
 ## Current GKE facts, with sources
 
-Read on 2026-11-26. Google's pages do not show a "last updated" date, so the date is the day they were read. Third-party price pages give their own update dates.
+Read on 2026-11-26, before the run. The last column adds what the run showed, where it showed something. Google's pages do not show a "last updated" date, so the date is the day they were read. Third-party price pages give their own update dates.
 
 | Fact | What the source says | Source | Status |
 |---|---|---|---|
 | Agent Substrate on GKE: cluster mode | "Agent Substrate on GKE is supported on Standard clusters only"; "Autopilot clusters aren't supported" | [Install overview, Agent Substrate on GKE](https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate) | confirmed from the page |
-| Version | 1.37 or later on the control plane and the node pools; not the Extended channel | same page; [substrate-gke setup-gcp README](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md) | confirmed from the page |
-| Machine type | `c3-standard-4` or larger; no mixed CPU series such as E2 | same page | confirmed from the page |
-| Dataplane V2 | listed as a requirement | same page | confirmed from the page |
-| PodCertificateRequest and ClusterTrustBundle | Google's installer "turns on the beta `podcertificaterequests` and `clustertrustbundles` APIs"; substrate-gke creates clusters "with ... required Kubernetes beta APIs" | same page; substrate-gke README | confirmed that Google's tool enables them. Our `components/runtime/NOTES.md` says kind 1.37 serves them as `certificates.k8s.io/v1`. Whether GKE 1.37 serves v1 without the flag is *unverified* |
-| Node auto-upgrade | "Turn node auto-upgrade off on any node pool that runs workers, and do not use spot or preemptible nodes for them" (a suspended actor can end up crashed) | substrate-gke setup-gcp README | confirmed from the page |
+| Version | 1.37 or later on the control plane and the node pools; not the Extended channel | same page; [substrate-gke setup-gcp README](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md) | confirmed from the page. Run: the `rapid` channel gave `1.37.2-gke.1606000` |
+| Machine type | `c3-standard-4` or larger; no mixed CPU series such as E2 | same page | confirmed from the page. Run: one Spot `c3-standard-4` with a `pd-balanced` boot disk was enough for the quick start |
+| Dataplane V2 | listed as a requirement | same page | confirmed from the page. Run: `netpol-test.sh` showed ingress and egress enforced |
+| PodCertificateRequest and ClusterTrustBundle | Google's installer "turns on the beta `podcertificaterequests` and `clustertrustbundles` APIs"; substrate-gke creates clusters "with ... required Kubernetes beta APIs" | same page; substrate-gke README | confirmed that Google's tool enables them. Our `components/runtime/NOTES.md` says kind 1.37 serves them as `certificates.k8s.io/v1`. Run: the preflight check passed on `1.37.2-gke.1606000` with no extra cluster flag; which version was served was not written down |
+| Node auto-upgrade | "Turn node auto-upgrade off on any node pool that runs workers, and do not use spot or preemptible nodes for them" (a suspended actor can end up crashed) | substrate-gke setup-gcp README | confirmed from the page. The run used Spot and the `rapid` channel anyway, for 21 minutes; a longer test should not |
 | Node sysctls | Google lists neighbour table and inotify limits only for more than about 800 sandboxes per node. `proxy_arp` and `proxy_ndp` are not mentioned | Substrate install overview; substrate-gke README | confirmed from the pages |
 | `proxy_arp` through node system configuration | not in GKE's list of supported sysctls (the supported `net.ipv4.*` keys are TCP buffers and limits and `neigh.default.gc_thresh*`) | [Customizing node system configuration](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/node-system-config) | confirmed from the page. So if it is needed, a privileged DaemonSet must set it (substrate-gke names that option for its own sysctls) |
 | Autopilot and privileged pods | Autopilot rejects privileged workloads and writable host paths unless a `WorkloadAllowlist` covers them; customer allowlists exist from GKE 1.35 and are installed from Cloud Storage | [Allowlists for privileged workloads in Autopilot](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/autopilot-privileged-allowlists), [About privileged workload admission](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/about-autopilot-privileged-workloads) | from search result summaries; the pages were not read in full. Moot, because Substrate does not support Autopilot |
@@ -55,15 +306,17 @@ Read on 2026-11-26. Google's pages do not show a "last updated" date, so the dat
 | Pod Security admission | built in and on by default on GKE; namespaces without labels are not restricted | [GKE: PodSecurity admission](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/podsecurityadmission) | from search result summaries |
 | Dataplane V2 and NetworkPolicy | built on Cilium; NetworkPolicy is always on; with Workload Identity and network policy, pods need egress to the metadata server | [Dataplane V2](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/dataplane-v2), [Network policy](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/network-policy) | from search result summaries. How a NetworkPolicy `ipBlock` matches the GKE control plane address was **not** found: *unverified* |
 | Gateway API CRDs | `--gateway-api=standard` makes GKE install the standard CRDs; a third-party page says GKE 1.34.0-gke.1626000 and later install the GA CRDs on their own | [Deploying Gateways](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/deploying-gateways), [llm-d](https://llm-d.ai/docs/dev/resources/gateway/install-crds) | *unverified*: whether GKE 1.37 installs them by default, at which bundle version, and whether GKE reverts a self-applied bundle |
-| Artifact Registry pulls | the node service account needs `roles/artifactregistry.reader`; then GKE pulls from repositories in the same project | [Artifact Registry: integrate with GKE](https://docs.cloud.google.com/artifact-registry/docs/integrate-gke) | from search result summaries |
+| Artifact Registry pulls | the node service account needs `roles/artifactregistry.reader`; then GKE pulls from repositories in the same project | [Artifact Registry: integrate with GKE](https://docs.cloud.google.com/artifact-registry/docs/integrate-gke) | from search result summaries. Run: `roles/container.defaultNodeServiceAccount` on the default compute service account was enough for the node to pull from a repository in the same project |
 | Service account issuer | read it with `kubectl get --raw /.well-known/openid-configuration`; on GKE it is a `container.googleapis.com` URL for the project, location and cluster | [Workload Identity Federation with Kubernetes](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-kubernetes), [Pulumi GKE guide](https://www.pulumi.com/docs/administration/guides/oidc-issuers/kubernetes-gke/) | *unverified* for the exact form; read it from the cluster |
-| Budgets | `gcloud billing budgets create --billing-account=... --display-name=... --budget-amount=... --threshold-rule=percent=0.50 --threshold-rule=percent=0.75,basis=forecasted-spend`; `--filter-projects=projects/<id>` limits it to one project | [gcloud billing budgets create](https://docs.cloud.google.com/sdk/gcloud/reference/billing/budgets/create) | confirmed from the page. A budget sends alerts; it does **not** stop spending |
+| Budgets | `gcloud billing budgets create --billing-account=... --display-name=... --budget-amount=... --threshold-rule=percent=0.50 --threshold-rule=percent=0.75,basis=forecasted-spend`; `--filter-projects=projects/<id>` limits it to one project | [gcloud billing budgets create](https://docs.cloud.google.com/sdk/gcloud/reference/billing/budgets/create) | confirmed from the page. A budget sends alerts; it does **not** stop spending. Run: in a new project the command also needed `--billing-project=<new project>` |
 
 Also read: the upstream [substrate-gke](https://github.com/ai-on-gke/substrate-gke) project, Google's installer for Substrate on GKE. It makes extra node pools for Substrate's own system parts and the bundled PostgreSQL by default (`e2-standard-4`), a `c3-standard-4` pool for workers, Workload Identity, GCS buckets for snapshots and a DNS-only control plane endpoint. Our quick start keeps Substrate's bundled RustFS for snapshots, so it does not need GCS or Workload Identity for a first run.
 
-## Installer changes to make first
+## Installer changes
 
-Each item is a proposed issue: small, testable offline (fake `kubectl`, `docker` and `gcloud` like `hack/ci/cluster-test.sh`, or a chart render test), and needs no cluster. Items 1 to 5 block the quick start on GKE. Items 1, 3, 4, 7, 8, 9 and 10 are now built and tested offline (marked **Built, offline only**); nothing of them was run on a cluster. A change to a chart value or a public switch needs an ADR first ([ADR rules](https://github.com/openagentix/openagentix/blob/main/docs/decisions/README.md)); those are marked.
+This list was written before the run. The run used items 1, 3, 4 and 8 on a real cluster for the first time; item 2 was replaced by a manual Cloud Build step; item 5 was confirmed as a real gap (the Service got a public IP); items 6, 7 and 11 were not needed for the quick start (`SKIP_SKILL=1`, no container agent). The row by row result is in [Install: managed cloud](../features/install.md#managed-cloud-known-gaps-and-what-the-gke-run-showed).
+
+Each item is a proposed issue: small, testable offline (fake `kubectl`, `docker` and `gcloud` like `hack/ci/cluster-test.sh`, or a chart render test), and needs no cluster. Items 1 to 5 block the quick start on GKE. Items 1, 3, 4, 7, 8, 9 and 10 are built and tested offline (marked **Built, offline only**); of them, items 1, 3, 4 and 8 then ran on GKE once, as described above. A change to a chart value or a public switch needs an ADR first ([ADR rules](https://github.com/openagentix/openagentix/blob/main/docs/decisions/README.md)); those are marked.
 
 1. **`CLUSTER_TYPE=remote` in `hack/cluster.sh`.** No create; `KUBE_CONTEXT` is required; `cluster_exists` asks the API server; `cluster_load_images` pushes instead of loading; `cluster_ctr` and `cluster_node` fail with a clear message; `cluster_delete_hint` says to delete the cluster with the cloud's own tool. Preflight stops needing `kind`, `k3d` or a local cluster tool. Test: extend `hack/ci/cluster-test.sh`. Public switch: note it in the ADR of item 2.
    **Built, offline only** (issue #161): `CLUSTER_TYPE=remote` needs `KUBE_CONTEXT`, refuses a local context name (`kind-*`, `k3d-*`, `docker-desktop` and a few others) unless `ALLOW_LOCAL_CONTEXT=1`, and stops before any change when that context's API server does not answer. `cluster_load_images` stops with a message instead of pushing (the push is item 2), so until item 2 exists `install.sh` refuses, before any build, a run that would build images. The ADR of item 2 is not written yet.
@@ -84,141 +337,9 @@ Each item is a proposed issue: small, testable offline (fake `kubectl`, `docker`
    **Built, offline only** (issue #170). With `MODEL_PROVIDER=ollama`, a set `MODEL_BASE_URL` is the Ollama URL.
 11. **The example skill on remote (not needed for the quick start).** `install.sh:656-684` runs a `registry:2` container on the kind Docker network and pushes with `crane`. For remote: push the skill to `$IMAGE_REGISTRY` or require `SKIP_SKILL=1`. Test: fake `docker`.
 
-## Runbook (not run)
-
-Every step is a plan. Run it only after items 1 to 5 above are merged. Use a **new, dedicated project** so that deleting the project removes everything, and so the test cannot touch anything else. Values in angle brackets are yours. Do not paste project ids, billing account ids or emails into issue comments.
-
-### 0. Tools on your machine
-
-`gcloud` with the `gke-gcloud-auth-plugin` component, `kubectl` 1.37 or newer, `helm` 3, `docker` with `buildx`, `jq`, the Python `yq`, `openssl`, `curl`, `python3`. `components/runtime/up.sh` downloads `kubectl-ate` itself. You do not need `kind`.
-
-### 1. A dedicated project and a budget
-
-```sh
-export PROJECT=<new-project-id> REGION=us-central1 ZONE=us-central1-a CLUSTER=oa-gke-test
-gcloud projects create "$PROJECT"
-gcloud billing projects link "$PROJECT" --billing-account=<billing-account-id>
-gcloud services enable container.googleapis.com artifactregistry.googleapis.com billingbudgets.googleapis.com --project="$PROJECT"
-
-# Alerts at 25, 50, 90 and 100 percent of 20 USD, and on the forecast. A budget only alerts; it does not stop spending.
-gcloud billing budgets create --billing-account=<billing-account-id> --display-name="oa-gke-test" \
-  --budget-amount=20USD --filter-projects="projects/$PROJECT" \
-  --threshold-rule=percent=0.25 --threshold-rule=percent=0.50 --threshold-rule=percent=0.90 \
-  --threshold-rule=percent=1.0 --threshold-rule=percent=1.0,basis=forecasted-spend
-gcloud billing budgets list --billing-account=<billing-account-id> --filter="displayName=oa-gke-test"
-```
-
-Alerts go to the billing account's administrators by default. To send them elsewhere, add `--notifications-rule-monitoring-notification-channels`. Set yourself a deadline too: the teardown below is the only thing that stops the cost.
-
-### 2. Node service account and image registry
-
-```sh
-gcloud iam service-accounts create oa-gke-node --project="$PROJECT"
-SA=oa-gke-node@$PROJECT.iam.gserviceaccount.com
-gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SA" --role=roles/container.defaultNodeServiceAccount
-gcloud artifacts repositories create oa --repository-format=docker --location="$REGION" --project="$PROJECT"
-gcloud artifacts repositories add-iam-policy-binding oa --location="$REGION" --project="$PROJECT" \
-  --member="serviceAccount:$SA" --role=roles/artifactregistry.reader
-gcloud auth configure-docker "$REGION-docker.pkg.dev"
-```
-
-*Unverified:* that `roles/container.defaultNodeServiceAccount` exists under this name and covers logging and monitoring for nodes. Without a dedicated account the nodes use the Compute Engine default account, whose roles depend on your organisation's policy.
-
-### 3. The cluster: zonal, one node, Standard
-
-```sh
-gcloud container clusters create "$CLUSTER" --project="$PROJECT" --zone="$ZONE" \
-  --release-channel=None --cluster-version=1.37 --no-enable-autoupgrade \
-  --machine-type=c3-standard-4 --num-nodes=1 --image-type=COS_CONTAINERD \
-  --disk-type=pd-balanced --disk-size=100 \
-  --enable-dataplane-v2 --service-account="$SA" --workload-pool="$PROJECT.svc.id.goog" \
-  --labels=purpose=oa-test
-gcloud container clusters get-credentials "$CLUSTER" --zone="$ZONE" --project="$PROJECT"
-export KUBE_CONTEXT=gke_${PROJECT}_${ZONE}_${CLUSTER}
-```
-
-Why each choice: zonal so the free tier credit can apply; one node because the quick start fits in 4 CPU and 8 GB on kind; `c3-standard-4` because E2 is refused; no release channel and no auto-upgrade because Substrate's workers should not be upgraded under a suspended actor; Dataplane V2 for NetworkPolicy and because Substrate on GKE requires it; on-demand, not spot.
-
-*Unverified:* that `--cluster-version=1.37` resolves without a channel; that `--no-enable-autoupgrade` is allowed with `--release-channel=None`; that `pd-balanced` is allowed as the boot disk of a C3 node; and the CPU quota of a new project. If the certificate APIs are missing in step 4, add `--enable-kubernetes-unstable-apis=certificates.k8s.io/v1beta1/clustertrustbundles,certificates.k8s.io/v1beta1/podcertificaterequests` (flag and value *unverified*) and record that our scripts would then see `v1beta1`, not `v1`.
-
-### 4. Read-only checks before the install
-
-```sh
-kubectl version -o json | jq -r .serverVersion.gitVersion
-kubectl get nodes -o wide
-kubectl get nodes -o jsonpath='{.items[*].spec.providerID}'; echo
-kubectl api-resources --api-group=certificates.k8s.io
-kubectl api-resources --api-group=admissionregistration.k8s.io
-kubectl get storageclass
-kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' 2>/dev/null; echo
-kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes -o json | jq -r '.items[].endpoints[].addresses[]'
-kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
-kubectl get pods -n kube-system -l k8s-app=kube-dns
-hack/ci/netpol-test.sh
-```
-
-Expect: 1.37.x; one Ready node with a `gce://` provider id; `clustertrustbundles` and `podcertificaterequests` listed; `validatingadmissionpolicies` listed; a default StorageClass (marked `(default)`); kube-dns pods with the label the chart's DNS rules select; and `hack/ci/netpol-test.sh` exits 0 (ingress and egress enforced). Write every answer down for the report.
-
-### 5. Install (target command, after the changes above)
-
-```sh
-CLUSTER_TYPE=remote KUBE_CONTEXT=$KUBE_CONTEXT \
-IMAGE_REGISTRY=$REGION-docker.pkg.dev/$PROJECT/oa IMAGE_PLATFORM=linux/amd64 \
-PROFILE=quickstart ./install.sh 2>&1 | tee gke-install.log
-```
-
-Then, once, `QUICKSTART_BYO=1` on top for the sample container agent. `CLUSTER_TYPE=remote` exists (item 1, tested offline only); `IMAGE_REGISTRY` and `IMAGE_PLATFORM` do not exist yet (item 2), so today this command stops before any build with a message that names the images. `NODE_SETTINGS=daemonset` may be added if the first run shows that sandboxes need the node sysctls (item 3).
-
-### 6. Checks after the install
-
-```sh
-hack/ci/smoke.sh 2>&1 | tee gke-smoke.log                 # SMOKE_BYO=1 with the sample agent
-hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)"
-hack/demo.sh
-kubectl get svc -A -o json | jq -r '.items[]|select(.spec.type=="LoadBalancer")|.metadata.namespace+"/"+.metadata.name+" "+((.status.loadBalancer.ingress//[])|tostring)'
-kubectl get pods -A -o wide
-kubectl get ds -n ate-system atelet
-kubectl top nodes 2>/dev/null || true
-```
-
-The LoadBalancer line must print nothing. If it prints a Service with an address, delete that Service at once and record it as a failure.
-
-## TEARDOWN
-
-Do this the same day. Order matters: Services of type `LoadBalancer` and dynamically made disks can outlive a deleted cluster and keep costing money.
-
-```sh
-# 1. Inside the cluster: remove what makes cloud resources
-kubectl get svc -A -o json | jq -r '.items[]|select(.spec.type=="LoadBalancer")|"-n "+.metadata.namespace+" "+.metadata.name' \
-  | while read -r a b c; do kubectl delete svc $a $b $c; done
-kubectl delete pvc --all -A --wait=true
-kubectl get pv                                   # expect: No resources found
-
-# 2. The cluster
-gcloud container clusters delete "$CLUSTER" --zone="$ZONE" --project="$PROJECT" --quiet
-
-# 3. Check that nothing billable is left
-gcloud container clusters list --project="$PROJECT"                       # expect: empty
-gcloud compute instances list --project="$PROJECT"                        # expect: empty
-gcloud compute disks list --project="$PROJECT"                            # expect: empty
-gcloud compute forwarding-rules list --project="$PROJECT"                 # expect: empty
-gcloud compute addresses list --project="$PROJECT"                        # expect: empty
-gcloud compute target-pools list --project="$PROJECT"                     # expect: empty
-gcloud compute firewall-rules list --project="$PROJECT" --filter="name~^k8s"   # expect: empty
-
-# 4. Images, then the project itself
-gcloud artifacts repositories delete oa --location="$REGION" --project="$PROJECT" --quiet
-gcloud billing projects unlink "$PROJECT"
-gcloud projects delete "$PROJECT" --quiet
-gcloud billing projects describe "$PROJECT"       # expect: billingEnabled false (or the project is not found)
-gcloud billing budgets list --billing-account=<billing-account-id> --filter="displayName=oa-gke-test"
-```
-
-Delete the budget last (`gcloud billing budgets delete <budget-name>`), after the next day's billing data shows no new charges for the project. A deleted project stays recoverable for about 30 days; it is not billed in that time (*unverified*). Run the checks of step 3 again if you skip the project deletion.
-
 ## Cost estimate
 
-All prices are *unverified* (see the table of facts). Region `us-central1`, on-demand, USD.
+The cost of the run was not read from billing yet (it appears with a delay). The estimate below was made before the run; for about 21 minutes on one Spot node it gives well under 1 USD. This is an estimate, not a measured cost. All prices are *unverified* (see the table of facts), and they are on-demand prices: Spot is cheaper. Region `us-central1`, on-demand, USD.
 
 | Item | Unit price used | 4-hour session | Cluster forgotten for 30 days |
 |---|---|---|---|
@@ -232,50 +353,3 @@ All prices are *unverified* (see the table of facts). Region `us-central1`, on-d
 | **Total with the load balancer, without the free tier** | | **about 1.40** | **about 246** |
 
 Assumptions: one zonal cluster, one node, no regional control plane, no GCS, no Cloud SQL, no logging beyond the free allotment, image pulls into Google Cloud free, little egress (the stub model makes no outside call). A real model key adds the provider's own charges. A 20 USD budget covers about ten sessions and alerts long before a forgotten cluster reaches the 30-day figure.
-
-## Live proof plan
-
-### What to record on issue 31
-
-One comment, in this shape (no ids, no emails, no tokens):
-
-```text
-Cloud: GKE Standard, zonal, <region>
-Kubernetes: <server gitVersion>   Node: c3-standard-4 x1, COS_CONTAINERD, <node version>
-Network: Dataplane V2   netpol-test.sh: ingress <enforced|not>, egress <enforced|not>
-Certificate APIs: <v1|v1beta1, enabled by flag or not>   Gateway API CRDs before install: <none|bundle x.y.z>
-Repository commit: <sha>   Values: PROFILE=quickstart [QUICKSTART_BYO=1]
-Command: <the exact install command>
-Outcome: install <exit code> in <min:s>; quickstart Ready after <s>; smoke passed=<n> failed=<n>
-Manual steps needed: <none | list>   LoadBalancer Services: <none | list>
-Teardown: checks of step 3 empty <yes|no>; cost on the billing report: <USD>
-```
-
-Attach `gke-install.log` and `gke-smoke.log` after removing anything that names the project.
-
-### What each check proves
-
-| Check | What it proves on GKE |
-|---|---|
-| `hack/ci/netpol-test.sh` exits 0 | Dataplane V2 enforces NetworkPolicy for ingress and for egress to the internet, which the chart's isolation relies on |
-| atelet DaemonSet Ready, worker pool Ready | Substrate's node agent runs on a COS node with its host paths, and its own gVisor starts |
-| `AgentDefinition quickstart is Ready` | The control plane works, the runtime built a golden snapshot on the node (`/var/lib/ate` on COS), and the images came from Artifact Registry |
-| "the gate returned an answer" and the tool call `osv_query_vulnerability` | A2A gate, TokenReview, model gateway virtual key and the tool profile work, and the policies let the control plane, gate and vMCP reach the API server at the derived `/32` |
-| a tool outside the profile is refused | The tool profile holds on this cluster |
-| a forbidden definition is refused, "no agent was built for it" | The control plane's policy and the ValidatingAdmissionPolicy guard run on GKE |
-| console API: 401 without the token, lists `quickstart` with it, lists the profile | The console runs and reaches the API server through its NetworkPolicy |
-| (with `QUICKSTART_BYO=1`) `echo-go` Ready, answers through the gate, pod settings as expected, bad images refused | A container agent pulled from a real registry by digest with `imagePullPolicy: Always`; the workload guard and Pod Security `restricted` on GKE |
-| (with `QUICKSTART_BYO=1`) `tools: osv_query_vulnerability` from `echo-go` | The workload vMCP checks GKE's ServiceAccount tokens with the right issuer (gap 7) |
-| no `LoadBalancer` Service, no external address | Nothing of the install is exposed to the internet |
-| teardown checks all empty | The test left nothing that costs money |
-
-### What counts as failure
-
-- `install.sh` exits non-zero, or needs a manual `kubectl` patch, a deleted pod or a re-run to finish. Each manual step becomes its own issue.
-- The quick start agent is not Ready within `AGENT_WAIT` (900 s), or any smoke check fails.
-- `hack/ci/netpol-test.sh` reports that ingress or egress is not enforced.
-- Any Service of type `LoadBalancer` with an external address, or any public endpoint other than the GKE control plane.
-- Any step of the teardown leaves a disk, forwarding rule, address, instance or cluster, or the billing report shows more than the budget.
-- Results that only hold with settings this page does not name.
-
-Until that comment exists, GKE stays "not run" in `what-works.md` and the install page.

@@ -142,6 +142,7 @@ jobs:
           hack/ci/preflight-test.sh
           hack/ci/sa-issuer-test.sh
           hack/ci/uninstall-test.sh
+          hack/gke/tests/run.sh
           components/runtime/tests/run.sh
       - name: reference docs tests
         run: |
