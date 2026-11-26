@@ -70,13 +70,14 @@ schedules:
     prompt: "Say ok."
 EOS
 cat > "$VALUES_B" <<'EOS'
-# Upgrade B adds the control plane (new since v0.2.0): one policy, no tool profile.
+# Upgrade B adds the control plane (new since v0.2.0): one policy, no tool profile (so the policy must not require one).
 controlPlane:
   enabled: true
   policy:
     maxAgents: 3
     allowedModels: [claude-haiku]
     allowedProfiles: []
+    requireToolProfile: false
     allowKnowledge: false
     allowNotify: false
 EOS
@@ -223,8 +224,14 @@ if [ "${UPGRADE_SKIP_B:-0}" != 1 ]; then
   done
   if [ "$applied" -gt 0 ]; then ok "an AgentDefinition is accepted by the API server (attempt $applied; attempts before the first success are the quota controller learning the new CRD)"
   else bad "kubectl apply of an AgentDefinition failed" "$(cat "$W/apply.log")"; fi
-  $K wait agentdefinition/upgrade-check -n "$KAGENT_NS" --for=condition=Ready --timeout=600s >/dev/null 2>&1 && ok "the AgentDefinition is Ready (the control plane built its agent)" \
-    || bad "the AgentDefinition did not become Ready" "$($K get agentdefinition upgrade-check -n "$KAGENT_NS" -o jsonpath='{.status}' 2>&1 | cut -c1-800)"
+  acc=""
+  for _ in $(seq 1 60); do acc=$($K get agentdefinition upgrade-check -n "$KAGENT_NS" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null); [ -n "$acc" ] && break; sleep 2; done
+  if [ "$acc" = True ]; then
+    $K wait agentdefinition/upgrade-check -n "$KAGENT_NS" --for=condition=Ready --timeout=600s >/dev/null 2>&1 && ok "the AgentDefinition is Accepted and Ready (the control plane built its agent)" \
+      || bad "the AgentDefinition was Accepted but did not become Ready" "$($K get agentdefinition upgrade-check -n "$KAGENT_NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-1500)"
+  else
+    bad "the AgentDefinition was not Accepted (Accepted=${acc:-none})" "violations: $($K get agentdefinition upgrade-check -n "$KAGENT_NS" -o jsonpath='{.status.violations}' 2>&1 | cut -c1-1000)"
+  fi
   agent_ready && ok "the old agent $AGENT is still Ready" || bad "the old agent $AGENT is not Ready after upgrade B"
   healthy "after upgrade B"
   state > "$W/state-b"
