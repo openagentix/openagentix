@@ -285,9 +285,13 @@ func TestWorkerRestartMidJobLeavesNoDuplicates(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); r.w.Step(ctx) }()
 	<-entered
-	cancel() // "kill -9": the context ends, nothing is released or failed
-	close(release)
+	// "kill -9": the context ends and nothing is released or failed. Release the
+	// model call only after the worker has returned. If the model answered while
+	// the cancel was still travelling, the client could take the answer and apply
+	// it, and the test would fail about once in 300 runs.
+	cancel()
 	<-done
+	close(release)
 	if st := r.stats(); st.JobsPending != 1 || st.Entities != 0 || st.Relations != 0 {
 		t.Fatalf("interrupted job left state: %+v", st)
 	}
