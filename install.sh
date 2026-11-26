@@ -17,7 +17,7 @@
 # Switches (all optional):
 #   CLUSTER=openagentix  CREATE_CLUSTER=1  KUBE_CONTEXT=<type>-$CLUSTER
 #   CLUSTER_TYPE=kind    kind (default) or k3d (k3s in Docker; docs/diary/guide/install-k3s.md). K3D_NODE_IMAGE=rancher/k3s:v1.37.2-k3s1 picks the k3s version.
-#   CLUSTER_TYPE=remote  an EXISTING cluster (for example GKE), NOT run on a managed cluster yet (docs/diary/guide/install-gke.md). KUBE_CONTEXT is
+#   CLUSTER_TYPE=remote  an EXISTING cluster (for example GKE), run once on GKE with images built by hand (docs/diary/guide/install-gke.md). KUBE_CONTEXT is
 #                        required and its API server must answer; no cluster is created, kind and k3d are not needed, nothing runs on a node
 #                        (no docker exec, no ctr). Refused for now, before anything changes: locally built images (a registry push is issue #162:
 #                        set the SKIP_*_IMAGE switches and point the image values at a registry), QUICKSTART_BYO=1, the example skill without
