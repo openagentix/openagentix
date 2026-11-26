@@ -144,8 +144,13 @@ spec:
   ingress:
     - ports: [{protocol: TCP, port: {{ $n.controllerPort }}}]
       from:
-        # The kagent UI proxies /api/ to the controller. No other pod of the kagent namespace calls this port: the tools
-        # server and the worker pool do not, and the sandboxes' calls arrive through the egress proxy below.
+        # The kagent UI proxies /api/ to the controller. The controller calls itself on this port: the RemoteMCPServer
+        # kagent-api (a default object of the kagent chart) connects to http://kagent-controller...:8083/mcp, and without
+        # the controller as a peer that call is dropped (Accepted=False, DiscoveryFailed). The tools server and the worker
+        # pool do not call this port, and the sandboxes' calls arrive through the egress proxy below.
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $k.namespace }}}}
+          podSelector:
+            matchLabels: {{- toYaml $n.controllerPodLabels | nindent 14 }}
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $k.namespace }}}}
           podSelector:
             matchLabels: {{- toYaml $n.kagentUI.podLabels | nindent 14 }}
