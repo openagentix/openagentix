@@ -50,6 +50,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/dashboard/tests/run.sh
 	hack/ci/image-tag-test.sh
 	hack/ci/phases-test.sh
+	hack/ci/green-streak-test.sh
 	hack/demo-test.sh
 	hack/ci/release-notes-test.sh
 	hack/ci/verify-release-test.sh
