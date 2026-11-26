@@ -831,7 +831,7 @@ if [ "$REMOTE" = 1 ]; then   # ADR 0022: no unqualified image, all under IMAGE_R
 fi
 log "helm upgrade --install $RELEASE"  # (adoption happens just above)
 [ "$REMOTE" = 0 ] || GW_CHECK_ON_DIE=1
-helm upgrade --install $RELEASE $CHART -n "$RELEASE_NS" --create-namespace ${VALS[@]+"${VALS[@]}"} ${SET[@]+"${SET[@]}"} --wait --timeout 5m
+helm upgrade --install $RELEASE $CHART -n "$RELEASE_NS" --create-namespace ${VALS[@]+"${VALS[@]}"} ${SET[@]+"${SET[@]}"} --wait --timeout 5m || die "helm upgrade --install $RELEASE failed or timed out (see above). The chart may be partly applied: run the installer again, or check helm status $RELEASE -n $RELEASE_NS"
 
 if [ -n "$CH_CM" ]; then   # the broker's CRDs must have been there: the chart skips Kourier objects silently without them
   helm get manifest $RELEASE -n "$RELEASE_NS" | yq -e 'select(.kind=="AgentBackend")' >/dev/null || die "Agent Kourier CRDs were not found by Helm: the AgentBackend was not installed (kubectl get crd agentbackends.agentkourier.dev)"

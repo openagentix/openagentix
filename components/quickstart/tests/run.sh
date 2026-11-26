@@ -277,6 +277,7 @@ else
   done
 fi
 eq "install.sh (ADR 0023): no installer value for the Service type, the exposure check runs after a remote install and from die() once the chart is applied, header documents it" "$(/usr/bin/grep -c 'gateway.serviceType=' "$ROOT/install.sh" | awk '{print ($1<=1)?"header-only":"more"}')/$(/usr/bin/grep -c 'gw_exposure_check "\$K" "\$CTX"' "$ROOT/install.sh")/$(/usr/bin/grep -c 'GW_CHECK_ON_DIE=1' "$ROOT/install.sh")/$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -c 'gateway.serviceType')" header-only/2/1/1
+eq "install.sh (ADR 0023): the helm upgrade --wait step goes through die, so a timeout also prints the exposure report" "$(/usr/bin/grep -cE '^helm upgrade --install .* --wait --timeout 5m \|\| die "' "$ROOT/install.sh")" 1
 eq "the install.sh header lists CLUSTER_TYPE=remote, ALLOW_LOCAL_CONTEXT and NODE_SETTINGS" "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -cE 'CLUSTER_TYPE=remote|ALLOW_LOCAL_CONTEXT=1|NODE_SETTINGS=daemonset' | awk '{print ($1>=3)?"yes":"no"}')" yes
 
 echo "# the minimal profile and the install order (issue #29)"

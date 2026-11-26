@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test of the quick start (ADR 0014), run after `PROFILE=quickstart ./install.sh`. Needs kubectl (pointing at the cluster), jq, curl.
 #   1. the agent `quickstart` is Ready, and kagent's own RemoteMCPServer kagent-api is Accepted (the controller reaches itself)
+#   1b. Service model-gateway in agentgateway-system has spec.type ClusterIP (ADR 0023)
 #   2. a question is answered through the A2A gate, with a tool call through the tool profile (hack/ask.sh)
 #   3. a tool that the profile does not offer gets no data (the tool profile refuses it)
 #   4. a definition that the policy forbids is refused (Accepted=False) and no agent is built for it
@@ -23,6 +24,9 @@ $K wait agent/quickstart -n "$NS" --for=condition=Ready --timeout=300s >/dev/nul
 # kagent's built-in RemoteMCPServer kagent-api connects to the controller itself on 8083. The chart's NetworkPolicy must admit that
 # call, or the server stays Accepted=False (DiscoveryFailed). Backoff after the policy applies can take a while, so wait up to 90 s.
 $K wait remotemcpserver/kagent-api -n "$NS" --for=condition=Accepted --timeout=90s >/dev/null 2>&1 && ok "RemoteMCPServer kagent-api is Accepted (the controller reaches itself on 8083)" || bad "RemoteMCPServer kagent-api is not Accepted" "$($K get remotemcpserver kagent-api -n "$NS" -o jsonpath='{.status.conditions}' 2>&1 | cut -c1-600)"
+
+# ADR 0023: the model gateway Service is ClusterIP by default (no public IP). The chart sets it through AgentgatewayParameters; this reads the live Service.
+check "Service model-gateway in agentgateway-system is ClusterIP (ADR 0023)" "$($K get service model-gateway -n agentgateway-system -o jsonpath='{.spec.type}' 2>/dev/null)" ClusterIP
 
 echo "# 2. a question through the gate, answered with a tool call"
 ANS=$(hack/ask.sh quickstart "Look up known vulnerabilities of lodash 4.17.20 (npm)" 2>&1); RC=$?
