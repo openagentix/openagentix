@@ -4,7 +4,7 @@
 #   ate_auth_config <issuer> the file. certificateAuthorityFile and discoveryTokenFile are written only for an in-cluster issuer
 #                            (https://kubernetes.default.svc...: kind, k3s), where discovery goes to the API server with the pod's own CA and
 #                            token. For an external issuer (GKE: https://container.googleapis.com/...) they are left out (issue #164).
-#                            On GKE this is not run yet: docs/diary/guide/install-gke.md.
+#                            Used once on GKE (the quick start agent became Ready): docs/diary/guide/install-gke.md.
 
 ate_issuer(){
   local i

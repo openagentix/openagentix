@@ -223,3 +223,7 @@ The quick start (ADR 0014, commit `b84cc09`) installs a governed agent with one 
 
 - The README and the landing page now start with one definition, five points in the reader's terms, a diagram of the request path, the quick start commands and the status. The detailed reference moved below that, unchanged in content.
 - New pages under "Start here": [Why OpenAgentix](./guide/why.md), [Concepts](./guide/concepts.md), [Use cases](./guide/use-cases.md) and the [FAQ](./guide/faq.md).
+
+## 2026-11-26: the quick start on GKE, once
+
+The quick start ran on a managed cloud for the first time: one GKE Standard cluster (1.37.2-gke.1606000, one Spot `c3-standard-4`, Dataplane V2) in a new project, with `CLUSTER_TYPE=remote` and the stub model. The four images were built in Cloud Build and given in a values file, because the installer cannot push to a registry yet (issue #162). The preflight stopped on a missing default StorageClass, which was marked by hand. Install 625 s; smoke test 13 passed; NetworkPolicy ingress and egress enforced; demo passed. The model gateway Service got a public IP, the known gap (issue #165). The project was deleted after about 21 minutes. Page: [Install on GKE](./guide/install-gke.md). Scripts that repeat it: `hack/gke/` (tested offline only).
