@@ -112,6 +112,7 @@ case "\$1 \$2" in
   "buildx version") [ "\${FAKE_BUILDX:-}" != no ] || exit 1;;
   "buildx build") m=""; for a in "\$@"; do [ "\$m" = next ] && m=\$a; [ "\$a" = --metadata-file ] && m=next; done
     if [ "\${FAKE_META:-}" = nodigest ]; then echo '{}' > "\$m"; else echo '{"containerimage.digest":"sha256:$(printf 'b%.0s' $(seq 64))"}' > "\$m"; fi;;
+  "buildx imagetools") case "\$*" in *@sha256:*) case "\$*" in *--raw*) echo '{}';; *) echo '{"os":"linux","architecture":"amd64"}';; esac;; *) exit 1;; esac;;   # a tag: not in the registry
 esac
 exit 0
 EOS
@@ -172,19 +173,20 @@ else
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG DOCKER_PASSWORD=$CANARY REGISTRY_TOKEN=$CANARY GOOGLE_OAUTH_ACCESS_TOKEN=$CANARY)
   NB=$(/usr/bin/grep -c '^docker buildx build ' "$RT/calls")
   eq "remote push: the install reaches helm upgrade" "$(/usr/bin/grep -c '^helm upgrade --install openagentix' "$RT/calls")" 1
-  eq "remote push: buildx is checked in the preflight" "$(/usr/bin/grep -c '^docker buildx version' "$RT/calls")" 1
+  eq "remote push: buildx is checked before the builds" "$(/usr/bin/grep -c '^docker buildx version' "$RT/calls")" 1
+  eq "remote push: each tag is looked up in the registry first, each pushed digest checked after" "$(/usr/bin/grep -c "^docker buildx imagetools inspect $REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\}-amd64 " "$RT/calls")/$(/usr/bin/grep -c "^docker buildx imagetools inspect --raw $REG/openagentix/[a-z0-9-]*@$DGB$" "$RT/calls")" "$NB/$NB"
   eq "remote push: at least the stub model and the control plane are built" "$([ "$NB" -ge 2 ] && echo yes || echo "no ($NB)")" yes
-  eq "remote push: every build is buildx --platform linux/amd64 --push, provenance and sbom off, with a metadata file" "$(/usr/bin/grep -c "^docker buildx build --platform linux/amd64 --push --provenance=false --sbom=false --metadata-file [^ ]*/build-[0-9]*.json -q -t $REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\} " "$RT/calls")" "$NB"
+  eq "remote push: every build is buildx --platform linux/amd64 --push, provenance and sbom off, with a metadata file" "$(/usr/bin/grep -c "^docker buildx build --platform linux/amd64 --push --provenance=false --sbom=false --metadata-file [^ ]*/build-[0-9]*.json -q -t $REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\}-amd64 " "$RT/calls")" "$NB"
   eq "remote push: one 'pushed' line per build, with the digest" "$(/usr/bin/grep -c "^pushed $REG/openagentix/[a-z0-9-]*@$DGB " <<<"$OUT")" "$NB"
   UP=$(/usr/bin/grep '^helm upgrade' "$RT/calls")
   for pn in "gateway.stubModel stub-model" "controlPlane control-plane" "console console" "governance.a2a a2a-gate"; do
     set -- $pn
     if /usr/bin/grep -q "openagentix/$2:dev-" "$RT/calls"; then
-      eq "remote push: $1 gets repository, tag and digest" "$(/usr/bin/grep -c -- "--set-string $1.image.repository=$REG/openagentix/$2 .*--set-string $1.image.tag=dev-[0-9a-f]\{16\} .*--set-string $1.image.digest=$DGB" <<<"$UP")" 1
+      eq "remote push: $1 gets repository, tag and digest" "$(/usr/bin/grep -c -- "--set-string $1.image.repository=$REG/openagentix/$2 .*--set-string $1.image.tag=dev-[0-9a-f]\{16\}-amd64 .*--set-string $1.image.digest=$DGB" <<<"$UP")" 1
     fi
   done
   eq "remote push: as many digests as builds go to the chart" "$(/usr/bin/grep -o -- "--set-string [a-zA-Z0-9.]*\.image\.digest=$DGB" <<<"$UP" | wc -l | tr -d ' ')" "$NB"
-  eq "remote push: every image the chart renders from IMAGE_REGISTRY is repository:tag@digest" "$(/usr/bin/grep "^$REG/" "$RT/rendered-images" | /usr/bin/grep -vc "^$REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\}@$DGB$")/$(/usr/bin/grep -c "^$REG/" "$RT/rendered-images")" "0/$NB"
+  eq "remote push: every image the chart renders from IMAGE_REGISTRY is repository:tag@digest" "$(/usr/bin/grep "^$REG/" "$RT/rendered-images" | /usr/bin/grep -vc "^$REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\}-amd64@$DGB$")/$(/usr/bin/grep -c "^$REG/" "$RT/rendered-images")" "0/$NB"
   eq "remote push: no image of the chart is left on the openagentix/ default" "$(/usr/bin/grep -c '^openagentix/' "$RT/rendered-images")" 0
   eq "remote push: no kind, no k3d, no docker exec, no plain docker build, no image inspect, no docker login" "$(/usr/bin/grep -cE '^kind|^k3d|^docker (exec|build |image|login|push|tag)' "$RT/calls")" 0
   eq "remote push: a credential in the environment never reaches an argument or the log" "$(cat "$RT/calls" | /usr/bin/grep -c "$CANARY")/$(/usr/bin/grep -c "$CANARY" <<<"$OUT")" 0/0
@@ -196,12 +198,12 @@ else
   UP=$(/usr/bin/grep '^helm upgrade' "$RT/calls")
   for pn in "bridge telegram" "scheduling a2a-call" "gateway.stubModel stub-model" "knowledge.kb kb" "notify notify" "governance.a2a a2a-gate" "controlPlane control-plane" "console console"; do
     set -- $pn
-    eq "remote push, all images: $1 gets $REG/openagentix/$2, the tag and the digest" "$(/usr/bin/grep -c -- "--set-string $1.image.repository=$REG/openagentix/$2 .*--set-string $1.image.tag=dev-[0-9a-f]\{16\} .*--set-string $1.image.digest=$DGB" <<<"$UP")" 1
+    eq "remote push, all images: $1 gets $REG/openagentix/$2, the tag and the digest" "$(/usr/bin/grep -c -- "--set-string $1.image.repository=$REG/openagentix/$2 .*--set-string $1.image.tag=dev-[0-9a-f]\{16\}-amd64 .*--set-string $1.image.digest=$DGB" <<<"$UP")" 1
   done
-  eq "remote push, all images: the chart renders eight images from IMAGE_REGISTRY, each repository:tag@digest" "$(/usr/bin/grep -c "^$REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\}@$DGB$" "$RT/rendered-images")/$(/usr/bin/grep -c "^$REG/" "$RT/rendered-images")" 8/8
+  eq "remote push, all images: the chart renders eight images from IMAGE_REGISTRY, each repository:tag@digest" "$(/usr/bin/grep -c "^$REG/openagentix/[a-z0-9-]*:dev-[0-9a-f]\{16\}-amd64@$DGB$" "$RT/rendered-images")/$(/usr/bin/grep -c "^$REG/" "$RT/rendered-images")" 8/8
   eq "remote push, all images: no image of the chart is left on the openagentix/ default" "$(/usr/bin/grep -c '^openagentix/' "$RT/rendered-images")" 0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG FAKE_META=nodigest)
-  eq "remote push: no digest in the build metadata stops the install before helm upgrade" "$(/usr/bin/grep -c 'no digest for .* after the push' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/1/0
+  eq "remote push: no digest in the build metadata stops the install before helm upgrade" "$(/usr/bin/grep -q 'no image digest' <<<"$OUT" && echo 1)/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/1/0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up IMAGE_REGISTRY=$REG FAKE_BUILDX=no)
   eq "remote push: without docker buildx, refused before any build" "$(/usr/bin/grep -c 'needs docker buildx' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^docker buildx build' "$RT/calls")" 1/1/0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up IMAGE_REGISTRY=ghcr.io/openagentix)
@@ -217,13 +219,27 @@ else
   OUT=$(rinst PROFILE=quickstart CLUSTER_TYPE=k3d IMAGE_PLATFORM=linux/amd64)
   eq "k3d + IMAGE_PLATFORM is refused, nothing called" "$(/usr/bin/grep -c 'IMAGE_PLATFORM is only for CLUSTER_TYPE=remote' <<<"$OUT")/$(/usr/bin/grep -c . "$RT/calls")" 1/0
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG IMAGE_PLATFORM=linux/amd64,linux/arm64)
-  eq "remote push: IMAGE_PLATFORM with two platforms reaches buildx" "$(/usr/bin/grep -c '^docker buildx build --platform linux/amd64,linux/arm64 --push' "$RT/calls")" "$(/usr/bin/grep -c '^docker buildx build ' "$RT/calls")"
+  eq "remote push: two platforms are refused for now, nothing called" "$(/usr/bin/grep -c 'IMAGE_PLATFORM takes one platform' <<<"$OUT")/$(/usr/bin/grep -c . "$RT/calls")" 1/0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up IMAGE_REGISTRY=ghcr.io:443/openagentix/x)
+  eq "remote push: ghcr.io:443/openagentix/x is refused too" "$(/usr/bin/grep -c 'signed release images' <<<"$OUT")/$(/usr/bin/grep -c . "$RT/calls")" 1/0
+
+  echo "# install.sh on remote: the rule for platform images before helm upgrade (ADR 0022)"
+  QSKIP=(SKIP_A2A_GATE_IMAGE=1 SKIP_STUB_MODEL_IMAGE=1 SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1)
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" "${QSKIP[@]}")
+  eq "remote, builds skipped, the default openagentix/<name>:dev left: refused before helm upgrade" "$(/usr/bin/grep -c 'controlPlane: openagentix/control-plane:dev is an unqualified name' <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/1/0
+  eq "remote, builds skipped: nothing built, buildx not asked for" "$(/usr/bin/grep -c '^docker buildx' "$RT/calls")" 0
+  printf 'governance: {a2a: {image: {repository: %s/a2a-gate, tag: gke1}}}\ngateway: {stubModel: {image: {repository: %s/stub-model, tag: gke1}}}\ncontrolPlane: {image: {repository: %s/control-plane, tag: gke1}}\nconsole: {image: {repository: %s/console, tag: gke1, digest: "%s"}}\n' "$REG" "$REG" "$REG" "$REG" "$DGB" > "$RT/own-images.yaml"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" "${QSKIP[@]}" VALUES_FILE="$RT/own-images.yaml")
+  eq "remote, the operator's own images by tag (the GKE run): reaches helm upgrade" "$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1
+  eq "remote, the operator's own images: one warning per image given by tag, none for the one with a digest" "$(/usr/bin/grep -c 'WARN: [a-zA-Z0-9.]* runs .*:gke1 by tag; set [a-zA-Z0-9.]*.image.digest to pin it' <<<"$OUT")/$(/usr/bin/grep -c 'WARN: console runs' <<<"$OUT")" 3/0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" SKIP_CONSOLE_IMAGE=1 IMAGE_REGISTRY=other.example/x VALUES_FILE="$RT/own-images.yaml")
+  eq "remote with IMAGE_REGISTRY: an operator image outside it is refused before helm upgrade" "$(/usr/bin/grep -c "console: $REG/console:gke1@$DGB is not under IMAGE_REGISTRY=other.example/x/" <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
 
   echo "# install.sh: QUICKSTART_BYO=1 on remote (ADR 0022)"
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1)
-  eq "byo remote: the sample is pushed under openagentix-examples/" "$(/usr/bin/grep -c "^docker buildx build --platform linux/amd64 --push .* -t $REG/openagentix-examples/echo-a2a:dev-[0-9a-f]\{16\} examples/agents/echo-a2a$" "$RT/calls")" 1
+  eq "byo remote: the sample is pushed under openagentix-examples/" "$(/usr/bin/grep -c "^docker buildx build --platform linux/amd64 --push .* -t $REG/openagentix-examples/echo-a2a:dev-[0-9a-f]\{16\}-amd64 examples/agents/echo-a2a$" "$RT/calls")" 1
   eq "byo remote: its digest is printed" "$(/usr/bin/grep -c "^pushed $REG/openagentix-examples/echo-a2a@$DGB " <<<"$OUT")" 1
-  BV=$(for f in "$RT"/values-*; do yq -c 'select(.controlPlane.policy.runtimes.container.images!=null)' "$f" 2>/dev/null; done)
+  BV=$(for f in "$RT"/values-*; do yq -c '.' "$f" 2>/dev/null; done | jq -s 'reduce .[] as $v ({}; . * $v)')   # merged like helm (lists replaced)
   eq "byo remote: the only allowed prefix is IMAGE_REGISTRY/openagentix-examples/" "$(jq -c '.controlPlane.policy.runtimes.container.images' <<<"$BV")" "[\"$REG/openagentix-examples/\"]"
   eq "byo remote: no IfNotPresent (the chart default Always stays)" "$(jq -r '.controlPlane.containerAgents|has("imagePullPolicy")' <<<"$BV")" false
   eq "byo remote: byo-values.yaml itself (registry.local/oa/) is not passed" "$(/usr/bin/grep '^helm upgrade' "$RT/calls" | /usr/bin/grep -c 'byo-values.yaml')" 0
@@ -231,6 +247,12 @@ else
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1 FAKE_HELM_UPGRADE=0 SKIP_KB_INGEST=1 AGENT_WAIT=1s)
   eq "byo remote: the AgentDefinition gets IMAGE_REGISTRY/openagentix-examples/echo-a2a@<digest of the push>" "$(jq -r '.spec.runtime.container.image' "$RT/byo-applied.json" 2>/dev/null)" "$REG/openagentix-examples/echo-a2a@$DGB"
   eq "byo remote: hack/kind-image-digest.sh is not called (no docker exec, no ctr)" "$(/usr/bin/grep -cE '^docker exec|ctr ' "$RT/calls")" 0
+  printf 'controlPlane: {policy: {runtimes: {container: {images: ["registry.acme.example/agents/"]}}}}\n' > "$RT/own-prefix.yaml"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1 VALUES_FILE="$RT/own-prefix.yaml")
+  eq "byo remote: an operator's own prefix list is refused, with what to add, nothing built" "$(/usr/bin/grep -c "your values set runtimes.container.images; add $REG/openagentix-examples/ to it yourself" <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^docker buildx build' "$RT/calls")" 1/1/0
+  printf 'controlPlane: {policy: {runtimes: {container: {images: ["registry.acme.example/agents/", "%s/openagentix-examples/"]}}}}\n' "$REG" > "$RT/own-prefix.yaml"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1 VALUES_FILE="$RT/own-prefix.yaml")
+  eq "byo remote: an operator list that already has the prefix is kept as it is" "$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")/$(for f in "$RT"/values-*; do yq -c '.controlPlane.policy.runtimes.container.images // empty' "$f"; done | tail -1)" "1/[\"registry.acme.example/agents/\",\"$REG/openagentix-examples/\"]"
 
   echo "# install.sh on kind with a fake kind (ADR 0022: nothing changes there)"
   mkdir -p "$RT/kbin"; printf '#!/usr/bin/env bash\necho "kind $*" >> "%s/calls"\n[ "$1 $2" = "get clusters" ] && echo openagentix\nexit 0\n' "$RT" > "$RT/kbin/kind"; chmod +x "$RT/kbin/kind"
@@ -239,6 +261,17 @@ else
   eq "kind: one kind load with every image, the sample under registry.local/oa/" "$(/usr/bin/grep -c '^kind load docker-image .*registry.local/oa/echo-a2a:dev-.* --name openagentix$' "$RT/calls")" 1
   eq "kind: the chart gets only the tags (no repository, no digest)" "$(/usr/bin/grep '^helm upgrade' "$RT/calls" | /usr/bin/grep -cE 'image\.(repository|digest)=')/$(/usr/bin/grep '^helm upgrade' "$RT/calls" | /usr/bin/grep -o 'image\.tag=' | wc -l | tr -d ' ')" 0/4
   eq "kind: byo-values.yaml (registry.local/oa/, IfNotPresent) is passed as before" "$(/usr/bin/grep '^helm upgrade' "$RT/calls" | /usr/bin/grep -c -- '-f components/quickstart/byo-values.yaml')" 1
+  # Golden (ADR 0022 test 3): the commands on kind and k3d equal the list recorded with install.sh from before the change, up to helm upgrade
+  # (the fake fails there). Hashes, temporary paths and the order of the parallel steps are normalised. After an intended change to the
+  # installer's commands, regenerate with OA_UPDATE_GOLDEN=1 components/quickstart/tests/run.sh and review the diff.
+  printf '#!/usr/bin/env bash\necho "k3d $*" >> "%s/calls"\n[ "$1 $2" = "cluster list" ] && echo %s\nexit 0\n' "$RT" "'[{\"name\":\"openagentix\"}]'" > "$RT/kbin/k3d"; chmod +x "$RT/kbin/k3d"
+  norm(){ sed -E 's#[^ =]*/tmp\.[A-Za-z0-9]+#TMP#g; s/dev-[0-9a-f]{16}/dev-HASH/g; s/sourceHash=[0-9a-f]{16}/sourceHash=HASH/g' "$RT/calls" | LC_ALL=C sort; }
+  for ty in kind k3d; do
+    : > "$RT/calls"; env -i PATH="$RT/kbin:$RPATH" HOME="$HOME" CLUSTER_TYPE=$ty PROFILE=quickstart QUICKSTART_BYO=1 SKIP_PREREQS=1 CONTROL_PLANE_APISERVER_CIDRS=10.0.0.1/32 CONSOLE_APISERVER_CIDRS=10.0.0.1/32 bash "${OA_GOLDEN_INSTALL:-$ROOT/install.sh}" >/dev/null 2>&1
+    G="$ROOT/components/quickstart/tests/golden/$ty-quickstart-byo.calls"
+    if [ "${OA_UPDATE_GOLDEN:-0}" = 1 ]; then mkdir -p "$(dirname "$G")"; norm > "$G"; fi
+    eq "$ty: the recorded commands equal the golden list ($(wc -l < "$G" | tr -d ' ') calls, components/quickstart/tests/golden/)" "$(norm | diff "$G" - >/dev/null && echo same || { norm | diff "$G" - | head -5; })" same
+  done
 fi
 eq "the install.sh header lists CLUSTER_TYPE=remote, ALLOW_LOCAL_CONTEXT and NODE_SETTINGS" "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -cE 'CLUSTER_TYPE=remote|ALLOW_LOCAL_CONTEXT=1|NODE_SETTINGS=daemonset' | awk '{print ($1>=3)?"yes":"no"}')" yes
 

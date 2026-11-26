@@ -7,7 +7,7 @@ Three scripts that repeat the first GKE run of [issue 31](https://github.com/ope
 | Script | What it does |
 |---|---|
 | `up.sh` | Makes a **new** project under your organisation, links billing, adds a budget alert, enables the APIs, grants the default compute service account what Cloud Build and the nodes need, makes an Artifact Registry repository, starts the cluster create in the background and builds the four images in Cloud Build at the same time. Writes a state file, a separate kubeconfig and a values file. Prints the teardown command before it creates anything. |
-| `install.sh <state file>` | Sets `SET_DEFAULT_STORAGECLASS=standard-rwo` if the cluster has no default StorageClass (the installer then marks it), then runs `./install.sh` in remote mode with the stub model and the images from Artifact Registry. |
+| `install.sh <state file>` | Sets `SET_DEFAULT_STORAGECLASS=standard-rwo` if the cluster has no default StorageClass (the installer then marks it), then runs `./install.sh` in remote mode with the stub model and the images from Artifact Registry. With `GKE_IMAGES=installer` the installer builds and pushes the images itself (`IMAGE_REGISTRY`, ADR 0022; log in with `gcloud auth configure-docker <region>-docker.pkg.dev` first; not run on GKE yet). |
 | `down.sh <state file>` | Deletes the project (only one with the label `created-by=openagentix-gke-up`), checks that it is `DELETE_REQUESTED`, removes the separate kubeconfig. |
 | `cloudbuild.yaml` | The Cloud Build recipe: four parallel `docker build` steps on `E2_HIGHCPU_8`, pushed with one tag. |
 
@@ -40,7 +40,7 @@ Run `hack/ci/smoke.sh`, `hack/ci/netpol-test.sh` and `hack/demo.sh` with the sam
 
 ## Optional settings
 
-`REGION=us-central1`, `ZONE=us-central1-a`, `CLUSTER=oa-gke`, `MACHINE_TYPE=c3-standard-4`, `SPOT=1` (`0` for on-demand), `DISK_GB=60`, `BUDGET_USD=10`, `IMAGE_TAG=gke1`, `CLUSTER_VERSION` (empty: the rapid channel default), `STATE_ROOT=$HOME/.openagentix/gke`. For `install.sh`: `NODE_SETTINGS=none` skips the node settings DaemonSet (for the A/B run), `GKE_KEEP_STORAGECLASS=1` does not set `SET_DEFAULT_STORAGECLASS`, `VALUES_FILE` is added after the image values.
+`REGION=us-central1`, `ZONE=us-central1-a`, `CLUSTER=oa-gke`, `MACHINE_TYPE=c3-standard-4`, `SPOT=1` (`0` for on-demand), `DISK_GB=60`, `BUDGET_USD=10`, `IMAGE_TAG=gke1`, `CLUSTER_VERSION` (empty: the rapid channel default), `STATE_ROOT=$HOME/.openagentix/gke`. For `install.sh`: `NODE_SETTINGS=none` skips the node settings DaemonSet (for the A/B run), `GKE_KEEP_STORAGECLASS=1` does not set `SET_DEFAULT_STORAGECLASS`, `VALUES_FILE` is added after the image values, `GKE_IMAGES=installer` lets `./install.sh` build and push the images (default `cloudbuild`: the images `up.sh` built).
 
 ## Test
 

@@ -2181,6 +2181,9 @@ for P in bridge scheduling gateway.stubModel knowledge.kb notify governance.a2a 
   eq "$P.image.digest renders repository:tag@digest" "$(q "$ID" '[.[]|(.spec.template.spec.containers[0].image // .spec.jobTemplate.spec.template.spec.containers[0].image // empty)|select(startswith("reg.example/"))]|unique|join(" ")')" "reg.example/p/openagentix/x:dev-1234@$DGST"
   eq "$P.image.digest: a bad digest fails the render and names $P" "$(render_err "${IMGALL[@]}" --set-string "$P.image.digest=sha256:XYZ" | /usr/bin/grep -c "$P.image.digest")" 1
   eq "$P.image.digest: a tag-only value (dev) fails the render" "$(render_err "${IMGALL[@]}" --set-string "$P.image.digest=dev" | /usr/bin/grep -c "$P.image.digest")" 1
+  ID=$(docs "${IMGALL[@]}" --set-string "$P.image.repository=reg.example/p/openagentix/x" --set-string "$P.image.tag=" --set-string "$P.image.digest=$DGST")
+  eq "$P: an empty tag with a digest renders repository@digest" "$(q "$ID" '[.[]|(.spec.template.spec.containers[0].image // .spec.jobTemplate.spec.template.spec.containers[0].image // empty)|select(startswith("reg.example/"))]|unique|join(" ")')" "reg.example/p/openagentix/x@$DGST"
+  eq "$P: an empty tag without a digest fails the render and names $P" "$(render_err "${IMGALL[@]}" --set-string "$P.image.tag=" | /usr/bin/grep -c "$P.image.tag")" 1
 done
 HI0=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" 2>&1 | shasum -a 256)
 HI1=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" --set-string bridge.image.digest= --set-string scheduling.image.digest= --set-string gateway.stubModel.image.digest= --set-string knowledge.kb.image.digest= --set-string notify.image.digest= --set-string governance.a2a.image.digest= --set-string controlPlane.image.digest= --set-string console.image.digest= 2>&1 | shasum -a 256)

@@ -23,15 +23,18 @@
 #                        anything changes: images to build without IMAGE_REGISTRY, CREATE_CLUSTER=1, the example skill without SKIP_SKILL=1, and
 #                        MODEL_PROVIDER=ollama without MODEL_BASE_URL.
 #   IMAGE_REGISTRY=host[:port]/path  CLUSTER_TYPE=remote only (refused on kind and k3d; needed when the installer builds an image). Every image is
-#                        built with docker buildx for IMAGE_PLATFORM and pushed to IMAGE_REGISTRY/openagentix/<name>:dev-<hash of the source>; the
-#                        chart gets <path>.image.repository, .tag and .digest (the digest from the push), so the nodes pull by digest. Example:
+#                        built with docker buildx for IMAGE_PLATFORM and pushed to IMAGE_REGISTRY/openagentix/<name>:dev-<hash of the source>-<arch>
+#                        (a tag already there for that platform is reused, IMAGE_REBUILD=1 pushes again); the digest is checked in the registry and
+#                        the chart gets <path>.image.repository, .tag and .digest, so the nodes pull by digest. Before helm upgrade every platform
+#                        image must be qualified (never Docker Hub by default) and under IMAGE_REGISTRY; your own images by tag get a warning. Example:
 #                        europe-west4-docker.pkg.dev/<project>/<repository>. Log in first yourself (Artifact Registry: gcloud auth configure-docker
 #                        <region>-docker.pkg.dev); the installer never logs in and never handles a credential. The nodes pull with their own
 #                        credentials (GKE, same project: roles/artifactregistry.reader on the node service account), no imagePullSecrets.
 #                        ghcr.io/openagentix (the signed release images, ADR 0018) is refused. With QUICKSTART_BYO=1 the sample agent goes to
-#                        IMAGE_REGISTRY/openagentix-examples/echo-a2a and only that prefix is allowed for container agents. hack/images.sh.
-#   IMAGE_PLATFORM=linux/amd64  CLUSTER_TYPE=remote only (the default there): linux/amd64, linux/arm64, or both comma separated. On Apple silicon
-#                        an amd64 build runs the Go compiler under emulation and is slow.
+#                        IMAGE_REGISTRY/openagentix-examples/echo-a2a and only that prefix is allowed for container agents (an own prefix list in
+#                        your values must name it). hack/images.sh.
+#   IMAGE_PLATFORM=linux/amd64  CLUSTER_TYPE=remote only (the default there), or linux/arm64; one platform. On Apple silicon an amd64 build runs the
+#                        Go compiler under emulation and is slow; BUILDX_BUILDER (read by buildx) can name a remote amd64 builder.
 #   SKIP_PREFLIGHT=1     with CLUSTER_TYPE=remote, do not run hack/preflight.sh first. It reads the cluster (Kubernetes 1.37 or newer, the certificates and
 #                        admission policy APIs, Gateway API CRD bundle, default StorageClass, nodes, Pod Security labels), prints PASS/WARN/FAIL with a fix
 #                        for each, changes nothing, and stops the install on a FAIL. You can run it alone: KUBE_CONTEXT=<context> hack/preflight.sh
@@ -137,7 +140,6 @@ need=(docker "$CLUSTER_TYPE" kubectl helm jq yq openssl shasum)
 [ "$REMOTE" = 0 ] || need=(docker kubectl helm jq yq openssl shasum)   # remote: no kind, no k3d
 missing=(); for c in "${need[@]}"; do command -v "$c" >/dev/null || missing+=("$c"); done
 [ ${#missing[@]} -eq 0 ] || die "missing tools on PATH: ${missing[*]}"
-if [ "$REMOTE" = 1 ] && [ -n "${IMAGE_REGISTRY:-}" ]; then docker buildx version >/dev/null 2>&1 || die "CLUSTER_TYPE=remote with IMAGE_REGISTRY needs docker buildx (docker buildx version fails). Nothing was changed."; fi
 
 CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
 # remote: an existing cluster only. Stop here when its API server does not answer (nothing is created, nothing was changed).
@@ -168,12 +170,24 @@ if [ "${QUICKSTART_BYO:-0}" = 1 ]; then
   elif [ -n "${IMAGE_REGISTRY:-}" ]; then
     # remote (ADR 0022): the sample is pushed to IMAGE_REGISTRY/openagentix-examples/, and only that prefix is allowed (not the platform images
     # under IMAGE_REGISTRY/openagentix/). The pull policy stays the chart default (Always): IfNotPresent in byo-values.yaml is for kind only.
-    yq --arg p "$(image_example_repo "")" 'del(.controlPlane.containerAgents.imagePullPolicy) | .controlPlane.policy.runtimes.container.images=[$p]' \
-      components/quickstart/byo-values.yaml > "$QS_TMP/byo-values.json"
-    VALS+=(-f "$QS_TMP/byo-values.json")
+    yq 'del(.controlPlane.containerAgents.imagePullPolicy)' components/quickstart/byo-values.yaml > "$QS_TMP/byo-values.json"
+    VALS+=(-f "$QS_TMP/byo-values.json")   # the prefix is set below, once every values file is known
   fi   # remote without IMAGE_REGISTRY: refused below, with the list of images it would build
 fi
 for f in ${VALUES_FILE:-}; do VALS+=(-f "$f"); done
+if [ "$QS_BYO" = 1 ] && [ "$REMOTE" = 1 ] && [ -n "${IMAGE_REGISTRY:-}" ]; then
+  # Helm replaces lists: the merged prefix list is the last one set (the chart default, then each values file in order). Only an empty list or
+  # the quick start's own registry.local/oa/ is replaced; an operator's list must name the prefix itself.
+  BYO_PREFIX=$(image_example_repo ""); BYO_LIST=$(yq -c '.controlPlane.policy.runtimes.container.images // empty' "$CHART/values.yaml")
+  prev=""; for a in ${VALS[@]+"${VALS[@]}"}; do
+    if [ "$prev" = -f ]; then l=$(yq -c '.controlPlane.policy.runtimes.container.images // empty' "$a" 2>/dev/null) || l=""; [ -z "$l" ] || BYO_LIST=$l; fi; prev=$a
+  done
+  case "${BYO_LIST:-[]}" in
+    '[]'|'["registry.local/oa/"]') jq -n --arg p "$BYO_PREFIX" '{controlPlane:{policy:{runtimes:{container:{images:[$p]}}}}}' > "$QS_TMP/byo-prefix.json"; VALS+=(-f "$QS_TMP/byo-prefix.json");;
+    *) jq -e --arg p "$BYO_PREFIX" 'index($p)!=null' <<<"$BYO_LIST" >/dev/null \
+         || die "QUICKSTART_BYO=1: your values set runtimes.container.images; add $BYO_PREFIX to it yourself (controlPlane.policy.runtimes.container.images). Nothing was changed.";;
+  esac
+fi
 if [ "$QS" = 1 ]; then
   . components/quickstart/model.sh
   QS_MODEL=$(qs_pick_model) || die "model configuration: see the line above"
@@ -218,15 +232,16 @@ queue_build(){ BUILD_Q+=("$1|$2|${3:-}|${4:-}"); }   # image | context | optiona
 # kind load and k3d image import keep an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
 # shellcheck source=hack/image-tag.sh
 . hack/image-tag.sh
-# remote (ADR 0022): the repository becomes IMAGE_REGISTRY/openagentix/<name>, <name> the last part of the first source dir (hack/ci/dockerfiles.sh).
+# remote (ADR 0022): the repository becomes IMAGE_REGISTRY/openagentix/<name>, <name> the last part of the first source dir (hack/ci/dockerfiles.sh),
+# and the tag dev-<hash>-<arch>, so two installs for different platforms never share a tag.
 tag_image(){
   local v=$1 path=$2 t r; shift 2; t=$(src_tag "$@"); r=${!v%:*}
-  if [ "$REMOTE" = 1 ] && [ -n "${IMAGE_REGISTRY:-}" ]; then r=$(image_repo "$(basename "$1")"); SET+=(--set-string "$path.image.repository=$r"); fi
+  if [ "$REMOTE" = 1 ] && [ -n "${IMAGE_REGISTRY:-}" ]; then r=$(image_repo "$(basename "$1")"); t=$(image_remote_tag "$t"); SET+=(--set-string "$path.image.repository=$r"); fi
   printf -v "$v" '%s:%s' "$r" "$t"; SET+=(--set-string "$path.image.tag=$t")
 }
 # The builds do not need the cluster, so start_builds runs them in the background right away (BUILD_JOBS at a time) while the cluster and the
 # prerequisites are installed (issue #29: the builds were about 100 s of a serial install). finish_builds waits for them and loads the images.
-BUILD_PID=""; BUILD_STATUS="$QS_TMP/build.status"
+BUILD_PID=""; BUILD_STATUS="$QS_TMP/build.status"; BUILT_PATHS=()
 start_builds(){
   [ ${#BUILD_Q[@]} -gt 0 ] || return 0
   local jobs=${BUILD_JOBS:-3}
@@ -253,13 +268,13 @@ finish_builds(){
   [ "$(cat "$BUILD_STATUS" 2>/dev/null || echo 1)" = 0 ] || fail=1
   for spec in "${BUILD_Q[@]}"; do imgs+=("${spec%%|*}"); done
   if [ "$REMOTE" = 1 ]; then
-    [ "$fail" = 0 ] || die "an image build or push to $IMAGE_REGISTRY failed: re-run with BUILD_JOBS=1 to see which one (is docker logged in to the registry?). The chart was not applied."
+    [ "$fail" = 0 ] || die "an image build, push or check for $IMAGE_REGISTRY failed (see the ERROR lines above; BUILD_JOBS=1 builds one at a time; is docker logged in to the registry?). The chart was not applied."
     # the pushed digest of each image goes to the chart, so the nodes pull exactly what was built (ADR 0022)
     for spec in "${BUILD_Q[@]}"; do
       IFS='|' read -r img ctx df path <<<"$spec"; i=$((i+1))
       d=$(image_digest "$QS_TMP/build-$i.json") || die "no digest for $img after the push (see the line above). The chart was not applied."
       echo "pushed ${img%:*}@$d ($img)"
-      if [ -n "$path" ]; then SET+=(--set-string "$path.image.digest=$d"); else BYO_REF="${img%:*}@$d"; fi
+      if [ -n "$path" ]; then SET+=(--set-string "$path.image.digest=$d"); BUILT_PATHS+=("$path"); else BYO_REF="${img%:*}@$d"; fi
     done
     return 0
   fi
@@ -320,6 +335,7 @@ if [ "$QS_BYO" = 1 ]; then
   BYO_REPO=registry.local/oa/echo-a2a; BYO_REF=""
   [ "$REMOTE" = 0 ] || [ -z "${IMAGE_REGISTRY:-}" ] || BYO_REPO=$(image_example_repo echo-a2a)   # remote: BYO_REF comes from the push (finish_builds)
   BYO_IMAGE="$BYO_REPO:$(src_tag examples/agents/echo-a2a)"
+  [ "$REMOTE" = 0 ] || [ -z "${IMAGE_REGISTRY:-}" ] || BYO_IMAGE="$BYO_REPO:$(image_remote_tag "${BYO_IMAGE##*:}")"
   queue_build "$BYO_IMAGE" examples/agents/echo-a2a
   log "sample container agent image $BYO_IMAGE"
 fi
@@ -333,6 +349,7 @@ if [ "$REMOTE" = 1 ]; then   # remote: no step that needs the local Docker netwo
     die "CLUSTER_TYPE=remote needs IMAGE_REGISTRY (host[:port]/path, for example europe-west4-docker.pkg.dev/<project>/<repository>) to push the images it builds: a remote cluster cannot get locally built images (ADR 0022). These would be built: ${rimgs[*]}. Or set the matching SKIP_*_IMAGE=1 and point the chart's image values at a registry the nodes can pull from. Nothing was changed."
   fi
 fi
+if [ "$REMOTE" = 1 ] && [ ${#BUILD_Q[@]} -gt 0 ]; then docker buildx version >/dev/null 2>&1 || die "CLUSTER_TYPE=remote needs docker buildx to build and push the images (docker buildx version fails). Nothing was changed."; fi
 [ "$CLUSTER_UP" = 1 ] || [ "${CREATE_CLUSTER:-1}" = 1 ] || die "$CLUSTER_TYPE cluster '$CLUSTER' does not exist and CREATE_CLUSTER=0"
 start_builds
 
@@ -801,6 +818,10 @@ if [ -n "$CP_DEP" ] && $K get crd agentdefinitions.openagentix.io >/dev/null 2>&
 fi
 
 # --- 6. the chart ---------------------------------------------------------------------------------------------
+if [ "$REMOTE" = 1 ]; then   # ADR 0022: no unqualified image, all under IMAGE_REGISTRY when set, built ones by digest; the operator's by tag with a warning
+  FINAL=$(render ${SET[@]+"${SET[@]}"}) || die "the chart does not render with the image values (see above). The chart was not applied."
+  images_render_check "$FINAL" ${BUILT_PATHS[@]+"${BUILT_PATHS[@]}"} || die "an image of the platform cannot be used on a remote cluster (see the ERROR lines above). The chart was not applied."
+fi
 log "helm upgrade --install $RELEASE"  # (adoption happens just above)
 helm upgrade --install $RELEASE $CHART -n "$RELEASE_NS" --create-namespace ${VALS[@]+"${VALS[@]}"} ${SET[@]+"${SET[@]}"} --wait --timeout 5m
 

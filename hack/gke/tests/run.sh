@@ -39,7 +39,7 @@ exit 0
 EOS
 cat > "$D/fake-install.sh" <<EOS
 #!/usr/bin/env bash
-env | grep -E '^(CLUSTER_TYPE|PROFILE|KUBE_CONTEXT|KUBECONFIG|NODE_SETTINGS|SET_DEFAULT_STORAGECLASS|SKIP_[A-Z0-9_]+|VALUES_FILE)=' | sort > "$D/install-env"
+env | grep -E '^(CLUSTER_TYPE|PROFILE|KUBE_CONTEXT|KUBECONFIG|NODE_SETTINGS|SET_DEFAULT_STORAGECLASS|SKIP_[A-Z0-9_]+|VALUES_FILE|IMAGE_[A-Z]+)=' | sort > "$D/install-env"
 EOS
 chmod +x "$D/bin/"* "$D/fake-install.sh"
 calls(){ cat "$D/calls" 2>/dev/null; }
@@ -140,6 +140,11 @@ for kv in CLUSTER_TYPE=remote PROFILE=quickstart "KUBE_CONTEXT=$CTX" NODE_SETTIN
           SKIP_CONTROL_PLANE_IMAGE=1 SKIP_CONSOLE_IMAGE=1 "VALUES_FILE=$V" "KUBECONFIG=$(dirname "$STATE")/kubeconfig"; do
   t "install env $kv" "$(grep -cx -- "$kv" "$D/install-env")" 1
 done
+t "install env: no IMAGE_REGISTRY by default (the Cloud Build images)" "$(grep -c '^IMAGE_REGISTRY=' "$D/install-env")" 0
+inst FAKE_SC="$D/sc-ok.json" GKE_IMAGES=installer >/dev/null
+t "GKE_IMAGES=installer: IMAGE_REGISTRY is the run's Artifact Registry repository, linux/amd64" "$(grep -cx "IMAGE_REGISTRY=us-central1-docker.pkg.dev/$P/oa" "$D/install-env")/$(grep -cx IMAGE_PLATFORM=linux/amd64 "$D/install-env")" 1/1
+t "GKE_IMAGES=installer: no SKIP_*_IMAGE and not the Cloud Build values file" "$(grep -c '^SKIP_[A-Z_]*_IMAGE=' "$D/install-env")/$(grep -c "^VALUES_FILE=.*gke-images.yaml" "$D/install-env")" 0/0
+OUT=$(inst FAKE_SC="$D/sc-ok.json" GKE_IMAGES=bogus); t "GKE_IMAGES=bogus is refused" "$(grep -c "GKE_IMAGES must be" <<<"$OUT")/$(grep -c '^exit=1$' <<<"$OUT")" 1/1
 inst FAKE_SC="$D/sc-ok.json" >/dev/null
 t "a default StorageClass exists: SET_DEFAULT_STORAGECLASS not set" "$(grep -c '^SET_DEFAULT_STORAGECLASS=' "$D/install-env")" 0
 inst FAKE_SC="$D/sc-none.json" GKE_KEEP_STORAGECLASS=1 >/dev/null
