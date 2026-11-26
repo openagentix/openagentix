@@ -1,9 +1,11 @@
 # ADR 0022: build images for a remote cluster and push them to a registry
 
-Status: Proposed
+Status: Accepted (2026-11-26)
 Date: 2026-11-26
 Issue: https://github.com/openagentix/openagentix/issues/162 (umbrella #31)
 Replaces: none. Adds to ADR 0014 (quick start) and ADR 0015 (container agents); does not change ADR 0018 (release signing).
+
+The 7-day review period was waived by the maintainer on 2026-11-26 after a real GKE run (#31); an independent review was done and its changes are in this text.
 
 With `CLUSTER_TYPE=remote`, the installer builds every image it needs with `docker buildx` for `IMAGE_PLATFORM` (default `linux/amd64`), pushes it to `IMAGE_REGISTRY`, checks what it pushed, and gives the chart the repository, the tag and the pushed digest of each image. The node pulls by digest. No platform image on a remote cluster comes from an unqualified default name. On kind and k3d nothing changes.
 

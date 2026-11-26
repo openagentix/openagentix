@@ -65,6 +65,6 @@ Follow the style of the existing records:
 | [0015](0015-bring-your-own-agent.md) | Bring your own agent: run a user's A2A container under platform control | Accepted | 2026-11-25 |
 | [0018](0018-release-signing-and-sbom.md) | How release artefacts are signed, described and verified | Proposed | 2026-11-25 |
 | [0019](0019-container-agent-tools.md) | Tools for container agents through a workload tool server | Proposed | 2026-11-26 |
-| [0022](0022-image-registry-and-platform.md) | Build images for a remote cluster and push them to a registry | Proposed | 2026-11-26 |
+| [0022](0022-image-registry-and-platform.md) | Build images for a remote cluster and push them to a registry | Accepted | 2026-11-26 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.
