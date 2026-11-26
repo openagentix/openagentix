@@ -6,7 +6,7 @@
 # To update: docker buildx imagetools inspect <tag>, copy the "Digest:" line here.
 
 # node:22
-FROM node:22@sha256:7c400d78797d8cbe3f6bb21d2227b86af4cd24b0014cc9f62ff989cc16de988e AS web
+FROM node:25@sha256:78839ac448c23517f8eab2e8f7943d9b4f73979eb7f8bed2c73dbf72ff869e7b AS web
 # package.json carries "packageManager": "pnpm@<version>+sha512.<hash>", so corepack fetches exactly that pnpm and checks its hash
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
