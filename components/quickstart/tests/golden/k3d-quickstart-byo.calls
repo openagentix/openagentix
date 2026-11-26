@@ -17,6 +17,7 @@ k3d image import openagentix/a2a-gate:dev-HASH openagentix/stub-model:dev-HASH o
 kubectl --context=k3d-openagentix get --raw /.well-known/openid-configuration
 kubectl --context=k3d-openagentix get pods -n kube-system -l component=kube-apiserver -o json
 kubectl annotate agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
+kubectl annotate agentgatewayparameters.agentgateway.dev model-gateway-parameters -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
 kubectl annotate agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
 kubectl annotate configmap a2a-gate-routes -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
 kubectl annotate configmap a2a-gate-rules -n openagentix-gateway meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
@@ -91,6 +92,8 @@ kubectl create configmap substrate-idp-ca -n mcp-tools --from-file=ca.crt=/dev/f
 kubectl create secret generic console-token -n openagentix-system --from-file=token=/dev/fd/63
 kubectl get agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system
 kubectl get agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get agentgatewayparameters.agentgateway.dev model-gateway-parameters -n agentgateway-system
+kubectl get agentgatewayparameters.agentgateway.dev model-gateway-parameters -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
 kubectl get agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system
 kubectl get agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
 kubectl get clustertrustbundle servicedns.podcert.ate.dev:identity:primary-bundle -o jsonpath={.spec.trustBundle}
@@ -235,6 +238,7 @@ kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup -n mcp-tools -o 
 kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup-workload -n mcp-tools
 kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup-workload -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
 kubectl label agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
+kubectl label agentgatewayparameters.agentgateway.dev model-gateway-parameters -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
 kubectl label agentgatewaypolicy.agentgateway.dev model-gateway-policy -n agentgateway-system app.kubernetes.io/managed-by=Helm --overwrite
 kubectl label configmap a2a-gate-routes -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite
 kubectl label configmap a2a-gate-rules -n openagentix-gateway app.kubernetes.io/managed-by=Helm --overwrite

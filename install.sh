@@ -46,6 +46,10 @@
 #   SERVICE_ACCOUNT_ISSUER=https://...  the service account issuer the workload tool server trusts (container agents with a tool profile). Default: read
 #                        from the cluster (/.well-known/openid-configuration, then the kube-apiserver flag) and passed only when the chart value is not
 #                        set in a values file and differs from the chart default (kind and k3s), so the default render does not change (hack/sa-issuer.sh)
+#   gateway.serviceType  (chart value, ADR 0023; set it in a values file) the type of the model gateway's Service: ClusterIP (default) or
+#                        LoadBalancer. The default has no public IP on any cluster type. After a CLUSTER_TYPE=remote install, and after a failure once the
+#                        chart was being applied, the installer reads the Services (read only) and warns about each LoadBalancer or NodePort one, or says it
+#                        could not check (hack/gateway-service-type.sh). Not run on a cluster yet.
 #   ALLOW_LOCAL_CONTEXT=1  with CLUSTER_TYPE=remote, accept a KUBE_CONTEXT that is the name of a local cluster (kind-*, k3d-*, docker-desktop, ...)
 #   NODE_SETTINGS=daemonset  set the two node sysctls for gVisor pod networking (components/runtime/NOTES.md) with the privileged DaemonSet
 #                        components/runtime/node-settings.yaml (its own namespace) instead of docker exec. Default: docker exec on kind and k3d,
@@ -133,7 +137,10 @@ KAGENT_NS=kagent
 
 t0=$(date +%s)
 log(){ printf '\n=== %s (+%ss)\n' "$*" "$(( $(date +%s) - t0 ))"; }
-die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=hack/gateway-service-type.sh
+. hack/gateway-service-type.sh
+GW_CHECK_ON_DIE=0   # set to 1 just before the chart is applied: from then on a failed remote install also reports LoadBalancer and NodePort Services
+die(){ printf '\nERROR: %s\n' "$*" >&2; [ "$GW_CHECK_ON_DIE" != 1 ] || { GW_CHECK_ON_DIE=0; gw_exposure_check "$K" "$CTX" || true; }; exit 1; }
 
 # --- 0. preflight: tools and env, before anything is changed ----------------------------------------------
 need=(docker "$CLUSTER_TYPE" kubectl helm jq yq openssl shasum)
@@ -823,7 +830,8 @@ if [ "$REMOTE" = 1 ]; then   # ADR 0022: no unqualified image, all under IMAGE_R
   images_render_check "$FINAL" ${BUILT_PATHS[@]+"${BUILT_PATHS[@]}"} || die "an image of the platform cannot be used on a remote cluster (see the ERROR lines above). The chart was not applied."
 fi
 log "helm upgrade --install $RELEASE"  # (adoption happens just above)
-helm upgrade --install $RELEASE $CHART -n "$RELEASE_NS" --create-namespace ${VALS[@]+"${VALS[@]}"} ${SET[@]+"${SET[@]}"} --wait --timeout 5m
+[ "$REMOTE" = 0 ] || GW_CHECK_ON_DIE=1
+helm upgrade --install $RELEASE $CHART -n "$RELEASE_NS" --create-namespace ${VALS[@]+"${VALS[@]}"} ${SET[@]+"${SET[@]}"} --wait --timeout 5m || die "helm upgrade --install $RELEASE failed or timed out (see above). The chart may be partly applied: run the installer again, or check helm status $RELEASE -n $RELEASE_NS"
 
 if [ -n "$CH_CM" ]; then   # the broker's CRDs must have been there: the chart skips Kourier objects silently without them
   helm get manifest $RELEASE -n "$RELEASE_NS" | yq -e 'select(.kind=="AgentBackend")' >/dev/null || die "Agent Kourier CRDs were not found by Helm: the AgentBackend was not installed (kubectl get crd agentbackends.agentkourier.dev)"
@@ -935,6 +943,9 @@ if [ "$QS" = 1 ]; then
 fi
 
 log "DONE"
+if [ "$REMOTE" = 1 ]; then   # a LoadBalancer on a managed cloud is a public IP, a firewall rule and a charge: say so (read only)
+  gw_exposure_check "$K" "$CTX"
+fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null; then $K get pods -n $BRIDGE_NS; fi
 $K get agent -n $KAGENT_NS
 if [ "$QS" = 1 ]; then
