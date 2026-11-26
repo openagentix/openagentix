@@ -22,6 +22,12 @@
 #                        (no docker exec, no ctr). Refused for now, before anything changes: locally built images (a registry push is issue #162:
 #                        set the SKIP_*_IMAGE switches and point the image values at a registry), QUICKSTART_BYO=1, the example skill without
 #                        SKIP_SKILL=1, and MODEL_PROVIDER=ollama without MODEL_BASE_URL.
+#   SKIP_PREFLIGHT=1     with CLUSTER_TYPE=remote, do not run hack/preflight.sh first. It reads the cluster (Kubernetes 1.37 or newer, the certificates and
+#                        admission policy APIs, Gateway API CRD bundle, default StorageClass, nodes, Pod Security labels), prints PASS/WARN/FAIL with a fix
+#                        for each, changes nothing, and stops the install on a FAIL. You can run it alone: KUBE_CONTEXT=<context> hack/preflight.sh
+#   SERVICE_ACCOUNT_ISSUER=https://...  the service account issuer the workload tool server trusts (container agents with a tool profile). Default: read
+#                        from the cluster (/.well-known/openid-configuration, then the kube-apiserver flag) and passed only when the chart value is not
+#                        set in a values file and differs from the chart default (kind and k3s), so the default render does not change (hack/sa-issuer.sh)
 #   ALLOW_LOCAL_CONTEXT=1  with CLUSTER_TYPE=remote, accept a KUBE_CONTEXT that is the name of a local cluster (kind-*, k3d-*, docker-desktop, ...)
 #   NODE_SETTINGS=daemonset  set the two node sysctls for gVisor pod networking (components/runtime/NOTES.md) with the privileged DaemonSet
 #                        components/runtime/node-settings.yaml (its own namespace) instead of docker exec. Default: docker exec on kind and k3d,
@@ -116,6 +122,8 @@ missing=(); for c in "${need[@]}"; do command -v "$c" >/dev/null || missing+=("$
 CLUSTER_UP=0; cluster_exists && CLUSTER_UP=1
 # remote: an existing cluster only. Stop here when its API server does not answer (nothing is created, nothing was changed).
 [ "$REMOTE" = 0 ] || [ "$CLUSTER_UP" = 1 ] || die "cannot reach the API server of kube context '$CTX' (CLUSTER_TYPE=remote never creates a cluster; check: kubectl --context $CTX get --raw /version). Nothing was changed."
+# remote: read-only checks of the cluster (hack/preflight.sh, issue #168), before anything is created. A FAIL stops here; SKIP_PREFLIGHT=1 skips it.
+if [ "$REMOTE" = 1 ] && [ "${SKIP_PREFLIGHT:-0}" != 1 ]; then log "preflight: the remote cluster"; KUBE_CONTEXT=$CTX bash hack/preflight.sh || die "the preflight found a problem in cluster '$CTX' (see the FAIL lines and their fixes above). Nothing was changed. SKIP_PREFLIGHT=1 skips the checks."; fi
 secret_exists(){ [ "$CLUSTER_UP" = 1 ] && $K --context="$CTX" get secret -n "$1" "$2" >/dev/null 2>&1; }   # named context: this runs before the switch below
 
 # The quick start (ADR 0014): PROFILE=quickstart ./install.sh, or ./install.sh --quickstart. VALUES_FILE still works and comes after the profile.
@@ -654,6 +662,26 @@ if [ -n "$CP_DEP" ]; then
     CP_CIDRS=$(kourier_apiserver_cidrs "${CONTROL_PLANE_APISERVER_CIDRS:-}" "$CP_EPS" "$CP_NODES") || die "could not find the API server address for the control plane's NetworkPolicy; set CONTROL_PLANE_APISERVER_CIDRS"
     echo "control plane: its NetworkPolicy lets it reach the API server at $CP_CIDRS"
     SET+=(--set-json "controlPlane.apiServerCIDRs=$CP_CIDRS")
+  fi
+fi
+if jq -e -s 'any(.[]; .kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")' <<<"$RENDERED" >/dev/null; then
+  # The workload tool server (ADR 0019, container agents with a tool profile) trusts one service account issuer. The chart default is kind's
+  # and k3s's; another cluster (GKE: a container.googleapis.com URL) has its own. Read it from the cluster and pass it, but only when the chart
+  # default is what renders (a values file that sets the issuer wins) and the cluster's differs (so the default render stays byte-identical).
+  # shellcheck source=hack/sa-issuer.sh
+  . hack/sa-issuer.sh
+  SA_DISC=$($K --context="$CTX" get --raw /.well-known/openid-configuration 2>/dev/null || true)
+  SA_PODS=""; [ -n "$SA_DISC" ] || SA_PODS=$($K --context="$CTX" get pods -n kube-system -l component=kube-apiserver -o json 2>/dev/null || true)
+  SA_DEFAULT=$(yq -r .controlPlane.containerAgents.serviceAccountTokens.issuer "$CHART/values.yaml")
+  SA_RENDERED=$(jq -r -s '.[]|select(.kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")|.spec.kubernetesServiceAccount.issuer' <<<"$RENDERED")
+  if SA_CLUSTER=$(sa_issuer "${SERVICE_ACCOUNT_ISSUER:-}" "$SA_DISC" "$SA_PODS"); then
+    SA_SET=$(sa_issuer_set_value "$SA_CLUSTER" "$SA_RENDERED" "$SA_DEFAULT")
+    if [ -n "$SA_SET" ]; then
+      echo "workload tool server: the cluster's service account issuer is $SA_SET"
+      SET+=(--set-string "controlPlane.containerAgents.serviceAccountTokens.issuer=$SA_SET")
+    fi
+  else
+    echo "WARNING: could not read the cluster's service account issuer; the workload tool server keeps '$SA_RENDERED'. Set SERVICE_ACCOUNT_ISSUER or controlPlane.containerAgents.serviceAccountTokens.issuer if it is wrong." >&2
   fi
 fi
 if [ -n "$CN_DEP" ]; then
