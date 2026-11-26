@@ -1,0 +1,88 @@
+name: recovery
+
+# Recovery after a node restart (issue #203). Installs the quick start on a kind cluster on a hosted runner, runs the smoke test, then
+# `docker restart` of the kind node container (the same as a laptop VM restart) and measures what comes back and how fast
+# (hack/ci/recovery-test.sh). The job fails when recovery takes longer than the budget, when a pod restarts more than once per
+# container, when a Job fails, or when the agent or the smoke test does not come back. Measured values go to the job summary.
+# NOT part of the required `ci-ok` gate (like e2e). See hack/ci/README.md.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/recovery.yml
+      - hack/ci/recovery-test.sh
+      - hack/ci/recovery-allow.txt
+  schedule:
+    - cron: '47 4 * * *'   # nightly
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: Recovery budget in seconds (node restart until the smoke test passes again)
+        default: '600'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recovery:
+    runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
+    timeout-minutes: 60
+    env:
+      CLUSTER: oa-recovery         # a throwaway kind cluster; the script refuses the name openagentix
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install (PROFILE=quickstart, no key, no token)
+        env:
+          PROFILE: quickstart
+          QUICKSTART_BYO: "1"
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: restart the node and measure the recovery
+        env:
+          SMOKE_BYO: "1"
+          RECOVERY_BUDGET: ${{ github.event.inputs.budget || '600' }}
+          RECOVERY_SUMMARY: ${{ github.workspace }}/recovery-summary.md
+        run: |
+          set -o pipefail
+          hack/ci/recovery-test.sh 2>&1 | tee recovery.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            [ -f recovery-summary.md ] && cat recovery-summary.md
+            echo
+            echo "### Log"
+            echo '```'
+            tail -n 120 recovery.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
+          for d in kagent/kagent-controller toolhive-system/toolhive-operator agentgateway-system/agentgateway; do
+            echo "--- previous log of $d"
+            kubectl logs -n "${d%%/*}" "deploy/${d##*/}" --previous --tail=40 2>&1 || true
+          done
+          kubectl get agentdefinition -A || true
+          kubectl get jobs,cronjobs -A || true
+          kind export logs ./kind-logs --name "$CLUSTER" || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs
+          path: kind-logs
+          retention-days: 7
