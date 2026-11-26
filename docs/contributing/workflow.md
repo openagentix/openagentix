@@ -57,7 +57,7 @@ Two checks must pass before a merge:
 | `ci-ok` | all the jobs in `ci.yml` passed or were skipped ([hack/ci/README.md](https://github.com/openagentix/openagentix/blob/main/hack/ci/README.md)) | open the failed job, run the same step locally with `make test` or `make lint` |
 | `DCO` | every commit in the pull request has a `Signed-off-by` line that matches its author | `git rebase --signoff main` then `git push --force-with-lease`; for the last commit only: `git commit --amend -s --no-edit` |
 
-The workflow files may change over time; the current required checks are the ones set in the branch protection rule for `main`.
+The branch protection rule for `main` requires both `ci-ok` and `DCO`. The workflow files may change over time; the rule is the source of truth.
 
 ## Review
 
@@ -88,7 +88,7 @@ The goal is to end this exception. See "Growing the maintainer group" in [GOVERN
 2. Write the release section in `CHANGELOG.md` first: version, date, what was added, changed, fixed, upgrade notes, security. The changelog is updated before the release is made.
 3. Run `make test` (and the cluster checks that the release claims). Anything proven on a cluster has its limits written down.
 4. Choose the version by [semantic versioning](https://semver.org/). While the version is 0.x, a minor release can change interfaces and the upgrade notes say how.
-5. Tag `vX.Y.Z` from `main` (the tag itself is not signed yet; the artefacts are, by the workflow) and push the tag. Any `v*` tag that is pushed, on any commit, runs the workflow of that commit and gets a signature that verifies, so the repository needs a tag ruleset for `refs/tags/v*`: only maintainers may create one, and update, delete and force-push are blocked. The tag push starts the release workflow (below); you do not create the GitHub release by hand.
+5. Tag `vX.Y.Z` from `main` (the tag itself is not signed yet; the artefacts are, by the workflow) and push the tag. Any `v*` tag that is pushed, on any commit, runs the workflow of that commit and gets a signature that verifies, so the repository has a ruleset named `release-tags` for `refs/tags/v*` (set on 2026-11-26): only repository admins may create a tag, and update, delete and force-push are blocked. The tag push starts the release workflow (below); you do not create the GitHub release by hand.
 6. Watch the `release` run. When it is green, check the release page, pull one image by digest and verify it as [Verify a release](../diary/guide/verify-release.md) says. New packages on ghcr.io may be private: make them public in the organisation's package settings, then verify again without a login.
 7. Close the milestone and the tracking issue. Open the next tracking issue if there is none.
 

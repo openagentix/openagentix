@@ -33,7 +33,7 @@ The signer is always this identity:
 
 A signature made by another workflow, a branch, a fork or a person does not match. Pin the exact tag when you can.
 
-What the identity does not prove: the tag is on `main`. Anyone who may push a `v*` tag to this repository can push it on any commit, and the release workflow of that commit runs and gets a certificate with this identity. The workflow checks that the tag is on `main`, but that check is part of the commit that is run, so it cannot protect against its own commit. The control is a tag ruleset on the repository for `refs/tags/v*` that lets only maintainers create a tag and blocks updating, deleting and force-pushing one. See "Limits".
+What the identity does not prove: the tag is on `main`. Anyone who may push a `v*` tag to this repository can push it on any commit, and the release workflow of that commit runs and gets a certificate with this identity. The workflow checks that the tag is on `main`, but that check is part of the commit that is run, so it cannot protect against its own commit. The control is a ruleset named `release-tags` on the repository for `refs/tags/v*` (set on 2026-11-26): only repository admins may create a tag, and updating, deleting and force-pushing one are blocked. No real tag has run yet, so this is not proven by a release. See "Limits".
 
 ## What you need
 
@@ -149,7 +149,7 @@ To refuse unsigned OpenAgentix images at admission time, use a policy engine wit
 
 ## Limits
 
-- **Who can make a release that verifies.** Anyone who may push a `v*` tag to this repository, on any commit, and anyone who can change `release.yml` on the commit that is tagged. Until a tag ruleset for `refs/tags/v*` limits tag creation to maintainers and blocks updates, deletes and force-pushes, the signature proves "built by this repository's release workflow for this tag", not "approved by a maintainer". A protected `release` environment with required reviewers would add a second person before signing; it is not set up.
+- **Who can make a release that verifies.** Since 2026-11-26 the `release-tags` ruleset for `refs/tags/v*` limits tag creation to repository admins and blocks updates, deletes and force-pushes. Still, anyone who can change `release.yml` on the commit that is tagged can change what the workflow does, so the signature proves "built by this repository's release workflow for this tag", not "approved by a maintainer". A protected `release` environment with required reviewers would add a second person before signing; it is not set up.
 - **Floating inputs in the signed build.** buildx, BuildKit and the Dockerfile frontend are pinned (version or digest). The `golang:1.25` build images and the `distroless/static:nonroot` base images of most Dockerfiles are still pinned by tag only (the console's are pinned by digest). Pinning them by digest is pull request #83. This must be fixed before the first real tag, or the SBOM and provenance describe an image whose base can change between two builds of the same commit.
 - **Unproven.** No tag has run the signing steps. The cosign v3 signature format on ghcr.io (OCI referrers, or the fallback tag), `gh attestation verify` on an OCI Helm chart, and the private-by-default visibility of new ghcr.io packages are untested.
 - **The chart has no SBOM.** It holds templates and no third-party code. The software it runs is in the image SBOMs and, for the upstream components that `install.sh` adds, in [THIRD-PARTY.md](https://github.com/openagentix/openagentix/blob/main/THIRD-PARTY.md).

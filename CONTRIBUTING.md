@@ -78,6 +78,7 @@ Do not claim "it works" without showing the command and its output. In the pull 
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/): `feat(chart): ...`, `fix(bridge): ...`, `docs: ...`, `test: ...`, `chore: ...`. Put the area in brackets. Keep the first line short.
 - One logical change per pull request. Small pull requests get reviewed faster.
+- Two checks must pass before a pull request can merge into `main`: `ci-ok` and `DCO`.
 - Fill in the pull request template: what and why, the tests you ran, DCO sign-off, docs and changelog, security impact.
 - Add a line to `CHANGELOG.md` under `[Unreleased]` for anything a user can see.
 - Update the README or `docs/` when behaviour changes.
