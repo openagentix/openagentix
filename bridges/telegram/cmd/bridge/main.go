@@ -66,6 +66,8 @@ func run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		UserIDPrefix:       cfg.UserIDPrefix,
 		MaxConcurrentTurns: cfg.MaxConcurrentTurns,
 		ShutdownGrace:      cfg.ShutdownGrace,
+		RetryOnWakeup:      cfg.RetryOnWakeup,
+		WakeupDelay:        cfg.WakeupDelay,
 	}
 	log.Info("bridge starting", "allowlist_size", len(cfg.AllowedChatIDs), "allow_all", cfg.AllowAll, "memory_commands", mem != nil)
 	if cfg.HealthAddr != "" {

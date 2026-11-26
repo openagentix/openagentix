@@ -56,13 +56,15 @@ connection from the internet. Go, standard library only.
 | `A2A_USER_ID_PREFIX` | `telegram:` | Prefix of the per-chat user id. Give each bot or bridge its own prefix when several share one agent. Printable ASCII, no spaces, at most 64 characters. |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | Override for tests. |
 | `AGENT_TIMEOUT` | `120s` | Per-turn deadline for the agent call. |
+| `RETRY_ON_WAKEUP` | `true` | When the agent answers A2A error -32004 (input not accepted, its session is not ready, for example after a cold start), send the same message once more after `WAKEUP_RETRY_DELAY`. Only -32004 is retried; the agent did not accept the message, so it is never duplicated. If it still answers -32004, or the turn deadline passes first, the user gets "The agent is waking up. Please send your message again in a minute." |
+| `WAKEUP_RETRY_DELAY` | `20s` | Wait before that one retry. The wait counts against `AGENT_TIMEOUT`, so the longest a turn takes is still `AGENT_TIMEOUT`. |
 | `MAX_CONCURRENT_TURNS` | `8` | Agent turns in flight across all chats. |
 | `SHUTDOWN_GRACE` | `25s` | Wait for in-flight turns on shutdown. Keep below the pod's `terminationGracePeriodSeconds`. |
 | `HEALTH_ADDR` | `:8080` | Listen address for `/healthz`; empty disables it. |
 
 ## Logging and tracing
 
-One structured line per handled message (`msg":"turn"`): `trace_id`, `chat_hash`, `context_id`, `outcome` (`ok`, `agent_error`,
+One structured line per handled message (`msg":"turn"`): `trace_id`, `chat_hash`, `context_id`, `outcome` (`ok`, `agent_error`, `agent_waking`,
 `send_error`, `new_conversation`, and for the memory commands `memories`, `forget`, `forget_ask`, `memory_error`; they add `memories`, a count), `agent_ms`, `total_ms`, `reply_chars`. Never the message or the reply, and the chat id appears
 only as `chat_hash`: 8 hex digits of SHA-256 over a random per-process salt and the id (stable inside one process, not matchable
 against a list of ids, different after a restart). Every turn starts a W3C trace: the bridge sends `traceparent` to the agent (no

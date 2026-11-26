@@ -121,7 +121,7 @@ func (c *Client) Send(ctx context.Context, contextID, text string) (string, stri
 		return "", "", err
 	}
 	if out.Error != nil {
-		return "", "", fmt.Errorf("a2a: agent error %d: %s", out.Error.Code, out.Error.Message)
+		return "", "", &RPCError{Code: out.Error.Code, Message: out.Error.Message}
 	}
 	var texts []string
 	var ctxID string
@@ -158,6 +158,25 @@ func (c *Client) Send(ctx context.Context, contextID, text string) (string, stri
 		return "", ctxID, errors.New("a2a: agent reply contained no text")
 	}
 	return strings.Join(texts, "\n"), ctxID, nil
+}
+
+// CodeInputNotAccepted is the A2A error "input was not accepted; retry after the session becomes available". The
+// runtime answers it while a session is not ready (for example a sandbox restore after a cold start). The message was
+// not accepted, so sending it again cannot duplicate it.
+const CodeInputNotAccepted = -32004
+
+// RPCError is a JSON-RPC error answered by the agent.
+type RPCError struct {
+	Code    int
+	Message string
+}
+
+func (e *RPCError) Error() string { return fmt.Sprintf("a2a: agent error %d: %s", e.Code, e.Message) }
+
+// IsWaking reports whether err is the agent's "input not accepted, retry later" answer (-32004), and nothing else.
+func IsWaking(err error) bool {
+	var re *RPCError
+	return errors.As(err, &re) && re.Code == CodeInputNotAccepted
 }
 
 type rpcResponse struct {

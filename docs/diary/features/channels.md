@@ -85,6 +85,8 @@ Expect 200. Then `kubectl logs -n agent-kourier deploy/agent-kourier` shows `ses
 - Bridge: per-chat user id verified against kagent 1.0.1 in `insecure` mode; unit tests `TestBridge_UserIDIsPerChat` and others.
 - The Telegram path was not run live during the observability work (rule: no Telegram messages); its trace line is unit-tested only.
 
+- Telegram bridge, cold start (issue #139): an agent answer of A2A -32004 is retried once and then shown as a "waking up" message, with the log outcome `agent_waking`. Unit-tested with a fake agent (answers -32004 then succeeds; keeps answering -32004; other errors; retry off; delay inside the turn deadline). Not run on a cluster. Settings: `RETRY_ON_WAKEUP`, `WAKEUP_RETRY_DELAY` (see `bridges/telegram/README.md`).
+
 ## Known limits
 
 - Slack is UNTESTED: no Slack tokens were available. The values follow Kourier's docs and CRD schema only.
@@ -94,4 +96,5 @@ Expect 200. Then `kubectl logs -n agent-kourier deploy/agent-kourier` shows `ses
 - Excess events are dropped, not queued, and the sender still gets 200. The dedupe key lives in memory.
 - Bridge: one replica, polling offset in memory (an update can be answered twice after a restart), conversations forgotten on restart.
 - Real webhooks need an Ingress you add yourself, with TLS, and the ingress pods listed in Kourier's `networkPolicy.chatFrom`.
+- Bridge: the cold start itself is unchanged (a sandbox restore took about 60 s, mostly unpacking the image). The retry waits 20 s once; a restore longer than that still ends with the "waking up" message and the user sends the message again.
 - Teams and other platforms: not built.
