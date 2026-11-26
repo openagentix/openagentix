@@ -142,8 +142,8 @@ OUT=$("$DOCKER" exec -i -e KAGENT_DB_URL="postgresql://kagent_readwrite_user:p%4
 eq "a percent-encoded password still connects" "$RC" 0
 reset
 # (the image trusts 127.0.0.1, so a wrong password cannot be tested here: a closed port stands in for any connection failure)
-OUT=$("$DOCKER" exec -i -e KAGENT_DB_URL="postgresql://kagent_readwrite_user:wrong@127.0.0.1:1/kagent?sslmode=disable" "$NAME" sh -s < "$JOB" 2>&1); RC=$?
-[ "$RC" != 0 ] && ok "a connection failure fails the job" || bad "a connection failure fails the job" "exit 0" "non-zero"
+OUT=$("$DOCKER" exec -i -e WAIT_SECONDS=2 -e WAIT_INTERVAL=1 -e KAGENT_DB_URL="postgresql://kagent_readwrite_user:wrong@127.0.0.1:1/kagent?sslmode=disable" "$NAME" sh -s < "$JOB" 2>&1); RC=$?
+[ "$RC" = 1 ] && ok "a connection failure fails the job (exit 1, after the wait)" || bad "a connection failure fails the job (exit 1, after the wait)" "$RC" 1
 if printf '%s' "$OUT" | grep -q wrong; then bad "the connection error does not echo the password" "$OUT" "no password"; else ok "the connection error does not echo the password"; fi
 OUT=$("$DOCKER" exec -i "$NAME" sh -s < "$JOB" 2>&1); RC=$?
 [ "$RC" != 0 ] && ok "no connection string fails the job" || bad "no connection string fails the job" "exit 0" "non-zero"
