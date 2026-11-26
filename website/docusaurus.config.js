@@ -29,7 +29,8 @@ const toSite = (text) =>
   text
     .replace(/\]\((?:\.\.\/)?decisions\/README\.md\)/g, '](/decisions/)')
     .replace(/\]\((?:\.\.\/)?decisions\/([0-9a-z-]+)\.md(#[^)]*)?\)/g, (_m, id, hash) => `](/decisions/${id.replace(/^[0-9]+-/, "")}${hash || ''})`)
-    .replace(/\]\(\.\.\/roadmap\.md\)/g, '](/project/roadmap)');
+    .replace(/\]\(\.\.\/roadmap\.md\)/g, '](/project/roadmap)')
+    .replace(/\]\(\.\.\/diary\/([0-9A-Za-z/_-]+)\.md(#[^)]*)?\)/g, (_m, id, hash) => `](/${id}${hash || ''})`);
 for (const f of ['roadmap.md', 'contributing/workflow.md']) {
   fs.writeFileSync(path.join(projectDir, f), toSite(fs.readFileSync(path.join(__dirname, '..', 'docs', f), 'utf8')));
 }
