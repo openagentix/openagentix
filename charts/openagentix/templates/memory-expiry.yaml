@@ -48,8 +48,14 @@ spec:
   failedJobsHistoryLimit: 2
   jobTemplate:
     spec:
-      # A failed run is not retried: the next scheduled run does the same work, and a retry loop on a broken login only adds load.
-      backoffLimit: 0
+      # The script waits for DNS and the database first (WAIT_SECONDS, inside the deadline), and a run that still fails is tried
+      # twice more: a node that restarted a minute ago must not cost a whole day (issue #202). A refused login is no retry loop:
+      # the script exits 78 and the policy below fails the job at once.
+      backoffLimit: 2
+      podFailurePolicy:
+        rules:
+          - action: FailJob
+            onExitCodes: {operator: In, values: [78]}
       activeDeadlineSeconds: {{ int $x.activeDeadlineSeconds }}
       template:
         metadata:
@@ -79,6 +85,7 @@ spec:
                 - name: KAGENT_DB_URL
                   valueFrom:
                     secretKeyRef: {name: {{ $x.secret.name | quote }}, key: {{ $x.secret.key | quote }}}
+                - {name: WAIT_SECONDS, value: {{ div (int $x.activeDeadlineSeconds) 2 | quote }}}   # half the deadline; the rest is for the run and its retries
                 - {name: MEMORY_SCHEMA, value: {{ $x.schema | quote }}}
                 - {name: MEMORY_DB_ROLE, value: {{ $x.role | quote }}}
                 - {name: SECRET_SCAN, value: {{ ternary "1" "0" $x.secretScan | quote }}}

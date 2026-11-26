@@ -1464,7 +1464,9 @@ MCT="$MP|.containers[0]"
 eq "one CronJob memory-expiry in the kagent namespace" "$(q "$DM" "[$MC|.metadata.namespace]|join(\",\")")" kagent
 eq "default schedule is nightly"                        "$(q "$DM" "$MC|.spec.schedule")" "17 3 * * *"
 eq "overlapping runs are forbidden"                     "$(q "$DM" "$MC|.spec.concurrencyPolicy")" Forbid
-eq "a failed run is not retried (the next night runs again)" "$(q "$DM" "$MC|.spec.jobTemplate.spec.backoffLimit|tostring")" 0
+eq "a failed run is retried twice at most (issue #202)"  "$(q "$DM" "$MC|.spec.jobTemplate.spec.backoffLimit|tostring")" 2
+eq "a refused login fails the job at once (exit 78, no retry)" "$(q "$DM" "$MC|.spec.jobTemplate.spec.podFailurePolicy.rules|map([.action,.onExitCodes.operator,(.onExitCodes.values|join(\",\"))]|join(\" \"))|join(\";\")")" "FailJob In 78"
+eq "the script may wait for the database for half the deadline" "$(q "$DM" "$MCT|.env[]|select(.name==\"WAIT_SECONDS\")|.value")" 150
 eq "the run is bounded in time"                         "$(q "$DM" "$MC|.spec.jobTemplate.spec.activeDeadlineSeconds|tostring")" 300
 eq "image is the server's own pinned image (client matches the server major version)" "$(q "$DM" "$MCT|.image")" "pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd"
 eq "the image is never pulled when present"             "$(q "$DM" "$MCT|.imagePullPolicy")" IfNotPresent
@@ -1482,6 +1484,37 @@ eq "non-root, read-only root filesystem, no capabilities" "$(q "$DM" "$MP|[.secu
 eq "restartPolicy Never"                                "$(q "$DM" "$MP|.restartPolicy")" Never
 eq "the job has resource limits"                        "$(q "$DM" "$MCT|.resources.limits|has(\"memory\") and has(\"cpu\")|tostring")" true
 eq "no Secret object and no URL with a password"        "$(q "$DM" '[.[]|select(.kind=="Secret")]|length')" 0
+
+echo "# memory expiry script: wait for DNS and the database (issue #202), with a fake psql"
+MEJOB="$CHART/files/memory-expiry.sh"
+MEDIR=$(mktemp -d)
+cat > "$MEDIR/psql" <<'FAKE'
+#!/bin/sh
+# Fake psql. The probe is the call with "select 1"; the job's own call reads a script on stdin.
+# PROBE_FAIL_FIRST=n: the first n probes fail with PROBE_ERR. PROBE_ERR_ALWAYS=1: every probe fails.
+case " $* " in
+  *"select 1"*)
+    n=$(cat "$MEDIR/probes" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$MEDIR/probes"
+    if [ "${PROBE_ERR_ALWAYS:-0}" = 1 ] || [ "$n" -le "${PROBE_FAIL_FIRST:-0}" ]; then echo "$PROBE_ERR" >&2; exit 2; fi
+    exit 0 ;;
+  *) cat >/dev/null; echo "memory-expiry: total_before=0 expired=0 extended=0 deleted=0 total_after=0"; exit 0 ;;
+esac
+FAKE
+chmod +x "$MEDIR/psql"
+# me_run <probes that fail first> <psql error text> [always]  -> prints "<exit code> <probe count>"
+me_run() {
+  rm -f "$MEDIR/probes"
+  ( PATH="$MEDIR:$PATH" MEDIR="$MEDIR" KAGENT_DB_URL="postgresql://u@db.example:5432/kagent" WAIT_SECONDS="${WAIT_SECONDS:-5}" WAIT_INTERVAL=0.05 \
+    PROBE_FAIL_FIRST="$1" PROBE_ERR="$2" PROBE_ERR_ALWAYS="${3:-0}" sh "$MEJOB" >/dev/null 2>"$MEDIR/stderr"; echo "$? $(cat "$MEDIR/probes" 2>/dev/null || echo 0)" )
+}
+DNSERR='psql: error: could not translate host name "kagent-pg.kagent.svc" to address: Temporary failure in name resolution'
+eq "database down for the first 3 tries (DNS not up): the job still succeeds, after 4 probes" "$(me_run 3 "$DNSERR")" "0 4"
+eq "connection refused for the first 2 tries: the job succeeds" "$(me_run 2 'psql: error: connection to server at "10.0.0.1", port 5432 failed: Connection refused')" "0 3"
+eq "a refused password fails at once with exit 78 and one probe, no loop" "$(me_run 99 'psql: error: connection to server failed: FATAL:  password authentication failed for user "x"')" "78 1"
+eq "a missing role fails at once with exit 78" "$(me_run 99 'psql: error: FATAL:  role "x" does not exist')" "78 1"
+eq "a database that stays down ends with exit 1 (the job retries) after the wait" "$(WAIT_SECONDS=1 me_run 0 "$DNSERR" 1 | cut -d' ' -f1)" 1
+eq "the wait message names no host, user or password" "$(/usr/bin/grep -c 'db.example\|kagent-pg' "$MEDIR/stderr")" 0
+rm -rf "$MEDIR"
 eq "no rendered document holds a connection string"     "$(q "$DM" 'tostring|test("postgres(ql)?://[^ ]*@")')" false
 DM2=$(docs "${MON[@]}" --set memory.expiry.secretScan=false)
 eq "secretScan=false passes 0"                          "$(q "$DM2" "$MCT|.env[]|select(.name==\"SECRET_SCAN\")|.value")" 0
