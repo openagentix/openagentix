@@ -6,7 +6,7 @@ description: Four things you can do with OpenAgentix today, with the resources, 
 
 # Use cases
 
-Each scenario below works today on a single-node kind cluster. Each one says who it is for, what you do, which resources are involved, what was proven and what was not. Read [what works](../what-works.md) for the full status.
+Each scenario below works today on a single-node kind cluster; the first one also in CI on k3s. Each one says who it is for, what you do, which resources are involved, what was proven and what was not. Read [what works](../what-works.md) for the full status.
 
 ## 1. Give a team an agent with a budget and one approved tool
 
@@ -105,8 +105,8 @@ kubectl port-forward -n agent-kourier svc/agent-kourier-chat 8081:8081
 
 These are not built. They are in the [roadmap](https://github.com/openagentix/openagentix/blob/main/docs/roadmap.md) and [ADR 0013](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0013-focus-and-runtime-neutrality.md).
 
-- Bring your own agent: any container that speaks A2A, under the same policy, keys and profiles (release 0.3).
-- Install tested in CI on k3s, then a managed cloud, with OpenShift-compatible manifests (0.3).
+- Bring your own agent beyond CI: on a long-running cluster, from a registry, with egress allowlists (slice 5). Slices 1 and 3 are proven in CI on kind ([Bring your own agent](./bring-your-own-agent.md)).
+- Install on a managed cloud, and on OpenShift. Today the k3s install is proven in CI, and the remote-cluster installer and OpenShift manifests are tested offline only (0.3).
 - Slack proven on a real workspace (0.4).
 - Runs and human approval (`AgentRun`, `ApprovalRequest`), identity per agent with token exchange, console login with OpenID Connect (0.4).
 - Workspaces, budgets per run, queueing and delegation (0.5).
