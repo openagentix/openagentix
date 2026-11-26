@@ -423,6 +423,37 @@ refused "the admin may not create a Job with a projected token" "only the contro
 kubectl create serviceaccount probe -n "$WNS" >/dev/null
 refused "the admin may not request a token in the workload namespace" "only the kubelet may request a ServiceAccount token" kubectl create token probe -n "$WNS" --audience openagentix-vmcp-lookup-workload
 
+
+echo "# the model gateway Service type (ADR 0023): the rendered Gateway and AgentgatewayParameters on a real API server"
+# The Gateway API standard channel CRDs (what install.sh applies) and the agentgateway CRD chart, both at the versions the installer pins.
+# This proves the API server accepts the two objects and keeps their fields (no pruning); it does not prove the controller acts on them.
+GWAPI_VER=v1.6.3
+AGW_CRDS_VER=v1.7.0
+GW_DIR="$TMP/gwcrds"; mkdir -p "$GW_DIR"
+if curl -fsSL --retry 3 -o "$GW_DIR/standard-install.yaml" "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GWAPI_VER/standard-install.yaml" \
+   && helm pull oci://cr.agentgateway.dev/charts/agentgateway-crds --version "$AGW_CRDS_VER" --untar --untardir "$GW_DIR" >/dev/null 2>&1; then
+  kubectl apply --server-side -f "$GW_DIR/standard-install.yaml" >/dev/null
+  kubectl apply --server-side -f "$GW_DIR/agentgateway-crds/templates/agentgateway.dev_agentgatewayparameters.yaml" >/dev/null
+  for c in gateways.gateway.networking.k8s.io agentgatewayparameters.agentgateway.dev; do
+    for _ in $(seq 1 90); do
+      [ "$(kubectl get crd "$c" -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null)" = True ] && break
+      sleep 1
+    done
+  done
+  for T in ClusterIP LoadBalancer; do
+    helm template openagentix charts/openagentix -n openagentix-system --set-string "gateway.serviceType=$T" | yq -c 'select(.!=null)' > "$TMP/gw-$T.jsonl"
+    jq -c 'select(.kind=="AgentgatewayParameters")' "$TMP/gw-$T.jsonl" > "$TMP/agwp-$T.json"
+    jq -c 'select(.kind=="Gateway")' "$TMP/gw-$T.jsonl" > "$TMP/gw-$T.json"
+    allowed "serviceType=$T: the AgentgatewayParameters is accepted (server-side dry run, strict validation)" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/agwp-$T.json"
+    allowed "serviceType=$T: the Gateway is accepted (server-side dry run, strict validation)" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/gw-$T.json"
+    GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/agwp-$T.json" 2>/dev/null | jq -r '.spec.service.spec.type // "pruned"')
+    [ "$GOT" = "$T" ] && ok "serviceType=$T: the API server keeps spec.service.spec.type ($GOT)" || bad "serviceType=$T: spec.service.spec.type kept" "got '$GOT'"
+    GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/gw-$T.json" 2>/dev/null | jq -r '.spec.infrastructure.parametersRef|[.group,.kind,.name]|join("/")' 2>/dev/null)
+    [ "$GOT" = "agentgateway.dev/AgentgatewayParameters/model-gateway-parameters" ] && ok "serviceType=$T: the API server keeps infrastructure.parametersRef ($GOT)" || bad "serviceType=$T: infrastructure.parametersRef kept" "got '$GOT'"
+  done
+else
+  bad "the Gateway API and agentgateway CRDs could be fetched (needs network: github.com and cr.agentgateway.dev)" "fetch failed; the Service type objects were not checked on an API server"
+fi
 echo
 echo "apiserver-test: passed=$PASS failed=$FAIL"
 [ "$FAIL" = 0 ]

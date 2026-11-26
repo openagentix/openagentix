@@ -16,18 +16,20 @@ Date: 2026-11-22. Agents -> agentgateway -> {mock-llm stub, Google Gemini}. Agen
 - `install.sh` idempotent (re-run verified: all `unchanged`). Secrets from env only: `GOOGLE_API_KEY` via process substitution (not in argv, not on disk). Virtual keys are generated with `openssl` on first run, kept in Secrets, and only SHA-256 hashes go into ConfigMap `llm-api-keys`.
 - `values.yaml` controller sizing + `agentgatewayModels.enabled`.
 - `manifests/00-gateway.yaml` Gateway `model-gateway` (listener allows `AgentgatewayModel`). `10-models.yaml` models `stub`, `gemini`, `auto`. `20-policies.yaml` virtual-key auth + per-key token budget + retry (one policy). `30-observability.yaml` adds `user_id` to access log and metrics. `40-kagent.yaml` ModelConfigs `gateway-stub`, `gateway-gemini`, AgentTemplate + Agent `gateway-agent`.
-- Endpoint: `http://model-gateway.agentgateway-system.svc.cluster.local/v1` (port 80, ClusterIP behaviour; the Service is type LoadBalancer and stays `<pending>` on kind, harmless).
+- Endpoint: `http://model-gateway.agentgateway-system.svc.cluster.local/v1` (port 80; the Service is type ClusterIP since ADR 0023, see "The Service type" below. Before that agentgateway made it a LoadBalancer, `<pending>` on kind and a public IP on a cloud).
 
 ## The Service type (ADR 0023, issue #165)
 
-agentgateway makes the `model-gateway` Service a `LoadBalancer`. On a managed cloud that is a public IP, a firewall rule and a charge. The chart value `gateway.serviceType` (`""` default, `ClusterIP` or `LoadBalancer`; anything else fails the render) changes this:
+Left alone, agentgateway makes the `model-gateway` Service a `LoadBalancer`. On a managed cloud that is a public IP, a firewall rule and a charge. The chart value `gateway.serviceType` (`ClusterIP` default, or `LoadBalancer`; anything else, an empty value included, fails the render) sets it:
 
-- Empty: nothing is rendered, agentgateway picks the type as before (`LoadBalancer`). The default render is byte-identical.
-- `ClusterIP` or `LoadBalancer`: the chart renders `AgentgatewayParameters` `<gateway.name>-parameters` (`agentgateway.dev/v1alpha1`, `spec.service.spec.type`, nothing else) and the Gateway gets `spec.infrastructure.parametersRef` to it.
-- `install.sh` with `CLUSTER_TYPE=remote` passes `gateway.serviceType=ClusterIP` when your values leave it empty, says so, and never overrides a value you set. kind and k3d are unchanged. After a remote install it warns about every `LoadBalancer` Service.
+- The chart always renders `AgentgatewayParameters` `<gateway.name>-parameters` (`agentgateway.dev/v1alpha1`, `spec.service.spec.type`, nothing else) and the Gateway gets `spec.infrastructure.parametersRef` to it. `manifests/00-gateway.yaml` (the standalone path) does the same with `ClusterIP`.
+- Upgrade: the load balancer of an existing install is removed. If you reach the gateway from outside the cluster through it, set `gateway.serviceType: LoadBalancer` before you upgrade, or use `kubectl port-forward`.
+- `install.sh` needs no value. After a remote install it warns about each `LoadBalancer` or `NodePort` Service.
 - Clients use the DNS name and port 80 and need no change.
 
-Field names were read from the agentgateway v1.7.0 CRDs and its deployer test fixture. Not run: no API server has accepted the objects and no controller has acted on them. This directory's own `manifests/00-gateway.yaml` (the spike) is not changed and still gives a `LoadBalancer`.
+`ClusterIP` removes the public IP only. Any pod in the cluster can still connect; the virtual key is the control.
+
+Field names were read from the agentgateway v1.7.0 CRD chart and its deployer test fixture. Not run on a cluster: that the Service becomes `ClusterIP` (also on a live type change, with the same cluster IP), and that the Gateway is `Accepted` and `Programmed` with the parameters.
 
 ## Collisions checked before install (none found)
 

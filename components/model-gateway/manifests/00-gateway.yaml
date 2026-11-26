@@ -1,5 +1,16 @@
 # Model gateway listener. allowedRoutes.kinds must list AgentgatewayModel to enable the built-in
 # /v1/chat/completions + /v1/models paths; HTTPRoute kept so normal routes still attach.
+# ADR 0023: the Service is ClusterIP (no public IP). For a LoadBalancer change spec.service.spec.type below to LoadBalancer.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: model-gateway-parameters
+  namespace: agentgateway-system
+spec:
+  service:
+    spec:
+      type: ClusterIP
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -7,6 +18,11 @@ metadata:
   namespace: agentgateway-system
 spec:
   gatewayClassName: agentgateway
+  infrastructure:
+    parametersRef:
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
+      name: model-gateway-parameters
   listeners:
   - name: http
     port: 80

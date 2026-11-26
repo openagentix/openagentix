@@ -1,27 +1,21 @@
 #!/usr/bin/env bash
-# The model gateway's Service type on a remote cluster (gateway.serviceType, ADR 0023, issue #165). Sourced by install.sh.
-# Tests: hack/ci/gateway-service-type-test.sh (JSON fixtures, no cluster).
+# After an install on a remote cluster: report every Service that opens the cluster to the network (ADR 0023, issue #165).
+# Sourced by install.sh. Tests: hack/ci/gateway-service-type-test.sh (a fake kubectl, no cluster).
 #
-#  gw_service_type_set_value <remote 0|1> <rendered documents, one JSON per line>
-#      Prints ClusterIP when the cluster is remote and the chart renders a Gateway without infrastructure.parametersRef
-#      (so no values file set a type). Prints nothing otherwise: kind and k3d, gateway.enabled=false, or a type already set
-#      (ClusterIP or LoadBalancer: the operator's choice is never overridden).
-#  gw_loadbalancer_warnings <kubectl get svc -A -o json> <kube context>
-#      Prints one WARNING line per Service of type LoadBalancer, with the command that shows its address. Prints nothing
-#      when there is none or the input is not usable. Always returns 0.
+#  gw_exposure_check <kubectl command> <kube context>
+#      Reads `get svc -A -o json` (nothing else, nothing is changed). Prints one WARNING line per Service of type LoadBalancer or
+#      NodePort, with the command that shows its address. Prints "could not check for LoadBalancer Services" when the read fails
+#      or its answer is not a Service list. Always returns 0: it is a report, never a reason to fail an install.
+#      The model gateway Service is ClusterIP by default (gateway.serviceType), so a LoadBalancer here is a choice or another workload.
 
-gw_service_type_set_value() {
-  local remote=${1:-0} rendered=${2:-}
-  [ "$remote" = 1 ] || return 0
-  [ -n "$rendered" ] || return 0
-  jq -e -s 'any(.[]; .kind=="Gateway" and ((.spec.infrastructure.parametersRef // null) == null))' <<<"$rendered" >/dev/null 2>&1 || return 0
-  printf '%s\n' ClusterIP
-}
-
-gw_loadbalancer_warnings() {
-  local svcs=${1:-} ctx=${2:-}
-  [ -n "$svcs" ] || return 0
-  jq -r --arg c "$ctx" '.items[]? | select(.spec.type=="LoadBalancer")
-    | "WARNING: Service \(.metadata.namespace)/\(.metadata.name) is of type LoadBalancer: on a managed cloud it has a public IP, a firewall rule and a charge. Address: kubectl --context \($c) get svc -n \(.metadata.namespace) \(.metadata.name) -o wide"' <<<"$svcs" 2>/dev/null || true
+gw_exposure_check() {
+  local kc=${1:-kubectl} ctx=${2:-} svcs out
+  if ! svcs=$($kc --context "$ctx" get svc -A -o json 2>/dev/null) || ! jq -e '.items|type=="array"' <<<"$svcs" >/dev/null 2>&1; then
+    echo "WARNING: could not check for LoadBalancer Services (kubectl --context $ctx get svc -A -o json failed). Check by hand: kubectl --context $ctx get svc -A | grep -E 'LoadBalancer|NodePort'" >&2
+    return 0
+  fi
+  out=$(jq -r --arg c "$ctx" '.items[] | select(.spec.type=="LoadBalancer" or .spec.type=="NodePort")
+    | "WARNING: Service \(.metadata.namespace)/\(.metadata.name) is of type \(.spec.type): on a managed cloud a LoadBalancer is a public IP, a firewall rule and a charge, and a NodePort opens a port on every node. Address: kubectl --context \($c) get svc -n \(.metadata.namespace) \(.metadata.name) -o wide"' <<<"$svcs")
+  if [ -n "$out" ]; then printf '%s\n' "$out" >&2; else echo "no Service of type LoadBalancer or NodePort in cluster context $ctx"; fi
   return 0
 }

@@ -72,31 +72,33 @@ D=$(docs --set gateway.policy.promptCaching.enabled=true --set gateway.policy.pr
 eq "promptCaching switches and minTokens are honoured (0 is kept)" "$(q "$D" '.[]|select(.kind=="AgentgatewayPolicy")|.spec.backend.ai.promptCaching|"\(.cacheSystem) \(.cacheMessages) \(.cacheTools) \(.minTokens)"')" "true false false 0"
 D=$(docs --set gateway.enabled=false)
 eq "gateway.enabled=false: no Gateway/Model/Policy"    "$(count "$D" '.kind=="Gateway" or .kind=="AgentgatewayModel" or .kind=="AgentgatewayPolicy"')" 0
-echo "# gateway.serviceType (ADR 0023, issue #165)"
+echo "# gateway.serviceType (ADR 0023 option F, issue #165): default ClusterIP"
 GT='.[]|select(.kind=="Gateway")'
+# strip: the two things this feature adds (the parameters object and the Gateway's infrastructure block)
+STRIP='[.[]|select(.kind!="AgentgatewayParameters")|if .kind=="Gateway" then del(.spec.infrastructure) else . end]'
 D=$(docs)
-eq "default: no AgentgatewayParameters"                "$(count "$D" '.kind=="AgentgatewayParameters"')" 0
-eq "default: the Gateway has no infrastructure block"  "$(q "$D" "$GT|.spec|has(\"infrastructure\")")" false
-HDEF=$(helm template openagentix "$CHART" -n openagentix-system 2>&1 | shasum -a 256)
-HEMPTY=$(helm template openagentix "$CHART" -n openagentix-system --set-string gateway.serviceType= 2>&1 | shasum -a 256)
-eq "gateway.serviceType empty is byte-identical to the default render" "$HEMPTY" "$HDEF"
-for T in ClusterIP LoadBalancer; do
-  D=$(docs --set-string gateway.serviceType=$T)
-  eq "$T: exactly one AgentgatewayParameters"          "$(count "$D" '.kind=="AgentgatewayParameters"')" 1
-  eq "$T: named model-gateway-parameters in agentgateway-system" "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.apiVersion+" "+.metadata.namespace+"/"+.metadata.name')" "agentgateway.dev/v1alpha1 agentgateway-system/model-gateway-parameters"
-  eq "$T: its spec is exactly service.spec.type"       "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.spec|tojson')" "{\"service\":{\"spec\":{\"type\":\"$T\"}}}"
-  eq "$T: the Gateway points at it with parametersRef" "$(q "$D" "$GT|.spec.infrastructure|tojson")" '{"parametersRef":{"group":"agentgateway.dev","kind":"AgentgatewayParameters","name":"model-gateway-parameters"}}'
-  eq "$T: only those two documents differ from the default (same count + 1)" "$(q "$D" 'length')" "$(( $(q "$(docs)" 'length') + 1 ))"
-done
-D=$(docs --set-string gateway.serviceType=ClusterIP --set gateway.name=gw2 --set gateway.namespace=gwns)
-eq "the object follows gateway.name and gateway.namespace" "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.metadata.namespace+"/"+.metadata.name')+$(q "$D" "$GT|.spec.infrastructure.parametersRef.name")" "gwns/gw2-parameters+gw2-parameters"
-for BAD in NodePort ExternalName clusterip " ClusterIP" loadbalancer; do
+eq "default: exactly one AgentgatewayParameters"       "$(count "$D" '.kind=="AgentgatewayParameters"')" 1
+eq "default: named model-gateway-parameters in agentgateway-system" "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.apiVersion+" "+.metadata.namespace+"/"+.metadata.name')" "agentgateway.dev/v1alpha1 agentgateway-system/model-gateway-parameters"
+eq "default: its spec is exactly service.spec.type ClusterIP" "$(q "$D" '.[]|select(.kind=="AgentgatewayParameters")|.spec|tojson')" '{"service":{"spec":{"type":"ClusterIP"}}}'
+eq "default: the Gateway points at it with parametersRef" "$(q "$D" "$GT|.spec.infrastructure|tojson")" '{"parametersRef":{"group":"agentgateway.dev","kind":"AgentgatewayParameters","name":"model-gateway-parameters"}}'
+DL=$(docs --set-string gateway.serviceType=LoadBalancer)
+eq "LoadBalancer: exactly one AgentgatewayParameters"  "$(count "$DL" '.kind=="AgentgatewayParameters"')" 1
+eq "LoadBalancer: its spec is exactly service.spec.type LoadBalancer" "$(q "$DL" '.[]|select(.kind=="AgentgatewayParameters")|.spec|tojson')" '{"service":{"spec":{"type":"LoadBalancer"}}}'
+eq "LoadBalancer: the Gateway points at it with parametersRef" "$(q "$DL" "$GT|.spec.infrastructure|tojson")" '{"parametersRef":{"group":"agentgateway.dev","kind":"AgentgatewayParameters","name":"model-gateway-parameters"}}'
+eq "the default and LoadBalancer renders differ only in the type (diff of the two renders)" "$(diff <(q "$D" '.' ) <(q "$DL" '.') | /usr/bin/grep -c '^[<>]')" 2
+eq "that one line is the type"                         "$(diff <(q "$D" '.' ) <(q "$DL" '.') | /usr/bin/grep '^[<>]' | tr -d ' ' | tr '\n' ' ')" '<"type":"ClusterIP" >"type":"LoadBalancer" '
+D2=$(docs --set gateway.name=gw2 --set gateway.namespace=gwns)
+eq "the object follows gateway.name and gateway.namespace" "$(q "$D2" '.[]|select(.kind=="AgentgatewayParameters")|.metadata.namespace+"/"+.metadata.name')+$(q "$D2" "$GT|.spec.infrastructure.parametersRef.name")" "gwns/gw2-parameters+gw2-parameters"
+for BAD in "" NodePort ExternalName clusterip " ClusterIP" loadbalancer; do
   E=$(render_err --set-string "gateway.serviceType=$BAD")
-  eq "serviceType '$BAD' fails the render and names the allowed values" "$(grep -c 'gateway.serviceType.*ClusterIP.*LoadBalancer' <<<"$E")" 1
+  eq "serviceType '$BAD' fails the render and names the two values" "$(/usr/bin/grep -c 'gateway.serviceType.*ClusterIP.*LoadBalancer' <<<"$E")" 1
 done
-D=$(docs --set gateway.enabled=false --set-string gateway.serviceType=ClusterIP)
-eq "gateway.enabled=false: no AgentgatewayParameters"  "$(count "$D" '.kind=="AgentgatewayParameters"')" 0
-cat >"$(dirname "$0")/.extra-models.yaml" <<'YAML'
+E=$(render_err --set gateway.serviceType=null)
+eq "serviceType null (unset) fails the render too"     "$(/usr/bin/grep -c 'gateway.serviceType.*ClusterIP.*LoadBalancer' <<<"$E")" 1
+D3=$(docs --set gateway.enabled=false)
+eq "gateway.enabled=false: no AgentgatewayParameters"  "$(count "$D3" '.kind=="AgentgatewayParameters"')" 0
+eq "gateway.enabled=false with serviceType empty still renders (nothing of the gateway is used)" "$([ -n "$(render_err --set gateway.enabled=false --set agents=null --set-string gateway.serviceType=)" ] && echo failed || echo rendered)" rendered
+cat > "$(dirname "$0")/.extra-models.yaml" <<'YAML'
 gateway:
   models:
     - name: claude-haiku
@@ -828,7 +830,10 @@ H0=$(helm template openagentix "$CHART" -n openagentix-system 2>&1 | shasum -a 2
 H1=$(helm template openagentix "$CHART" -n openagentix-system --set notify.enabled=false 2>&1 | shasum -a 256)
 eq "notify.enabled=false is byte-identical to the default render" "$H1" "$H0"
 if [ -n "${OA_BASELINE_RENDER:-}" ]; then   # set to the output of `helm template openagentix <chart at the previous commit> -n openagentix-system`
-  eq "default render is byte-identical to the baseline render (OA_BASELINE_RENDER)" "$H0" "$(shasum -a 256 < "$OA_BASELINE_RENDER")"
+  # ADR 0023 option F: the default render now has the AgentgatewayParameters object and the Gateway's infrastructure block. Take those two
+  # out of the default render and the rest must equal the baseline (a render of the chart before this change) document by document.
+  BASE_DOCS=$(yq -c 'select(.!=null)' "$OA_BASELINE_RENDER" | jq -s .)
+  eq "default render equals the baseline render apart from the two ADR 0023 additions (OA_BASELINE_RENDER)" "$(jq -c "$STRIP" <<<"$(docs)" | shasum -a 256)" "$(jq -c . <<<"$BASE_DOCS" | shasum -a 256)"
 fi
 E=$(render_err -f "$NV" --set notify.tokens[0].env=lower-case)
 eq "an invalid token env var name fails the render"    "$([ -n "$E" ] && echo failed || echo rendered)" failed
