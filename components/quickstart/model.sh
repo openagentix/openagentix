@@ -7,7 +7,10 @@
 #   1. MODEL_BASE_URL      any OpenAI-compatible endpoint (with MODEL_NAME, and MODEL_API_KEY when it needs one)  -> custom
 #   2. ANTHROPIC_API_KEY   -> anthropic;  OPENAI_API_KEY -> openai;  GOOGLE_API_KEY -> gemini
 #   3. nothing             -> stub (the built-in scripted stand-in, NOT a language model)
-# A local Ollama is used only when asked for: MODEL_PROVIDER=ollama (OLLAMA_HOST, MODEL_NAME).
+# A local Ollama is used only when asked for: MODEL_PROVIDER=ollama (OLLAMA_HOST, MODEL_NAME). With MODEL_BASE_URL set, that URL is the
+# Ollama endpoint (its OpenAI-compatible base, for example http://ollama.example:11434/v1).
+# CLUSTER_TYPE=remote (issue #170): a local Ollama is reached at host.docker.internal or the Docker network gateway, which a managed cluster
+# cannot reach, so MODEL_PROVIDER=ollama needs MODEL_BASE_URL there.
 
 QS_ALIAS=quickstart-model
 
@@ -29,7 +32,13 @@ qs_pick_model() {
       [ -n "${MODEL_BASE_URL:-}" ] || { echo "MODEL_PROVIDER=custom needs MODEL_BASE_URL (an OpenAI-compatible base URL, for example https://host/v1)" >&2; return 1; }
       [ -n "${MODEL_NAME:-}" ] || { echo "MODEL_BASE_URL needs MODEL_NAME (the model name that endpoint expects)" >&2; return 1; }
       case "$MODEL_BASE_URL" in http://*|https://*) ;; *) echo "MODEL_BASE_URL must start with http:// or https://" >&2; return 1 ;; esac ;;
-    ollama) ;;
+    ollama)
+      if [ "${CLUSTER_TYPE:-}" = remote ] && [ -z "${MODEL_BASE_URL:-}" ]; then
+        echo "MODEL_PROVIDER=ollama with CLUSTER_TYPE=remote needs MODEL_BASE_URL (an Ollama URL the cluster can reach, for example http://ollama.example:11434/v1): a local Ollama on this machine is not reachable from a remote cluster. Or use the stub model (no MODEL_PROVIDER) or a provider key." >&2; return 1
+      fi
+      if [ -n "${MODEL_BASE_URL:-}" ]; then
+        case "$MODEL_BASE_URL" in http://*|https://*) ;; *) echo "MODEL_BASE_URL must start with http:// or https://" >&2; return 1 ;; esac
+      fi ;;
     stub) ;;
     *) echo "MODEL_PROVIDER must be one of anthropic, openai, gemini, ollama, custom, stub (got: $p)" >&2; return 1 ;;
   esac
@@ -54,7 +63,7 @@ qs_model_values() {
     gemini)    entry=$(jq -nc --arg n "$QS_ALIAS" --arg m "${MODEL_NAME:-gemini-3.5-flash-lite}" '{name:$n,provider:"Gemini",authSecret:"gemini-api-key",upstreamModel:$m}') ;;
     custom)    entry=$(jq -nc --arg n "$QS_ALIAS" --arg m "$MODEL_NAME" --arg u "$MODEL_BASE_URL" --arg k "${MODEL_API_KEY:-}" \
                  '{name:$n,provider:"OpenAI",baseURL:$u,upstreamModel:$m} + (if $k!="" then {authSecret:"quickstart-model-key"} else {} end)') ;;
-    ollama)    entry=$(jq -nc --arg n "$QS_ALIAS" --arg m "${MODEL_NAME:-llama3.2}" --arg u "$(qs_ollama_url "${2:-}")" '{name:$n,provider:"OpenAI",baseURL:$u,upstreamModel:$m}') ;;
+    ollama)    entry=$(jq -nc --arg n "$QS_ALIAS" --arg m "${MODEL_NAME:-llama3.2}" --arg u "${MODEL_BASE_URL:-$(qs_ollama_url "${2:-}")}" '{name:$n,provider:"OpenAI",baseURL:$u,upstreamModel:$m}') ;;
     *) return 1 ;;
   esac
   jq -nc --argjson e "$entry" '{gateway:{stubModel:{enabled:false},models:[$e]}}'

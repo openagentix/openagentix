@@ -15,9 +15,10 @@ VER=1.0.1                      # kagent + substrate charts (docs say 1.0.0; 1.0.
 KAGENT_OCI=oci://ghcr.io/kagent-dev/kagent/helm
 SUB_OCI=oci://ghcr.io/kagent-dev/substrate/helm
 # shellcheck source=../../hack/cluster.sh
-. ../../hack/cluster.sh   # CLUSTER_TYPE=kind (default) or k3d
+. ../../hack/cluster.sh   # CLUSTER_TYPE=kind (default), k3d or remote (an existing cluster, KUBE_CONTEXT)
 cluster_check_type || exit 1
-NODE=$(cluster_node)
+# shellcheck source=auth-config.sh
+. ./auth-config.sh        # ate_issuer, ate_auth_config (issue #164)
 # rtk (user's shell hook) rewrites some kubectl invocations; use the real binary when run interactively.
 K=${KUBECTL:-kubectl}
 t0=$(date +%s)
@@ -41,8 +42,8 @@ log "$CLUSTER_TYPE cluster"
 cluster_exists || cluster_create ../..
 $K config use-context "$(cluster_ctx)" >/dev/null
 # Upstream hack/create-kind-cluster.sh does this for gVisor loopback pod networking. Not in the docs.
-docker exec "$NODE" sysctl -w net.ipv4.conf.all.proxy_arp=1 >/dev/null
-docker exec "$NODE" sysctl -e -w net.ipv6.conf.all.proxy_ndp=1 >/dev/null
+# kind and k3d: docker exec on the node; remote: skipped, or the DaemonSet with NODE_SETTINGS=daemonset (hack/cluster.sh).
+cluster_node_settings ../..
 
 # --- 2. CRDs ----------------------------------------------------------------------------------
 log "CRDs"
@@ -67,16 +68,9 @@ log "API authentication"
 TMP=$(mktemp -d)
 $K get secret -n ate-system actor-id-ca-pool -o json | jq -r '.data["tls.crt"]' | base64 -d > "$TMP/ca.crt"
 $K -n ate-system create secret generic actor-id-ca-certs --from-file=ca.crt="$TMP/ca.crt" --dry-run=client -o yaml | $K apply -f -
-ISSUER=$($K get --raw /.well-known/openid-configuration | jq -r .issuer)
-cat > "$TMP/authentication.yaml" <<EOF
-jwtProviders:
-- name: kubernetes
-  issuer: $ISSUER
-  audiences: [api.ate-system.svc]
-  # in-cluster issuer (kind): these two lines are required; on GKE-style external issuers they must be omitted
-  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-EOF
+ISSUER=$(ate_issuer)   # reads ${KUBECTL:-kubectl}, like $K
+# in-cluster issuer (kind, k3s): with the CA and token file lines; an external issuer (GKE style): without them
+ate_auth_config "$ISSUER" > "$TMP/authentication.yaml"
 $K -n ate-system create configmap ate-api-authentication --from-file=authentication.yaml="$TMP/authentication.yaml" --dry-run=client -o yaml | $K apply -f -
 
 # --- 5. pod-certificate controller ------------------------------------------------------------

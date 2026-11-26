@@ -50,4 +50,65 @@ t "k3d delete hint removes the cluster and its volume" "$(run k3d cluster_delete
 echo "# unknown type"
 run podman cluster_check_type 2>/dev/null; t "unknown CLUSTER_TYPE is refused" "$?" 1
 run k3d cluster_check_type; t "k3d is accepted" "$?" 0
+
+echo "# node settings (issue #163): the two sysctls of components/runtime/NOTES.md"
+: > "$D/calls"; run kind cluster_node_settings . >/dev/null; t "kind sets both sysctls with docker exec, as before" "$(calls)" "docker exec alpha-control-plane sysctl -w net.ipv4.conf.all.proxy_arp=1;docker exec alpha-control-plane sysctl -e -w net.ipv6.conf.all.proxy_ndp=1;"
+run k3d cluster_node_settings . >/dev/null; t "k3d sets both sysctls with docker exec, as before" "$(calls)" "docker exec k3d-alpha-server-0 sysctl -w net.ipv4.conf.all.proxy_arp=1;docker exec k3d-alpha-server-0 sysctl -e -w net.ipv6.conf.all.proxy_ndp=1;"
+t "kind prints nothing for the node settings (output unchanged)" "$(run kind cluster_node_settings . 2>&1; : > "$D/calls")" ""
+NODE_SETTINGS=bogus run kind cluster_check_type 2>/dev/null; t "an unknown NODE_SETTINGS is refused" "$?" 1
+t "install.sh has no docker exec for the sysctls left" "$(grep -c 'docker exec "$NODE" sysctl' install.sh)" 0
+t "up.sh has no docker exec for the sysctls left" "$(grep -c 'docker exec "$NODE" sysctl' components/runtime/up.sh)" 0
+t "install.sh calls cluster_node_settings" "$(grep -c '^cluster_node_settings "$ROOT"' install.sh)" 1
+t "up.sh calls cluster_node_settings" "$(grep -c '^cluster_node_settings ../..' components/runtime/up.sh)" 1
+
+echo "# remote (issue #161): an existing cluster named by KUBE_CONTEXT; nothing is created, nothing runs on a node"
+# fake kubectl: `get --raw /version` answers when FAKE_API=up; every call is recorded
+cat > "$D/bin/kubectl" <<EOS
+#!/usr/bin/env bash
+echo "kubectl \$*" >> "$D/calls"
+case "\$*" in *"get --raw /version"*) [ "\${FAKE_API:-}" = up ] || exit 1; echo '{"gitVersion":"v1.37.0"}';; esac
+exit 0
+EOS
+cat > "$D/bin/gcloud" <<EOS
+#!/usr/bin/env bash
+echo "gcloud \$*" >> "$D/calls"
+exit 0
+EOS
+chmod +x "$D/bin/kubectl" "$D/bin/gcloud"
+R=gke_p_z_c
+: > "$D/calls"
+run remote cluster_check_type 2>"$D/err"; t "remote without KUBE_CONTEXT is refused" "$?" 1
+t "the message names KUBE_CONTEXT" "$(grep -c 'CLUSTER_TYPE=remote needs KUBE_CONTEXT' "$D/err")" 1
+KUBE_CONTEXT=$R run remote cluster_check_type; t "remote with a context is accepted" "$?" 0
+for c in kind-openagentix k3d-openagentix kind-oa-ci-test docker-desktop; do
+  KUBE_CONTEXT=$c run remote cluster_check_type 2>"$D/err"; t "remote refuses the local context $c" "$?" 1
+done
+t "the message says how to confirm" "$(grep -c 'ALLOW_LOCAL_CONTEXT=1' "$D/err")" 1
+ALLOW_LOCAL_CONTEXT=1 KUBE_CONTEXT=kind-openagentix run remote cluster_check_type 2>/dev/null; t "ALLOW_LOCAL_CONTEXT=1 confirms a local context" "$?" 0
+t "remote context is KUBE_CONTEXT" "$(KUBE_CONTEXT=$R run remote cluster_ctx)" "$R"
+FAKE_API=up KUBE_CONTEXT=$R run remote cluster_exists; t "remote: exists when the API server answers" "$?" 0
+t "remote: cluster_exists asks the API server of that context" "$(calls)" "kubectl --context $R get --raw /version;"
+KUBE_CONTEXT=$R run remote cluster_exists; t "remote: does not exist when the API server does not answer" "$?" 1
+: > "$D/calls"
+KUBE_CONTEXT=$R run remote cluster_create . 2>"$D/err"; t "remote: cluster_create fails" "$?" 1
+t "remote: cluster_create says it never creates a cluster" "$(grep -c 'never creates a cluster' "$D/err")" 1
+KUBE_CONTEXT=$R run remote cluster_node 2>"$D/err"; t "remote: cluster_node fails" "$?" 1
+t "remote: cluster_node says there is no node shell" "$(grep -c 'no node shell on a remote cluster' "$D/err")" 1
+KUBE_CONTEXT=$R run remote cluster_ctr images ls 2>"$D/err"; t "remote: cluster_ctr fails" "$?" 1
+t "remote: cluster_ctr says there is no node shell" "$(grep -c 'no node shell on a remote cluster' "$D/err")" 1
+KUBE_CONTEXT=$R run remote cluster_network 2>/dev/null; t "remote: cluster_network fails (no Docker network)" "$?" 1
+KUBE_CONTEXT=$R run remote cluster_load_images a:1 2>"$D/err"; t "remote: cluster_load_images fails (no registry push yet)" "$?" 1
+t "remote: the load message names the registry issue" "$(grep -c 'issue #162' "$D/err")" 1
+t "remote: delete hint points at the cloud teardown" "$(KUBE_CONTEXT=$R run remote cluster_delete_hint | grep -c 'install-gke.md#teardown')" 1
+t "remote: delete hint runs nothing" "$(KUBE_CONTEXT=$R run remote cluster_delete_hint >/dev/null; calls)" ""
+KUBE_CONTEXT=$R run remote cluster_node_settings . >"$D/out"; t "remote: node settings exit 0 by default" "$?" 0
+t "remote: node settings run no docker exec by default" "$(calls)" ""
+t "remote: the skip is said" "$(grep -c 'skipped on a remote cluster' "$D/out")" 1
+NODE_SETTINGS=daemonset KUBE_CONTEXT=$R run remote cluster_node_settings . >/dev/null
+t "NODE_SETTINGS=daemonset applies the manifest and waits, no docker exec" "$(calls)" "kubectl apply -f ./components/runtime/node-settings.yaml;kubectl -n openagentix-node-settings rollout status ds/node-settings --timeout=180s;"
+: > "$D/calls"
+for f in cluster_check_type cluster_ctx cluster_exists cluster_create cluster_node cluster_network cluster_load_images cluster_ctr cluster_delete_hint cluster_node_settings; do
+  KUBE_CONTEXT=$R run remote "$f" . >/dev/null 2>&1
+done
+t "remote never calls kind, k3d, docker or gcloud" "$(grep -cE '^(kind|k3d|docker|gcloud) ' "$D/calls")" 0
 exit $F
