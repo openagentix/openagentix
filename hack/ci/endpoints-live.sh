@@ -37,7 +37,7 @@ PF=""; PF2=""; PF3=""; PF4=""; TD=""
 cleanup() {
   kill $PF $PF2 $PF3 $PF4 2>/dev/null
   [ -z "$TD" ] || rm -rf "$TD"
-  $K delete virtualmcpserver tools-ovr tools-ovr2 probe-redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
+  $K delete virtualmcpserver tools-ovr tools-ovr2 tools-ovr3 probe-redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpserverentry redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpexternalauthconfig redir-noauth -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpgroup probe -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
@@ -178,7 +178,7 @@ obs "resources/read answered: $(printf '%s' "$RD" | cut -c1-200); prompts/get an
 kill $PF2 $PF3 2>/dev/null; PF2=""; PF3=""
 
 echo "# SPIKE (observations): the field overrides of the VirtualMCPServer aggregation (a tool's name and description)"
-# Two throwaway vMCPs on the group, copies of tools-$PROFILE: A keeps the profile's filter and renames the tool echo; B has no filter and no deny default, only the rename.
+# Three throwaway vMCPs on the group, copies of tools-$PROFILE: A keeps the profile's filter (the old name) and renames the tool echo; B has no filter and no deny default, only the rename; C filters on the new name.
 # They need a policy of their own: the endpoint's policy admits the chart's vMCPs only.
 $K apply -f - >/dev/null 2>&1 <<YAML
 apiVersion: networking.k8s.io/v1
@@ -191,7 +191,7 @@ spec:
     - ports: [{protocol: TCP, port: 8080}]
       from:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: $MCPNS}}
-          podSelector: {matchLabels: {app: virtualmcpserver}, matchExpressions: [{key: toolhive-name, operator: In, values: [tools-ovr, tools-ovr2]}]}
+          podSelector: {matchLabels: {app: virtualmcpserver}, matchExpressions: [{key: toolhive-name, operator: In, values: [tools-ovr, tools-ovr2, tools-ovr3]}]}
 YAML
 ovr_probe() {  # ovr_probe <vMCP name> <label> <jq filter that edits the copy's spec>
   local n=$1 label=$2 edit=$3 port=$4 sid raw
@@ -209,6 +209,7 @@ ovr_probe() {  # ovr_probe <vMCP name> <label> <jq filter that edits the copy's 
   kill $PF4 2>/dev/null; PF4=""
 }
 ovr_probe tools-ovr "A (the profile's filter [echo] and overrides echo -> renamed_echo)" '.config.aggregation.tools=[{workload:"echo",filter:["echo"],overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}]' "$XPORT"
+ovr_probe tools-ovr3 "C (the profile's filter on the NEW name [renamed_echo] and overrides echo -> renamed_echo)" '.config.aggregation.tools=[{workload:"echo",filter:["renamed_echo"],overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}]' "$((XPORT + 2))"
 ovr_probe tools-ovr2 "B (no filter, no deny default, overrides echo -> renamed_echo)" '.config.aggregation|=(del(.defaultToolVisibility)|.tools=[{workload:"echo",overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}])' "$((XPORT + 1))"
 
 echo "# SPIKE (observations): a redirect from a backend (the header is the Authorization header of the entry)"

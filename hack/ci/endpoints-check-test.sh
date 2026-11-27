@@ -111,7 +111,7 @@ for S in hack/ci/endpoints-live.sh hack/ci/endpoints-ci-setup.sh; do
   OUT=$(live "$S" ENDPOINTS=1 FAKE_CTX=kind-openagentix ENDPOINTS_CI_CONTEXT=kind-other)
   t "$S: ENDPOINTS_CI_CONTEXT must name the current context exactly" "$(grep -c '^exit=2$' <<<"$OUT")" 1
 done
-t "the live script deletes what it made on exit (the cluster role binding, the ConfigMap and the probe objects)" "$(grep -c 'delete clusterrolebinding ci-jwks-anonymous' hack/ci/endpoints-live.sh)/$(grep -c 'delete configmap ci-apiserver-ca' hack/ci/endpoints-live.sh)/$(grep -c 'delete virtualmcpserver tools-ovr tools-ovr2 probe-redir' hack/ci/endpoints-live.sh)" 1/1/1
+t "the live script deletes what it made on exit (the cluster role binding, the ConfigMap and the probe objects)" "$(grep -c 'delete clusterrolebinding ci-jwks-anonymous' hack/ci/endpoints-live.sh)/$(grep -c 'delete configmap ci-apiserver-ca' hack/ci/endpoints-live.sh)/$(grep -c 'delete virtualmcpserver tools-ovr tools-ovr2 tools-ovr3 probe-redir' hack/ci/endpoints-live.sh)" 1/1/1
 t "the live values are under hack/ci and say they are for CI only" "$(grep -c 'CI ONLY' hack/ci/endpoints-ci-values.yaml | awk '{print ($1>0)?1:0}')" 1
 t "the live script never echoes a header value (a value goes only into a process substitution, a grep pattern or a Secret)" "$(grep -cE 'echo[^|]*\$(V|RV|RAW|VAL)\b' hack/ci/endpoints-live.sh)" 0
 t "the endpoint server reads its value from a file and never logs it" "$(grep -c 'EXPECTED' hack/ci/endpoints-ci/echo-mcp.py | awk '{print ($1>0)?1:0}')/$(grep -c 'log(.*EXPECTED' hack/ci/endpoints-ci/echo-mcp.py)" 1/0

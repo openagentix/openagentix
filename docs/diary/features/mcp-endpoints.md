@@ -71,11 +71,32 @@ The admission guard and the controller now treat the short form `<service>.<name
 
 ## What is proven
 
-*To be filled in from the live run of this slice (the `e2e` workflow, input `endpoints`).* Offline: 182 chart checks, the guard executed with the Kubernetes CEL code, the new objects and both policies on a real API server in `make test-apiserver`, and the installer checks with fakes.
+Offline: 180 chart checks (one per refusal, and the render against the chart before this slice), the admission guard executed with the Kubernetes CEL code, the new objects and both policies on a real API server in `make test-apiserver` (the ToolHive CRDs at 0.67.1, strict validation, the fields kept), and the installer checks with fakes.
+
+Live, on one kind cluster in CI (the `e2e` workflow, input `endpoints`; two tiny MCP endpoints from `hack/ci/endpoints-ci/echo-mcp.py`, each with a header value from a Secret, installed before the platform values; 32 checks pass):
+
+- The group's vMCP `tools-disputes` lists both endpoints as backends with status `ready`. The installer read that itself (`DiscoveredAuthConfig-*` and `status.discoveredBackends`) before the live script ran.
+- A real `tools/list` through it returns exactly the two tools the profile names, as `echo_echo` and `echo_list_notes`, and none of the other endpoint's. A call reaches the endpoint with its header (the endpoint's own log says the header was its own value). The tool `set_note`, which the endpoint has and the profile does not list, is refused, and so is a tool of the other endpoint.
+- The shared vMCP lists no endpoint tool and refuses a call (`call denied by authorization policy`). The call never reached the endpoint. The shared vMCP pod has no environment value that names a header Secret, and the pod of the group's vMCP has them (the control).
+- The endpoint answers 401 without the header, with a wrong value and with the other endpoint's value, and 200 with its own.
+- The header values are in no log line of the vMCPs, the ToolHive operator and the endpoints, and in no ToolHive object, policy or ConfigMap.
+- A pod in `default` timed out against the endpoint. The endpoint's ingress policy and the group's egress policy exist.
+- `kubectl auth can-i get secret/echo-mcp-auth -n mcp-tools` for the shared vMCP's ServiceAccount answered **yes**. This is the remaining risk of ADR 0026 A3, as expected: the ToolHive operator gives every vMCP read access to Secrets in its namespace, and the chart cannot narrow a Role it does not own.
+
+## What the first live run found
+
+**The profile filter covers tools only.** With the profile `disputes` listing only the endpoint `echo`, a call of `resources/list` and `prompts/list` through its vMCP returned the resources and prompts of the endpoint `other` too (`echo://other/note`, `other_greet-other`), and `resources/read` returned the content of `echo://other/note`. ADR 0026 A3 said this was unverified and that, if it leaked, the chart adds a Cedar `forbid`. It does now: a profile on an endpoint group has `forbid` on `read_resource` and `get_prompt` in front of its permit. The second live run: the lists are empty and a read and a prompt get are refused (`read denied by authorization policy`, `prompt denied by authorization policy`) while the tools still work. A profile on an endpoint group therefore offers tools only.
+
+**Spike results, each observed once (not a guarantee):**
+
+- *Redirects.* A backend that answers every POST with `307` to another Service was not followed. Three requests reached the redirecting server, each with the entry's `Authorization` header, none reached the target, and the backend shows `unavailable`. Only a `307` on a POST was tried. A custom header on a redirect was not tested, because an entry of `mcp.endpoints` has one header.
+- *`overrides`.* The field renames a tool and its description: with `overrides: {echo: {name: renamed_echo, description: ...}}` and no filter the vMCP lists `echo_renamed_echo` with the new description. With the profile's filter `[echo]` next to the override, the list is empty: the filter did not match the renamed tool. The result with a filter on the new name is in the live log of the last run. So a later change that renames the mirror tools back to the shared names has to write the filter with the new names.
 
 ## What is not proven
 
 - The shared group mode, internet endpoints and the bank use case on these values (slices 5 to 7).
-- That the vMCP follows no redirect, and what `overrides` does, are checked in the live run as observations. Read the result below before you rely on either.
-- The egress policy on a network plugin that enforces egress. kindnet is the plugin of the CI cluster.
+- That the endpoints in the job are the real records service. They are a small test server. The job's vMCPs trust the API server's tokens, so the path of an agent through Substrate was not run.
+- The egress policy of the group on a network plugin that enforces egress. kindnet is the plugin of the CI cluster, and the policy was applied and listed, not shown to cut a connection.
+- A redirect with another status or method, and a custom header on a redirect.
+- Definitions, container agents and `-workload` variants on an endpoint group (refused in this slice).
 - Every vMCP of the tools namespace can read every Secret there through the API. The header Secret is as safe as that namespace. The follow-up in ADR 0026 (a namespace per credentialed group) is not built.
