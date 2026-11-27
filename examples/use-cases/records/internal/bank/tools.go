@@ -2,6 +2,7 @@ package bank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -123,9 +124,38 @@ type approvalIn struct {
 	AmountCents int64  `json:"amount_cents" jsonschema:"amount in cents to credit or charge back; 0 for a decline"`
 }
 type approvalOut struct {
-	Approval core.Approval `json:"approval"`
-	Next     string        `json:"next"`
+	Approval approvalView `json:"approval"`
+	Next     string       `json:"next"`
 }
+
+// approvalView is an approval as the agent sees it. The route reason and the drafts came from the agent or from
+// the REST port, so they are labelled as text, not as instructions.
+type approvalView struct {
+	ID                   string `json:"id"`
+	Subject              string `json:"subject"`
+	Kind                 string `json:"kind"`
+	AmountCents          int64  `json:"amount_cents"`
+	Status               string `json:"status"`
+	ProposedBy           string `json:"proposed_by"`
+	DecidedBy            string `json:"decided_by,omitempty"`
+	DecisionNote         string `json:"untrusted_decision_note,omitempty"`
+	PayloadHash          string `json:"payload_hash"`
+	UntrustedRouteReason string `json:"untrusted_route_reason"`
+	UntrustedLetter      string `json:"untrusted_letter"`
+	UntrustedFiling      string `json:"untrusted_filing,omitempty"`
+	CaseVersion          int64  `json:"case_version"`
+}
+
+func agentApproval(a core.Approval) approvalView {
+	v := approvalView{ID: a.ID, Subject: a.Subject, Kind: a.Kind, AmountCents: a.AmountCents, Status: a.Status, ProposedBy: a.ProposedBy,
+		DecidedBy: a.DecidedBy, DecisionNote: a.DecisionNote, PayloadHash: a.PayloadHash}
+	var p proposalPayload
+	if json.Unmarshal([]byte(a.Payload), &p) == nil {
+		v.UntrustedRouteReason, v.UntrustedLetter, v.UntrustedFiling, v.CaseVersion = p.RouteReason, p.Letter, p.Filing, p.CaseVersion
+	}
+	return v
+}
+
 type approvalGetIn struct {
 	ApprovalID string `json:"approval_id" jsonschema:"approval id like APR-0007"`
 }
@@ -248,11 +278,12 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 	register(d, srv, "request_approval", "Ask a named approver to decide the act that matches the case route. Needs the route, a letter draft and (for a chargeback) a filing draft. The act happens only if the approver approves.", false, func(in approvalIn) string { return in.CaseID },
 		func(ctx context.Context, in approvalIn) (approvalOut, error) {
 			a, err := s.RequestApproval(ctx, in.CaseID, in.Kind, in.AmountCents)
-			return approvalOut{Approval: a, Next: "A named approver must approve or reject. Poll get_approval; do nothing else for money or letters."}, err
+			return approvalOut{Approval: agentApproval(a), Next: "A named approver must approve or reject. Poll get_approval; do nothing else for money or letters."}, err
 		})
 	register(d, srv, "get_approval", "Read the status of an approval request.", true, func(in approvalGetIn) string { return in.ApprovalID },
-		func(ctx context.Context, in approvalGetIn) (core.Approval, error) {
-			return d.approvals.Get(ctx, in.ApprovalID)
+		func(ctx context.Context, in approvalGetIn) (approvalView, error) {
+			a, err := d.approvals.Get(ctx, in.ApprovalID)
+			return agentApproval(a), err
 		})
 	return withHealth(d, mcpMount(srv))
 }

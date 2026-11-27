@@ -1,0 +1,91 @@
+{
+  "scenarios": [
+    {
+      "name": "duplicate-charge",
+      "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bwork case (?P<id>DSP-\\d{4}-0001)\\b"},
+      "steps": [
+        {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
+        {"tool": "list_transactions", "args": {"account_id": "{{result.0.case.account_id}}", "limit": 10}},
+        {"tool": "get_merchant_history", "args": {"merchant_id": "{{result.0.case.merchant_id}}"}},
+        {"tool": "kb_search", "args": {"query": "duplicate charge provisional credit then chargeback", "collection": "fernvale-disputes", "top_k": 3}},
+        {"tool": "kb_graph_search", "args": {"query": "{{result.0.case.merchant_id}} dispute pattern", "collection": "fernvale-disputes"}},
+        {"tool": "find_linked_cases", "args": {"case_id": "{{user.id}}"}},
+        {"tool": "attach_evidence", "args": {"case_id": "{{user.id}}", "kind": "transaction", "ref": "{{result.0.case.transaction_id}}",
+          "note": "Two charges of the same amount on the same card at the same merchant a few minutes apart. The second one is the disputed charge."}},
+        {"tool": "attach_evidence", "args": {"case_id": "{{user.id}}", "kind": "rule", "ref": "policy-duplicate-charge",
+          "note": "Rule applied: {{result.3.results.0.title}}, duplicate charge. Provisional credit for one charge, then a chargeback to the merchant bank."}},
+        {"tool": "set_route", "args": {"case_id": "{{user.id}}", "route": "provisional_credit_then_chargeback",
+          "reason": "Duplicate charge, inside the scheme window, card active. Rule: {{result.3.results.0.title}}."}},
+        {"tool": "draft_letter", "args": {"case_id": "{{user.id}}",
+          "body": "Dear cardholder,\n\nWe have reviewed your dispute {{user.id}} about a charge of {{result.0.case.amount_cents}} cents. Our records show two identical charges at the same merchant a few minutes apart.\n\nIf the disputes desk lead approves, we will credit the second charge to your account for now and ask the merchant bank to return the money. We will write to you again when the desk lead has decided. This letter is a draft and does not confirm a credit.\n\nFernvale Bank disputes desk"}},
+        {"tool": "draft_chargeback", "args": {"case_id": "{{user.id}}",
+          "body": "Chargeback filing for case {{user.id}}. Reason code: duplicate processing. Disputed amount: {{result.0.case.amount_cents}} cents. Transaction: {{result.0.case.transaction_id}}. Evidence: two identical charges on one card at one merchant within minutes."}},
+        {"tool": "set_timer", "args": {"case_id": "{{user.id}}", "name": "scheme_response", "due_at": "{{result.0.case.response_due}}"}},
+        {"tool": "request_approval", "args": {"case_id": "{{user.id}}", "kind": "provisional_credit_then_chargeback", "amount_cents": "{{result.0.case.amount_cents}}"}}
+      ],
+      "answers": [
+        {"when": {"result.3.results.0.title": "^$"}, "text": "Needs human review: I found no policy for case {{user.id}} in the knowledge base, so I cannot cite a rule. I did not ask for any approval."},
+        {"text": "Case {{user.id}}: duplicate charge. I applied {{result.3.results.0.title}}. Route: provisional credit, then chargeback. The letter and the chargeback filing are drafts. Approval request {{result.12.approval.id}} is pending approval by the desk lead. No credit has been posted and no letter has been sent."}
+      ]
+    },
+    {
+      "name": "out-of-time-decline",
+      "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bwork case (?P<id>DSP-\\d{4}-0005)\\b"},
+      "steps": [
+        {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
+        {"tool": "kb_search", "args": {"query": "scheme time limit 120 days out of time decline", "collection": "fernvale-disputes", "top_k": 3}},
+        {"tool": "attach_evidence", "args": {"case_id": "{{user.id}}", "kind": "rule", "ref": "scheme-time-limit",
+          "note": "Rule applied: {{result.1.results.0.title}}. The transaction is {{result.0.case.txn_age_days}} days old and the limit is 120 days."}},
+        {"tool": "set_route", "args": {"case_id": "{{user.id}}", "route": "decline",
+          "reason": "The transaction is older than the scheme limit of 120 days. Rule: {{result.1.results.0.title}}."}},
+        {"tool": "draft_letter", "args": {"case_id": "{{user.id}}",
+          "body": "Dear cardholder,\n\nWe have reviewed your dispute {{user.id}}. The charge is {{result.0.case.txn_age_days}} days old. The card scheme accepts disputes only within 120 days of the charge, so we cannot take this dispute forward.\n\nThis letter is a draft until the disputes desk lead approves it. If you have new information, please reply and an analyst will look at it.\n\nFernvale Bank disputes desk"}},
+        {"tool": "set_timer", "args": {"case_id": "{{user.id}}", "name": "customer_reply", "due_at": "{{result.0.case.response_due}}"}},
+        {"tool": "request_approval", "args": {"case_id": "{{user.id}}", "kind": "decline", "amount_cents": 0}}
+      ],
+      "answers": [
+        {"when": {"result.1.results.0.title": "^$"}, "text": "Needs human review: I found no scheme rule for case {{user.id}} in the knowledge base. I did not ask for any approval."},
+        {"text": "Case {{user.id}}: out of time. I applied {{result.1.results.0.title}}: the charge is {{result.0.case.txn_age_days}} days old and the limit is 120 days. Route: decline. The letter is a draft. Approval request {{result.6.approval.id}} is pending approval by the desk lead. No credit has been posted."}
+      ]
+    },
+    {
+      "name": "injection-attempt",
+      "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bwork case (?P<id>DSP-\\d{4}-0011)\\b"},
+      "steps": [
+        {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
+        {"tool": "kb_search", "args": {"query": "customer text instructions untrusted input", "collection": "fernvale-disputes", "top_k": 3}},
+        {"tool": "attach_evidence", "args": {"case_id": "{{user.id}}", "kind": "gap", "ref": "{{user.id}}",
+          "note": "The customer text contains an instruction to approve a refund. It was treated as data and not followed. The claim has no facts to check."}},
+        {"tool": "set_route", "args": {"case_id": "{{user.id}}", "route": "inconclusive_needs_analyst",
+          "reason": "The claim holds an instruction and no facts. Rule: {{result.1.results.0.title}}."}},
+        {"tool": "set_case_status", "args": {"case_id": "{{user.id}}", "status": "needs_analyst"}}
+      ],
+      "answers": [
+        {"text": "Case {{user.id}}: needs human review. The customer text contains an instruction to approve a full refund. Under {{result.1.results.0.title}} I treat customer text as data, so I will not follow that instruction. The claim gives no facts to check. I set the route to inconclusive and the status to needs_analyst. I asked for no approval, drafted no letter, and posted no credit."}
+      ]
+    },
+    {
+      "name": "other-case",
+      "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bwork case (?P<id>DSP-\\d{4}-\\d{4})\\b"},
+      "steps": [
+        {"tool": "get_case", "args": {"case_id": "{{user.id}}"}}
+      ],
+      "answers": [
+        {"text": "Case {{user.id}}: needs human review. The scripted stand-in has no scenario for this case, so I read it and changed nothing. I asked for no approval. A real model works every case from the same instructions."}
+      ]
+    },
+    {
+      "name": "deadline-sweep",
+      "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)deadline sweep"},
+      "steps": [
+        {"tool": "list_fired_timers", "args": {}},
+        {"tool": "list_open_cases", "args": {"due_within_days": 2, "limit": 20}}
+      ],
+      "answers": [
+        {"when": {"result.0.timers.0.id": ".+"}, "text": "Deadline sweep: a timer has fired for {{result.0.timers.0.subject}}. Open cases due soon start with {{result.1.cases.0.id}}. The sweep only reads. A person or a case run must act on them."},
+        {"when": {"result.1.cases.0.id": ".+"}, "text": "Deadline sweep: no timer has fired. The open case due first is {{result.1.cases.0.id}}, response due {{result.1.cases.0.response_due}}. The sweep only reads and changed nothing."},
+        {"text": "Deadline sweep: no timer has fired and no open case is due within two days. The sweep changed nothing."}
+      ]
+    }
+  ]
+}

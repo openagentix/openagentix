@@ -19,7 +19,16 @@ import (
 
 	"github.com/openagentix/openagentix/examples/use-cases/records/internal/bank"
 	"github.com/openagentix/openagentix/examples/use-cases/records/internal/core"
+	"github.com/openagentix/openagentix/examples/use-cases/records/internal/equipment"
 )
+
+// served is what every domain gives the binary.
+type served interface {
+	Seed(ctx context.Context) error
+	Handler() http.Handler
+	MCPHandler(version string) http.Handler
+	FireDue(ctx context.Context) (int, error)
+}
 
 // version and defaultDomain are stamped at build time (-ldflags "-X main.version=... -X main.defaultDomain=bank").
 // defaultRESTAddr keeps the REST port on the pod's loopback: only a person using kubectl port-forward reaches it.
@@ -66,8 +75,8 @@ func serve(ctx context.Context, h http.Handler, ln net.Listener) error {
 // run wires the service and blocks until ctx ends. onListen, if set, receives the two bound addresses.
 func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onListen func(mcp, rest string)) error {
 	domain := or(getenv("RECORDS_DOMAIN"), defaultDomain)
-	if domain != "bank" {
-		return fmt.Errorf("unknown domain %q (this build has: bank)", domain)
+	if domain != "bank" && domain != "equipment" {
+		return fmt.Errorf("unknown domain %q (this build has: bank, equipment)", domain)
 	}
 	approvers, err := core.LoadApprovers(getenv("RECORDS_APPROVERS_FILE"))
 	if err != nil {
@@ -83,7 +92,13 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	}
 	defer db.Close()
 	clock := func() time.Time { return time.Now().UTC() }
-	d, err := bank.New(db, log, clock, approvers)
+	var d served
+	switch domain {
+	case "equipment":
+		d, err = equipment.New(db, log, clock, approvers)
+	default:
+		d, err = bank.New(db, log, clock, approvers)
+	}
 	if err != nil {
 		return fmt.Errorf("start %s: %w", domain, err)
 	}

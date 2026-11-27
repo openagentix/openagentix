@@ -6,4 +6,4 @@ restarts toolhive-system/toolhive-operator-                   max=2  # #227
 restarts local-path-storage/local-path-provisioner-           max=2  # #227
 restarts mcp-tools/tools-                                     max=2  # #227
 restarts podcertificate-controller-system/podcertificate-     max=2  # #227
-# kagent-controller exited repeatedly on a long-running cluster (#178). It did not in the first run, so it has no entry: a restart of it fails the test.
+# kagent-controller exited when the Substrate API was not up yet (#178). It now waits for it in an init container, so it has no entry: a restart of it fails the test.
