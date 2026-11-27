@@ -159,11 +159,23 @@ Offline (the tests above, no cluster, no model):
 - The MCP port of the records service refuses every call without the exact header value, reads the value per request from a mounted file, and starts only with that file (or the explicit test flag).
 - The values render, and the objects they add; the shared tool server never names the records service; `install.sh` and `ctl.sh` against fakes.
 
-Live, on a kind cluster in CI (the opt-in job `e2e (bank, mcp.endpoints)`: `gh workflow run e2e.yml -f bank=true --ref <branch>`; `hack/ci/bank-live.sh`). **The stub model played `eval/scenario.json`, so every run is scripted by the stub model and shows the platform, not a model.** LIVE_RESULTS
+Live, on a kind cluster in CI (the opt-in job `e2e (bank, mcp.endpoints)`: `gh workflow run e2e.yml -f bank=true --ref <branch>`; `hack/ci/bank-live.sh`). **The stub model played `eval/scenario.json`, so every run is scripted by the stub model and shows the platform, not a model.** The run named in the pull request (69 checks, all passed) showed, through real agent sessions (the question goes through the A2A gate, kagent runs the agent, the agent calls the tools through the tool server of its profile):
+
+- the tool server `tools-disputes` lists both backends (`records` and `knowledge-disputes`) as ready, and lists exactly the 15 `records_*` and 6 `knowledge-disputes_*` tools; the shared tool server lists none and refuses a call (`call denied by authorization policy`), and so does the profile `lookup` of the quick start agent;
+- `oa-eval` passed all five cases through the gate (audit lines as the audit source, the records REST state as the state source): the duplicate charge asked for an approval, the out-of-time claim was declined (the scheme rules cited), the injected instruction asked for none and stayed inside `max_tool_calls`; every audited call was a tool of the profile and the shared tool server saw none;
+- the approver path with `ctl.sh`: one credit posted, the letter and the filing queued after the decision only, a second approval refused, a changed case superseded its request and approving it was refused;
+- the records MCP port: 401 without the header, with a wrong one and with the approver token; 200 with the right value; the health checks need none; the header value and the approver token are in no log, no object and not in the install log;
+- callers: a quick start caller, a wrong user id and a caller with no rule got 403;
+- a pod in `default` timed out against the records port; the egress policy of the group cut a probe with the tool server labels from a web server that a control pod reached (one run, in-cluster target only; nothing is shown about egress to the internet); `kubectl auth can-i get secret/records-mcp-auth -n mcp-tools` for the shared tool server answered yes (the remaining risk, below);
+- a second `install.sh` run changed no Secret and kept the scenarios.
+
+First live findings: the runtime hands a structured tool result to the model as `{"output":<the result>}` (the scenarios read it so); the live knowledge base ranked the dispute policy above the scheme rules for the time limit query, so the scenario now cites the rules when they are the first or second result and says "needs human review" when they are not found. See `docs/diary/features/bank-on-endpoints.md`.
 
 ## What is not proven
 
-LIVE_LIMITS
+- Not run live: `install.sh --beside-full-demo` on a full demo cluster (offline tests compose and render it); the memory and CPU of the added pods; the suspended `deadline-sweep` run by hand; a second `ctl.sh reject`; the cases 0006 to 0010.
+- The live run was one run on one kind cluster: a second run or another network plugin may differ. Egress was cut in that run for an in-cluster target; whether the policy cuts egress to the internet is not shown.
+- The stub's start log names the directory of the scenarios, not their number.
 - A real model's behaviour: not tested. Pass rates, cost per case, the wording of its answers: not measured. The first real-model run has a checklist below.
 - The knowledge base answers in the replay are fixed; live, the knowledge base ranks the seven documents as it does, and the scenarios cite the title of the top search result.
 - The fraud ring (cases 0006 to 0010) is in the data and in the graph facts. No scenario or evaluation case works it yet.
@@ -197,24 +209,24 @@ The first version of this use case (PR 239) could not wire six things with exist
 
 ## Live proof checklist
 
-Tick an item only with the evidence next to it. The items of the stub run are ticked from the CI job named in the pull request; the items of the first real-model run are not.
+Tick an item only with the evidence next to it. The items below are ticked from the CI job named in the pull request (a run scripted by the stub model); the items of "The first real-model run" are not ticked.
 
-- [ ] The records pod becomes Ready under the `restricted` pod security level, with the probes on 8080 and the image from `install.sh`.
-- [ ] Memory and CPU of the records pod and the tool server of the group, measured, against the estimate (not measured by the job).
-- [ ] The tool server `tools-disputes` lists the 15 `records_*` and the 6 `knowledge-disputes_*` tools and nothing else; the shared tool server lists none and refuses a call; the profile `lookup` of the quick start agent lists none and refuses a call.
-- [ ] The records service answers 401 to a call with no header, a wrong header and the approver token, and 200 to the right value; the health checks need no header.
-- [ ] The header value and the approver token are in no log line of the tool servers, the operator, the records pod, the gate, kagent, the gateway or the stub model, in no object and not in the install log.
-- [ ] The answer of `kubectl auth can-i get secret/records-mcp-auth -n mcp-tools` for the shared tool server's ServiceAccount is recorded (ADR 0026 A3 expects yes).
-- [ ] A pod in `default` cannot reach `records.fernvale-records:8080` (the ingress policy is enforced here). The REST port is on the pod's loopback: `kubectl port-forward` reaches it.
-- [ ] Whether the egress policy of the group is enforced on this network plugin is recorded, and the README says what was seen.
-- [ ] The dispute agent calls the `records_*` and `knowledge-disputes_*` tools through its tool server, and the `AUDIT` lines have the `tool` field that `oa-eval` reads, name the session and hold no case text.
-- [ ] The kb ingest and the graph load work for the seven documents and the fact set.
-- [ ] The scenario mount works: the stub's start log says the scenarios were loaded from the chart's mount, the three cases give the answers in the demo, and after a second `install.sh` run with the same values the scenarios are still loaded and the Secrets are unchanged.
-- [ ] `oa-eval` passes the five cases with the `AUDIT` lines as the audit source and the records REST state as the state source; the injection case stays inside `max_tool_calls`.
-- [ ] Only records and knowledge tools were called in the whole run.
-- [ ] Case 0001 end to end: approval request, `ctl.sh approve`, one ledger row, letter and filing queued. A second approve is refused. Case 0005 gives a decline request, and a change to the case supersedes it and its approval is refused. Case 0011 is refused and has no request.
-- [ ] A service account with no caller rule (a `branch-kiosk`) gets 403 at the gate. The desk caller works only for the dispute agent.
-- [ ] `ctl.sh` leaves no `kubectl port-forward` process after any command.
+- [x] The records pod becomes Ready under the `restricted` pod security level, with the probes on 8080 and the image from `install.sh`. (the live job: the Deployment had one available replica under the restricted level)
+- [ ] Memory and CPU of the records pod and the tool server of the group, measured, against the estimate (not measured by the job; about 190 MB for the records pod is an estimate).
+- [x] The tool server `tools-disputes` lists the 15 `records_*` and the 6 `knowledge-disputes_*` tools and nothing else; the shared tool server lists none and refuses a call; the profile `lookup` of the quick start agent lists none and refuses a call. (tools/list with a token of the API server; the shared server and `lookup` listed none and refused a call)
+- [x] The records service answers 401 to a call with no header, a wrong header and the approver token, and 200 to the right value; the health checks need no header.
+- [x] The header value and the approver token are in no log line of the tool servers, the operator, the records pod, the gate, kagent, the gateway or the stub model, in no object and not in the install log.
+- [x] The answer of `kubectl auth can-i get secret/records-mcp-auth -n mcp-tools` for the shared tool server's ServiceAccount is recorded (ADR 0026 A3 expects yes). Answer: yes.
+- [x] A pod in `default` cannot reach `records.fernvale-records:8080` (the ingress policy is enforced here). The REST port is on the pod's loopback: `kubectl port-forward` reaches it.
+- [x] Whether the egress policy of the group is enforced on this network plugin is recorded, and the README says what was seen. Seen in the CI run: enforced for an in-cluster target (a control pod reached it, the probe with the tool server labels was cut).
+- [x] The dispute agent calls the `records_*` and `knowledge-disputes_*` tools through its tool server, and the `AUDIT` lines have the `tool` field that `oa-eval` reads, name the session and hold no case text.
+- [x] The kb ingest and the graph load work for the seven documents and the fact set. (the install finished and the agent cited the documents; a duplicate-free second load is not checked)
+- [x] The scenario mount works: the stub's start log says the scenarios were loaded from the chart's mount, the three cases give the answers in the demo, and after a second `install.sh` run with the same values the scenarios are still loaded and the Secrets are unchanged.
+- [x] `oa-eval` passes the five cases with the `AUDIT` lines as the audit source and the records REST state as the state source; the injection case stays inside `max_tool_calls`.
+- [x] Only records and knowledge tools were called in the whole run.
+- [x] Case 0001 end to end: approval request, `ctl.sh approve`, one ledger row, letter and filing queued. A second approve is refused. Case 0005 gives a decline request, and a change to the case supersedes it and its approval is refused. Case 0011 is refused and has no request.
+- [x] A service account with no caller rule (a `branch-kiosk`) gets 403 at the gate. The desk caller works only for the dispute agent.
+- [x] `ctl.sh` leaves no `kubectl port-forward` process after any command.
 - [ ] Right after the bank install, the quick start agent (`hack/ask.sh quickstart ...`) still answers.
 - [ ] `install.sh --uninstall` leaves a working stub model, and a second kb ingest and graph load create no duplicate documents, entities or relations.
 - [ ] The suspended `deadline-sweep` runs once by hand from the CronJob and only reports.
