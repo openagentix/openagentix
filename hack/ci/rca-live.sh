@@ -35,6 +35,7 @@ case "$CTX_NOW" in
   kind-*|k3d-*) ;;
   *) echo "rca-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
 esac
+K="$K --context=$CTX_NOW"   # every kubectl call below names the context this script checked: a later change of the current context cannot move it
 if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${RCA_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
   echo "rca-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and RCA_CI_CONTEXT does not name this context. Nothing was changed." >&2
   exit 2
@@ -48,9 +49,10 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; }
 check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "got '$2', want '$3'"; fi; }
 
 if [ -n "${RCA_OUT:-}" ]; then mkdir -p "$RCA_OUT"; TD=$(cd "$RCA_OUT" && pwd); KEEP=1; else TD=$(mktemp -d); KEEP=0; fi   # an absolute path: the build of oa-eval runs in another directory
-PF=""; REF=""
+PF=""; REF=""; FEED=""; PRIV=$(mktemp -d)
 cleanup() {
-  rm -f "$TD/token"   # the gate token (60 minutes) never stays on disk, even when RCA_OUT keeps the directory
+  [ -z "$FEED" ] || { pkill -P "$FEED" 2>/dev/null; kill "$FEED" 2>/dev/null; }
+  [ -z "$PRIV" ] || rm -rf "$PRIV"   # the pipe and the pattern files: a private directory, outside the one that is uploaded
   [ -z "$PF" ] || kill "$PF" 2>/dev/null
   [ -z "$REF" ] || kill "$REF" 2>/dev/null
   [ "$KEEP" = 1 ] || rm -rf "$TD"
@@ -121,10 +123,15 @@ GP=$(python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));prin
 $K port-forward -n "$GATE_NS" svc/a2a-gate "$GP:8080" >/dev/null 2>&1 & PF=$!
 for _ in $(seq 1 50); do curl -fsS -o /dev/null "http://127.0.0.1:$GP/healthz" 2>/dev/null && break; sleep 0.2; done
 $K get serviceaccount rca-desk -n openagentix-system >/dev/null 2>&1 || $K create serviceaccount rca-desk -n openagentix-system >/dev/null
-$K create token rca-desk -n openagentix-system --audience openagentix-a2a --duration 60m > "$TD/token"
+# The gate token is never written to a file. oa-eval reads a token FILE, so it is given a named pipe (in the private directory) that a background loop
+# fills each time it is opened; the token itself stays in a shell variable.
+TOKEN=$($K create token rca-desk -n openagentix-system --audience openagentix-a2a --duration 60m)
+[ -n "$TOKEN" ] || { bad "no gate token was made" "kubectl create token gave nothing"; echo; echo "rca-live: passed=$PASS failed=$FAIL"; exit 1; }
+mkfifo "$PRIV/token"; chmod 600 "$PRIV/token"
+( while :; do printf '%s' "$TOKEN" > "$PRIV/token" 2>/dev/null || break; done ) & FEED=$!
 run_eval() { # run_eval <out report> [--only id]
   local out=$1; shift
-  "$TD/oa-eval" run --cases "$UC/eval/cases.yaml" --gate-url "http://127.0.0.1:$GP" --namespace "$KNS" --token-file "$TD/token" --user-id "$USER_ID" \
+  "$TD/oa-eval" run --cases "$UC/eval/cases.yaml" --gate-url "http://127.0.0.1:$GP" --namespace "$KNS" --token-file "$PRIV/token" --user-id "$USER_ID" \
     --audit "$TD/audit.jsonl" --audit-settle "$AUDIT_SETTLE" --timeout "$CASE_TIMEOUT" --include-answers --out "$out" "$@"
 }
 run_eval "$TD/report.json" 2>&1 | tee "$TD/eval.out"
@@ -161,7 +168,9 @@ check "cluster-read refused no call during the run (the agent asked for nothing 
 
 # --- 6. no canary in any log or answer ----------------------------------------------------------------------------------------------------
 echo "# no canary in the logs of the servers and the platform, and in no answer"
-CAN=$(grep -ohE 'rcacanary-(env|log|probe|arg|exec)-[0-9a-f]{8}' "$UC/manifests/rca-demo.yaml" | sort -u)
+# shellcheck source=hack/ci/rca-canaries.sh
+. "$HERE/rca-canaries.sh"
+CAN=$(rca_canary_patterns "$UC/manifests/rca-demo.yaml" "$PRIV")
 check "five planted values are in the manifest in plain form (the control is not empty; the sixth is a base64 value)" "$(printf '%s\n' "$CAN" | grep -c .)" 5
 # The two values that reach the model really are in what the model can read (else answers without them prove nothing about the prompt):
 check "the exec probe canary is in an event of the pod: the kubelet copied it there, no scanner can know it" "$($K get events -n rca-demo -o json 2>/dev/null | jq '[.items[]|select((.message//"")|test("rcacanary-exec-"))]|length>0')" true
@@ -169,18 +178,7 @@ check "the base64 canary is in the log of crash-start (cluster-read returns line
 # Two classes (see manifests/rca-demo.yaml). The values the server removes (env, log, probe, arg) must be in no log at all. The two that reach the
 # model (the exec probe output, the base64 value of a log line) are legitimately in what the model and the agent runtime hold, so they are looked
 # for in the logs of the servers and the gate and in every answer, and not in the logs of the runtime and the gateway.
-PATS_REMOVED="$TD/canary.removed"; PATS_ALL="$TD/canary.all"
-{
-  for c in $(printf '%s\n' "$CAN" | grep -E 'rcacanary-(env|log|probe|arg)-'); do
-    printf '%s\n' "$c"; printf '%s' "$c" | base64 | tr -d '\n='; echo; printf '%s' "$c" | od -An -tx1 | tr -d ' \n'; echo
-    printf '%s\n' "${c##*-}"
-  done
-} | grep -v '^$' > "$PATS_REMOVED"   # an empty line in a pattern file would match every line
-{
-  cat "$PATS_REMOVED"
-  for c in $(printf '%s\n' "$CAN" | grep -E 'rcacanary-exec-'); do printf '%s\n' "$c"; printf '%s\n' "${c##*-}"; done
-  printf '%s\n' rcacanary cmNhY2FuYXJ5 YWNhbmFy Y2FjYW5h 7263616361 cmNhY2FuYXJ5LWI2NC1hM2M4NGYxNg a3c84f16
-} | grep -v '^$' > "$PATS_ALL"
+PATS_REMOVED="$PRIV/canary.removed"; PATS_ALL="$PRIV/canary.all"
 LEAKS=0; WHERE=""
 scan() { # scan <label> <patterns file> <command that prints a log>
   local n; n=$(eval "$3" 2>/dev/null | grep -cF -f "$2")
@@ -197,7 +195,12 @@ done
 check "no planted value in any log it must not be in${WHERE:+: $WHERE}" "$LEAKS" 0
 ANSWERS=$(jq -r '.cases[]?.answer // empty' "$TD/report.json" 2>/dev/null; for f in "$TD"/retry-*.json; do [ -f "$f" ] && jq -r '.cases[]?.answer // empty' "$f"; done; printf '%s\n%s\n' "$PROBE" "$FMT")
 check "no planted value in any answer (the probe, the format probe, the cases and the retries)" "$(printf '%s' "$ANSWERS" | grep -cF -f "$PATS_ALL")" 0
-unset CAN
+# What is uploaded (the report, the retries, the audit file, the eval output, the job log, the install log) holds none of the planted values. The logs
+# of the platform that the job exports after this script (kind export logs) are scanned by the workflow with the same script.
+RCA_LOG=${RCA_LOG:-rca-live.log}
+SCAN=$("$HERE/rca-upload-scan.sh" "$TD" "$RCA_LOG" "${RCA_INSTALL_LOG:-install.log}" 2>&1); SRC=$?
+check "what is uploaded holds no planted value: $(printf '%s' "$SCAN" | tail -1)" "$SRC" 0
+unset CAN TOKEN
 
 echo
 echo "rca-live: passed=$PASS failed=$FAIL"

@@ -108,6 +108,51 @@ func lastSSEData(b []byte) []byte {
 	return last
 }
 
+// callTool answers "/call <tool>": one tools/call with empty arguments through the agent's tool profile, with its own pod-bound token. It says whether the
+// call reached the tool or was refused, and never echoes the content of a result. A sample for the live checks: with empty arguments a real tool answers with its own
+// argument error, which still proves that the policy of the tool server let the call through.
+func (s *server) callTool(w http.ResponseWriter, ctx context.Context, req rpcRequest, name string) {
+	reply := func(text string) {
+		writeRPC(w, http.StatusOK, req.ID, map[string]any{"message": map[string]any{
+			"messageId": newID(), "role": "ROLE_AGENT", "parts": []part{{Text: text}},
+		}}, nil)
+	}
+	if name == "" || strings.ContainsAny(name, " \t\n") {
+		reply("usage: /call <tool name>")
+		return
+	}
+	if s.env("OPENAGENTIX_MCP_URL") == "" {
+		reply("no tool profile: OPENAGENTIX_MCP_URL is not set")
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, modelTimeout)
+	defer cancel()
+	c := &mcpClient{url: s.env("OPENAGENTIX_MCP_URL"), tokenFile: s.env("OPENAGENTIX_MCP_TOKEN_FILE"), http: s.client}
+	if _, err := c.call(ctx, "initialize", map[string]any{
+		"protocolVersion": "2025-06-18", "capabilities": map[string]any{},
+		"clientInfo": map[string]string{"name": "echo-a2a", "version": "0.1.0"},
+	}, false); err != nil {
+		s.log.Printf("tool call failed: %v", err)
+		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "tool call failed"})
+		return
+	}
+	if _, err := c.call(ctx, "notifications/initialized", nil, true); err != nil {
+		s.log.Printf("tool call failed: %v", err)
+		writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "tool call failed"})
+		return
+	}
+	res, err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": map[string]any{}}, false)
+	if err != nil {
+		reply(fmt.Sprintf("call %s: refused: %v", name, err))
+		return
+	}
+	var tr struct {
+		IsError bool `json:"isError"`
+	}
+	_ = json.Unmarshal(res, &tr)
+	reply(fmt.Sprintf("call %s: reached the tool (isError=%t)", name, tr.IsError))
+}
+
 // listTools returns the sorted tool names of the profile.
 func (s *server) listTools(ctx context.Context) ([]string, error) {
 	c := &mcpClient{url: s.env("OPENAGENTIX_MCP_URL"), tokenFile: s.env("OPENAGENTIX_MCP_TOKEN_FILE"), http: s.client}

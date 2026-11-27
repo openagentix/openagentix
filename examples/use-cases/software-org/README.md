@@ -52,7 +52,7 @@ Two log lines of `crash-start` try to steer the agent. One talks to an AI assist
 | `values.yaml` | The chart addition, existing values only: `cluster-read` on (logs of `rca-demo`, no platform namespace at all), the tool profile `rca`, the chart agent `pod-rca`, the caller rule `rca-desk` |
 | `values-full-demo.yaml` | Only what the agent adds, for `install.sh --beside-full-demo`: the diagnostics block, the profile `rca`, `pod-rca` on the model `claude-haiku`, the caller `rca-desk`. A test compares it with `values.yaml` |
 | `manifests/rca-demo.yaml` | The namespace and the six broken workloads, with the canaries and the injected line |
-| `eval/scenario.json` | The stub model scenarios (eight: the six workloads, one that does not exist, and a probe that prints the raw tool result for the live job), shipped through the chart (`STUB_SCENARIOS`, ADR 0026). The probe answers any `rca-desk` caller who asks for the raw result of a workload: it prints what the agent already sees |
+| `eval/software-org-rca.json` | The stub model scenarios (eight: the six workloads, one that does not exist, and a probe that prints the raw tool result for the live job), shipped through the chart (`STUB_SCENARIOS`, ADR 0026). The probe answers any `rca-desk` caller who asks for the raw result of a workload: it prints what the agent already sees |
 | `eval/cases.yaml` | The evaluation set for `tools/oa-eval`: eight cases with machine checks |
 | `install.sh`, `ctl.sh` | The install (it composes the values, runs the platform installer, applies the manifests, makes the caller) and the desk's commands |
 | `tests/` | Offline tests (below) |
@@ -63,21 +63,21 @@ Two log lines of `crash-start` try to steer the agent. One talks to an AI assist
 You need the quick start requirements (a local kind cluster, 6 CPU and 8 GB, Docker). The stub model answers, so no key and no token are needed.
 
 ```sh
-examples/use-cases/software-org/install.sh                 # offline: the stub model plays eval/scenario.json
-examples/use-cases/software-org/install.sh --real-model    # the same agent on a real model: set a provider key first, no scenarios are set
+CLUSTER=oa-rca-demo examples/use-cases/software-org/install.sh                 # offline: the stub model plays eval/software-org-rca.json
+CLUSTER=oa-rca-demo examples/use-cases/software-org/install.sh --real-model    # the same agent on a real model: set a provider key first, no scenarios are set
 ```
 
-The script refuses any kube context that is not `kind-*` or `k3d-*`. It composes the values (`hack/compose-values.sh`, which merges the quick start and `values.yaml` by entry name and prints what changed), runs the platform installer with `PROFILE=quickstart` and, offline, `STUB_SCENARIOS=examples/use-cases/software-org/eval/scenario.json`. The platform installer builds the diagnostics image, makes the bearer Secrets (never printed), labels the namespace `openagentix-diagnostics` for restricted pod security, and waits for the server and the tool servers of the group. Then the script applies the six workloads, makes the ServiceAccount `rca-desk` and checks that the stub model has its scenarios. Every step can be run again. Offline it removes every provider key from the environment of the platform installer, so that the stub model is used. With `--real-model` it needs `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` or `MODEL_BASE_URL` with `MODEL_NAME`.
+The script refuses any kube context that is not `kind-*` or `k3d-*`. It composes the values (`hack/compose-values.sh`, which merges the quick start and `values.yaml` by entry name and prints what changed), runs the platform installer with `PROFILE=quickstart` and, offline, `STUB_SCENARIOS=examples/use-cases/software-org/eval/software-org-rca.json`. The platform installer builds the diagnostics image, makes the bearer Secrets (never printed), labels the namespace `openagentix-diagnostics` for restricted pod security, and waits for the server and the tool servers of the group. Then the script applies the six workloads, makes the ServiceAccount `rca-desk` and checks that the stub model has its scenarios. Every step can be run again. Offline it removes every provider key from the environment of the platform installer, so that the stub model is used. With `--real-model` it needs `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` or `MODEL_BASE_URL` with `MODEL_NAME`.
 
-By hand, with the platform installer, give the same values on every run (Helm replaces release values): `PROFILE=quickstart VALUES_FILE=examples/use-cases/software-org/values.yaml STUB_SCENARIOS=examples/use-cases/software-org/eval/scenario.json ./install.sh`, then `examples/use-cases/software-org/install.sh --skip-platform`.
+By hand, with the platform installer, give the same values on every run (Helm replaces release values): `PROFILE=quickstart VALUES_FILE=examples/use-cases/software-org/values.yaml STUB_SCENARIOS=examples/use-cases/software-org/eval/software-org-rca.json ./install.sh`, then `examples/use-cases/software-org/install.sh --skip-platform`.
 
 Uninstall: `examples/use-cases/software-org/install.sh --uninstall` removes the namespace `rca-demo` and the ServiceAccount. The agent, the profile and `cluster-read` belong to the platform release: run the platform install again without `values.yaml` to remove them.
 
 ### The cluster, and what the install never replaces
 
-The default cluster is **its own**: `oa-rca-demo` (`kind-oa-rca-demo`). It is not the name of your full demo cluster. Name another cluster with `CLUSTER=<name>` or `KUBE_CONTEXT=<context>`; the bank use case has no default at all and needs one of them.
+There is **no default cluster**. Set `CLUSTER=<name>` (a kind or k3d cluster; `oa-rca-demo` in the examples) or `KUBE_CONTEXT=<context>` on every call of `install.sh` and `ctl.sh`; when both are set they must name the same cluster, or the script refuses. A script that changes a cluster must be told which one, because a name like `openagentix` is also the name of a full demo cluster. The bank use case has the same rule. If the cluster does not exist yet, the platform installer makes it.
 
-The platform installer replaces the release values on every run. So `install.sh` **refuses** to run it on a release that already has more than the quick start and this use case: schedules, the Telegram bridge, channels, notify, the knowledge base, memory, other agents, other tool profiles or tool servers, other gate callers, code mode on the shared tool server. It says what would be lost and changes nothing. If the cluster does not exist yet, or has no release, there is nothing to lose and it goes on.
+The platform installer replaces the release values on every run. So `install.sh` reads the release first (it needs `helm`; a missing helm stops it) and compares the user-supplied values of the release with the values it will hand over, key paths and named list entries (not values), as an allowlist. **Anything the release has that those values lack is refused and named**: schedules, the bridge, channels, notify, knowledge, memory, other agents, profiles, servers or callers, and any other key. Only helm's exact line `Error: release: not found` means there is no release; any other helm failure stops the install. The keys that the platform installer sets itself (image tags, source hashes, API server addresses) are not compared. A second run passes. A scenario file in the release that is not this use case's (the bank's `scenario.json`) is refused too, unless `STUB_SCENARIOS` gives it again. This script reads no Secret.
 
 ### Beside a full demo
 
@@ -89,6 +89,21 @@ VALUES_FILE="components/channels/demo-values.yaml components/schedules/demo-valu
 ```
 
 It merges your list into one file the way Helm does (a later file wins, a list is replaced), checks that the chart renders the same from your list and from the merged file, and composes `values-full-demo.yaml` after it with `hack/compose-values.sh`. That file joins the lists by name and never drops an entry of yours. If your list does not merge to the same render, or an entry clashes, nothing is installed. Your model, your provider keys and your scenarios are left as they are, and the agent uses `claude-haiku`. Not run on a real full demo cluster: the offline tests render the full demo list with the agent added and check that no object of the full demo is removed.
+
+The release check applies here too, against your list plus this agent: a second `--beside-full-demo` run passes, and a key that the release has and your list lacks (a file you left out) is refused and named.
+
+### Beside the bank use case
+
+The scenario file of this use case is `eval/software-org-rca.json`, not `scenario.json`, so that it can sit in the same stub model as the bank's `scenario.json`. To add this agent to a cluster where the bank is installed (the quick start plus the bank), give the bank's list, the same profile, and a directory that holds both scenario files:
+
+```sh
+mkdir -p /tmp/scn && cp examples/use-cases/bank/eval/scenario.json /tmp/scn/ && cp examples/use-cases/software-org/eval/software-org-rca.json /tmp/scn/
+PROFILE=quickstart STUB_SCENARIOS=/tmp/scn CLUSTER=<its cluster> \
+  VALUES_FILE="components/quickstart/values.yaml examples/use-cases/bank/values.yaml" \
+  examples/use-cases/software-org/install.sh --beside-full-demo
+```
+
+The bank's agent, endpoint and profile stay, and so does its scenario file. Without the bank's file in `STUB_SCENARIOS` the install refuses and names `.gateway.stubModel.scenarios.files.scenario.json`: it would drop it. The offline tests compose the bank's list with this agent and run the install twice. Not run on a cluster. The bank's own install refuses a release that holds this agent's scenario file in the same way, unless you give it again.
 
 ### Memory
 
@@ -110,7 +125,7 @@ examples/use-cases/software-org/ctl.sh analyze ghost-worker       # 5. a workloa
 
 The stub is a scripted stand-in, not a language model. Each scenario is one fixed chain of tool calls for one workload, then a templated answer that reads values from the tool results (the pod name, the reason, the exit code, the ports) and says "inconclusive" when the results are not what the scenario expects. Any other question gets the stub's built-in answer. A real model works the case from the agent instructions in `values.yaml`.
 
-Any run with these scenarios is **scripted by the stub model**, and a demo, a diary entry or a report that uses one must say so and name the file (`examples/use-cases/software-org/eval/scenario.json`). It shows the platform's controls and the tools at work. It does not show how a model behaves. A scenario copies text from the user's message into tool arguments, so only the operator who installs the platform sets it.
+Any run with these scenarios is **scripted by the stub model**, and a demo, a diary entry or a report that uses one must say so and name the file (`examples/use-cases/software-org/eval/software-org-rca.json`). It shows the platform's controls and the tools at work. It does not show how a model behaves. A scenario copies text from the user's message into tool arguments, so only the operator who installs the platform sets it.
 
 ## Evaluation
 
@@ -145,7 +160,7 @@ What the set proves and what it does not:
 
 ## What the live job showed
 
-The opt-in CI job `e2e (software-org, pod RCA)` ran on kind in GitHub Actions with the stub model playing `eval/scenario.json` (**scripted by the stub model**, not the behaviour of a model). Run 46040738787 (branch `feat/use-cases-software-org-rca`, pull request 250):
+The opt-in CI job `e2e (software-org, pod RCA)` ran on kind in GitHub Actions with the stub model playing `eval/software-org-rca.json` (**scripted by the stub model**, not the behaviour of a model). Run 46040738787 (branch `feat/use-cases-software-org-rca`, pull request 250):
 
 | Case | Result |
 |---|---|

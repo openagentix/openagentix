@@ -28,7 +28,7 @@ case "$*" in
     [ -z "${FAKE_NO_VMCP:-}" ] || exit 1
     case "$*" in *jsonpath*) printf %s "${FAKE_CODEMODE:-false}" ;; esac; exit 0 ;;
   *"get deployment stub-model"*) [ -n "${FAKE_STUB:-}" ] && exit 0 || exit 1 ;;
-  *"get configmap stub-model-scenarios"*) [ -n "${FAKE_SCENARIOS:-}" ] && { echo '{"data":{"scenario.json":"{}"}}'; exit 0; } || exit 1 ;;
+  *"get configmap stub-model-scenarios"*) [ -n "${FAKE_SCENARIOS:-}" ] && { echo '{"data":{"software-org-rca.json":"{}"}}'; exit 0; } || exit 1 ;;
   *"apply"*"-f -"*) cat >> "$FAKE_LOG/applied.yaml" ;;
   *"create serviceaccount"*"--dry-run=client -o yaml"*) echo "kind: ServiceAccount" ;;
 esac
@@ -64,7 +64,9 @@ EOF
 chmod +x "$BIN"/*
 
 run() { # run <args>... : install.sh with the fakes; stdout and stderr go to $LOG/out
-  FAKE_LOG="$LOG" KUBECTL="$BIN/kubectl" HELM="$BIN/helm" PLATFORM_INSTALL="$BIN/platform-install" PATH="$BIN:$PATH" bash "$HERE/install.sh" "$@" > "$LOG/out" 2>&1
+  # the script has no default cluster: the test names one, unless the case sets CLUSTER or KUBE_CONTEXT itself
+  local RUN_CLUSTER=${CLUSTER-}; if [ -z "${CLUSTER+x}" ] && [ -z "${KUBE_CONTEXT:-}" ]; then RUN_CLUSTER=oa-rca-demo; fi
+  FAKE_LOG="$LOG" CLUSTER="$RUN_CLUSTER" KUBECTL="$BIN/kubectl" HELM="${HELM:-$BIN/helm}" PLATFORM_INSTALL="$BIN/platform-install" PATH="$BIN:$PATH" bash "$HERE/install.sh" "$@" > "$LOG/out" 2>&1
 }
 reset() { rm -f "$LOG"/*; }
 nocalls() { [ ! -s "$LOG/platform.calls" ] && ! grep -q 'apply\|delete\|create' "$LOG/calls" 2>/dev/null; }
@@ -86,7 +88,7 @@ reset
 ANTHROPIC_API_KEY=$SECRET_KEY OPENAI_API_KEY=$SECRET_KEY FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
 check "exits 0" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
 check "the platform installer ran once, with PROFILE=quickstart" "[ \"\$(wc -l < '$LOG/platform.calls' | tr -d ' ')\" = 1 ] && grep -qx 'PROFILE=quickstart' '$LOG/platform.env'"
-check "it got STUB_SCENARIOS=eval/scenario.json (the file of this use case)" "grep -qx \"STUB_SCENARIOS=$HERE/eval/scenario.json\" '$LOG/platform.env'"
+check "it got STUB_SCENARIOS=eval/software-org-rca.json (the file of this use case)" "grep -qx \"STUB_SCENARIOS=$HERE/eval/software-org-rca.json\" '$LOG/platform.env'"
 check "no provider key reached the platform installer (the stub answers, so the scenarios apply)" "! grep -q '^HAS ' '$LOG/platform.env'"
 check "the key value is not in the output" "! grep -q '$SECRET_KEY' '$LOG/out' '$LOG/calls'"
 check "the values file it got is the composed file: it holds the agent, the profile, the quick start caller and the new caller" "grep -q 'pod-rca' '$LOG/platform.values' && grep -q 'name: rca' '$LOG/platform.values' && grep -q 'quickstart-ask' '$LOG/platform.values' && grep -q 'rca-desk' '$LOG/platform.values' && grep -q 'lookup' '$LOG/platform.values'"
@@ -130,7 +132,7 @@ FAKE_PLATFORM_RC=1 run; rc=$?
 check "a failed platform install stops the script before the use case objects" "[ $rc != 0 ] && ! grep -q 'rca-demo.yaml' '$LOG/calls'"
 reset
 FAKE_STUB=1 run --skip-platform; rc=$?
-check "a stub model without the scenarios gives a warning, not a failure" "[ $rc = 0 ] && grep -q 'WARN: the stub model has no scenario.json' '$LOG/out'"
+check "a stub model without the scenarios gives a warning, not a failure" "[ $rc = 0 ] && grep -q 'WARN: the stub model has no software-org-rca.json' '$LOG/out'"
 
 echo "# runs again, uninstall, unknown argument"
 reset
@@ -146,53 +148,103 @@ run --nope; rc=$?
 check "an unknown argument is refused" "[ $rc = 1 ] && grep -q 'unknown argument' '$LOG/out'"
 
 
-echo "# the default cluster is a cluster of its own, and a release with more than the quick start is never replaced"
+echo "# there is no default cluster, and the guards of the bank install apply (helm, the exact not-found line, the allowlist of the release, the scenario files)"
 reset
-FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
-check "with no CLUSTER and no KUBE_CONTEXT the target is kind-oa-rca-demo, not kind-openagentix (the name of a full demo cluster)" "[ $rc = 0 ] && grep -q -- '--context kind-oa-rca-demo' '$LOG/calls' && ! grep -q 'kind-openagentix' '$LOG/calls' && grep -qx 'CLUSTER=oa-rca-demo' '$LOG/platform.env'"
-check "the script says in its header that the default is a cluster of its own" "grep -q 'default oa-rca-demo' '$HERE/install.sh'"
+CLUSTER= KUBE_CONTEXT= run; rc=$?
+check "with neither CLUSTER nor KUBE_CONTEXT the script refuses: there is no default cluster, and nothing runs" "[ $rc = 1 ] && grep -q 'no default cluster' '$LOG/out' && [ ! -e '$LOG/calls' ] && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -2 "$LOG/out")"
+reset
+CLUSTER=oa-one KUBE_CONTEXT=kind-oa-two run; rc=$?
+check "CLUSTER and KUBE_CONTEXT that name different clusters are refused, and nothing runs" "[ $rc = 1 ] && grep -q 'name different clusters' '$LOG/out' && [ ! -e '$LOG/calls' ]"
+reset
+CLUSTER= KUBE_CONTEXT=kind-oa-rca-demo FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
+check "KUBE_CONTEXT alone is enough: the cluster name is taken from it" "[ $rc = 0 ] && grep -qx 'CLUSTER=oa-rca-demo' '$LOG/platform.env' && grep -qx 'KUBE_CONTEXT=kind-oa-rca-demo' '$LOG/platform.env'"
+reset
+CLUSTER=demo KUBE_CONTEXT=k3d-demo FAKE_CONTEXTS=k3d-demo FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
+check "CLUSTER=demo with KUBE_CONTEXT=k3d-demo agree (a k3d cluster is accepted)" "[ $rc = 0 ]" "rc=$rc $(tail -2 "$LOG/out")"
+reset
+HELM=/nonexistent/helm run; rc=$?
+check "a missing helm stops the install: it never reads as no release" "[ $rc = 1 ] && grep -q 'helm is required' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+reset
+FAKE_STUB=1 FAKE_SCENARIOS=1 HELM=/nonexistent/helm run --skip-platform; rc=$?
+check "--skip-platform does not need helm" "[ $rc = 0 ]"
 reset
 FAKE_CONTEXTS="" FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
 check "a cluster that does not exist yet is fine (the platform installer makes it; nothing can be lost): helm is not asked" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ] && ! grep -q '^helm get' '$LOG/calls'"
 reset
 FAKE_HELM_ERR="Error: release: not found" FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
-check "a cluster with no release is fine" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]"
+check "helm's exact line 'Error: release: not found' means no release: the install goes on" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]"
+for err in "Error: release: not found (a guess)" "Error: Kubernetes cluster unreachable: connection refused" "Error: release: not found
+Error: more"; do
+  reset
+  FAKE_HELM_ERR="$err" run; rc=$?
+  check "any other helm failure stops the install ($(printf '%s' "$err" | head -1 | cut -c1-48))" "[ $rc = 1 ] && grep -q 'cannot read the values' '$LOG/out' && [ ! -e '$LOG/platform.calls' ] && ! grep -q 'apply' '$LOG/calls'" "rc=$rc $(tail -3 "$LOG/out")"
+done
+
+# the values a run hands over, as JSON: what the release would hold after it (plus the keys the platform installer sets itself)
 reset
-FAKE_HELM_VALUES='{"agents":[{"name":"pod-rca"}],"mcp":{"profiles":[{"name":"lookup"},{"name":"rca"}],"servers":[{"name":"osv"}]},"governance":{"a2a":{"callers":[{"name":"quickstart-ask"},{"name":"rca-desk"}]}},"bridge":{"enabled":false},"knowledge":{"enabled":false}}' FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
-check "an earlier run of this use case (the quick start, this agent, nothing more) is replaced as before" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]"
+FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
+yq . "$LOG/platform.values" > "$TMP/composed-default.json"
+installer_keys='{"diagnostics":{"sourceHash":"abc","apiServerCIDRs":["172.18.0.0/24"],"image":{"tag":"dev"}},"controlPlane":{"sourceHash":"x","apiServerCIDRs":["172.18.0.0/24"]},"gateway":{"stubModel":{"sourceHash":"y","scenarios":{"files":{"software-org-rca.json":"{}"}}}}}'
+jq -c ". * $installer_keys" "$TMP/composed-default.json" > "$TMP/release-default.json"
 reset
-FAKE_HELM_ERR="Error: Kubernetes cluster unreachable: connection refused" run; rc=$?
-check "a release that cannot be read is refused, and the platform installer does not run" "[ $rc = 1 ] && grep -q 'cannot read the values' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+FAKE_HELM_VALUES="$(cat "$TMP/release-default.json")" FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
+check "a second run passes: the release holds exactly what the first run handed over, plus the keys the platform installer sets itself" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
 while IFS='|' read -r what json; do
   reset
-  FAKE_HELM_VALUES="$json" run; rc=$?
-  check "a release with $what is refused with that word, nothing is installed, nothing is applied" "[ $rc = 1 ] && grep -q 'has more than the quick start' '$LOG/out' && grep -q -i -e '$what' '$LOG/out' && [ ! -e '$LOG/platform.calls' ] && ! grep -q 'apply' '$LOG/calls'" "rc=$rc $(tail -2 "$LOG/out")"
+  FAKE_HELM_VALUES="$(jq -c ". * $json" "$TMP/release-default.json")" run; rc=$?
+  check "a release with $what beyond the composed values is refused naming the path, nothing is installed, nothing is applied" "[ $rc = 1 ] && grep -q 'has more than the quick start' '$LOG/out' && grep -qF -e '$what' '$LOG/out' && [ ! -e '$LOG/platform.calls' ] && ! grep -q 'apply' '$LOG/calls'" "rc=$rc $(tail -2 "$LOG/out")"
 done <<'LIST'
-schedules|{"schedules":[{"name":"demo-brief"}]}
-the Telegram bridge|{"bridge":{"enabled":true}}
-channels|{"channels":{"kourier":{"enabled":true}}}
-notify|{"notify":{"enabled":true}}
-the knowledge base|{"knowledge":{"enabled":true}}
-memory|{"memory":{"enabled":true}}
-agents: assistant|{"agents":[{"name":"assistant"},{"name":"pod-rca"}]}
-tool profiles: db|{"mcp":{"profiles":[{"name":"lookup"},{"name":"db"}]}}
-tool servers: fetch|{"mcp":{"servers":[{"name":"osv"},{"name":"fetch"}]}}
-gate callers: bridge|{"governance":{"a2a":{"callers":[{"name":"bridge"}]}}}
-code mode|{"mcp":{"virtual":{"codeMode":{"enabled":true}}}}
+.schedules[demo-brief].name|{"schedules":[{"name":"demo-brief"}]}
+.bridge.agent|{"bridge":{"agent":"assistant"}}
+.channels.kourier.enabled|{"channels":{"kourier":{"enabled":true}}}
+.notify.enabled|{"notify":{"enabled":true}}
+.knowledge.kb.extractModel|{"knowledge":{"kb":{"extractModel":"x"}}}
+.memory.enabled|{"memory":{"enabled":true}}
+.agents[assistant].name|{"agents":[{"name":"assistant"}]}
+.mcp.profiles[db].name|{"mcp":{"profiles":[{"name":"db"}]}}
+.mcp.servers[fetch].name|{"mcp":{"servers":[{"name":"fetch"}]}}
+.governance.a2a.callers[bridge].name|{"governance":{"a2a":{"callers":[{"name":"bridge"}]}}}
+.mcp.virtual.codeMode.tools|{"mcp":{"virtual":{"codeMode":{"tools":["x"]}}}}
+.somethingnew.x|{"somethingnew":{"x":1}}
 LIST
 reset
-FAKE_HELM_VALUES='{"schedules":[{"name":"x"}]}' run --real-model --skip-platform; rc=$?
-check "--skip-platform does not run the platform installer, so it does not need the check" "[ $rc != 1 ] || ! grep -q 'has more than' '$LOG/out'"
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"stubModel":{"scenarios":{"files":{"scenario.json":"{\"scenarios\":[{\"match\":{\"system\":\"Fernvale dispute desk agent\"}}]}"}}}}}' "$TMP/release-default.json")" run; rc=$?
+check "a scenario file of another use case (the bank's scenario.json) in the release is NOT replaced silently: refused and named" "[ $rc = 1 ] && grep -qF 'scenarios.files.scenario.json' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -2 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"stubModel":{"scenarios":{"files":{"other-case.json":"{}"}}}}}' "$TMP/release-default.json")" run; rc=$?
+check "any other scenario file of the release is refused too" "[ $rc = 1 ] && grep -qF 'scenarios.files.other-case.json' '$LOG/out'"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"stubModel":{"scenarios":{"files":{"software-org-rca.json":"an earlier copy"}}}}}' "$TMP/release-default.json")" FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
+check "an earlier copy of this use case's own scenario file is replaced without complaint" "[ $rc = 0 ]"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"stubModel":{"scenarios":{"files":{"software-org-rca.json":"an earlier copy"}}}}}' "$TMP/release-default.json")" ANTHROPIC_API_KEY=$SECRET_KEY run --real-model; rc=$?
+check "--real-model on a release that holds this use case's scenario file passes (the file goes away with the stub)" "[ $rc = 0 ]" "rc=$rc $(tail -2 "$LOG/out")"
 
 echo "# --beside-full-demo"
 FDLIST="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml"
 reset
-FAKE_HELM_VALUES='{"schedules":[{"name":"demo-brief"}],"bridge":{"enabled":true}}' CLUSTER=openagentix ANTHROPIC_API_KEY=$SECRET_KEY STUB_SCENARIOS=/tmp/mine.json VALUES_FILE="$FDLIST" FAKE_STUB=1 FAKE_SCENARIOS=1 run --beside-full-demo; rc=$?
+CLUSTER=openagentix ANTHROPIC_API_KEY=$SECRET_KEY STUB_SCENARIOS=/tmp/mine.json VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix FAKE_STUB=1 FAKE_SCENARIOS=1 run --beside-full-demo; rc=$?
 check "beside the full demo: exits 0, the platform installer runs once, on the cluster the caller named" "[ $rc = 0 ] && [ \"\$(wc -l < '$LOG/platform.calls' | tr -d ' ')\" = 1 ] && grep -qx 'CLUSTER=openagentix' '$LOG/platform.env' && grep -qx 'KUBE_CONTEXT=kind-openagentix' '$LOG/platform.env'" "rc=$rc $(tail -4 "$LOG/out")"
 check "beside the full demo: nothing is unset (the provider key and the scenarios stay as the caller gave them), and PROFILE is not forced" "grep -qx 'HAS ANTHROPIC_API_KEY' '$LOG/platform.env' && grep -qx 'STUB_SCENARIOS=/tmp/mine.json' '$LOG/platform.env' && grep -qx 'PROFILE=<unset>' '$LOG/platform.env'"
 check "beside the full demo: the values file is the composed one: the caller's lists are all in it (the schedule, the bridge, the memory caller) with the new agent and caller added" "grep -q 'pod-rca' '$LOG/platform.values' && grep -q 'rca-desk' '$LOG/platform.values' && grep -q 'memory-canary' '$LOG/platform.values' && grep -q 'demo-brief' '$LOG/platform.values' && grep -q 'claude-haiku' '$LOG/platform.values' && ! grep -q 'quickstart-ask' '$LOG/platform.values'"
-check "beside the full demo: the release is not refused for having more than the quick start, and no release check is made" "! grep -q 'has more than' '$LOG/out' && ! grep -q '^helm get' '$LOG/calls'"
-check "beside the full demo: both renders were asked of helm (your list and the merged file), and the model line says it is your model" "[ \"\$(grep -c '^helm template' '$LOG/calls')\" = 2 ] && grep -q 'beside the full demo: the agent uses the model of your install' '$LOG/out'"
+check "beside the full demo: the release is read (helm get values), and both renders were asked of helm (your list and the merged file)" "grep -q '^helm get values' '$LOG/calls' && [ \"\$(grep -c '^helm template' '$LOG/calls')\" = 2 ] && grep -q 'beside your install: the agent uses the model of your install' '$LOG/out'"
+yq . "$LOG/platform.values" > "$TMP/composed-beside.json"
+jq -c ". * $installer_keys" "$TMP/composed-beside.json" > "$TMP/release-beside.json"
+reset
+FAKE_HELM_VALUES="$(cat "$TMP/release-beside.json")" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a SECOND --beside-full-demo run passes: the release holds your list plus this agent, and nothing else" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"somethingnew":{"x":1},"mcp":{"profiles":[{"name":"left-out-of-your-list"}]}}' "$TMP/release-beside.json")" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "beside the full demo: a key the release has and your list plus this agent lack (a file left out of the list) is refused and named, nothing is installed" "[ $rc = 1 ] && grep -qF '.somethingnew.x' '$LOG/out' && grep -qF '.mcp.profiles[left-out-of-your-list].name' '$LOG/out' && grep -q 'VALUES_FILE list' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -2 "$LOG/out")"
+reset
+FAKE_HELM_ERR="Error: Kubernetes cluster unreachable" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "beside the full demo: a release that cannot be read stops the install" "[ $rc = 1 ] && grep -q 'cannot read the values' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+reset
+CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS="" run --beside-full-demo; rc=$?
+check "beside the full demo needs the cluster of your install to exist" "[ $rc = 1 ] && grep -q 'to exist' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+reset
+HELM=/nonexistent/helm CLUSTER=openagentix VALUES_FILE="$FDLIST" run --beside-full-demo; rc=$?
+check "beside the full demo without helm stops" "[ $rc = 1 ] && grep -q 'helm is required' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
 reset
 CLUSTER=openagentix run --beside-full-demo; rc=$?
 check "beside the full demo without VALUES_FILE is refused (a missing list would drop what it set)" "[ $rc = 1 ] && grep -q 'needs VALUES_FILE' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
@@ -203,18 +255,39 @@ reset
 CLUSTER=openagentix VALUES_FILE="$FDLIST" run --beside-full-demo --skip-platform; rc=$?
 check "beside the full demo with --skip-platform is refused" "[ $rc = 1 ] && grep -q 'do not combine' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
 reset
-CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_HELM_DIFF=1 run --beside-full-demo; rc=$?
+CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix FAKE_HELM_DIFF=1 run --beside-full-demo; rc=$?
 check "beside the full demo: when the merge of the caller's list does not render the same as the list, nothing is installed" "[ $rc = 1 ] && grep -q 'does not merge into one file that renders the same' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -2 "$LOG/out")"
 reset
 printf 'agents:\n  - name: pod-rca\n    model: other\n    systemPrompt: x\n    tools: []\n' > "$TMP/clash.yaml"
-CLUSTER=openagentix VALUES_FILE="$FDLIST $TMP/clash.yaml" run --beside-full-demo; rc=$?
+CLUSTER=openagentix VALUES_FILE="$FDLIST $TMP/clash.yaml" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
 check "beside the full demo: a name that clashes (an agent pod-rca of other content) makes compose refuse, and nothing is installed" "[ $rc = 1 ] && grep -q 'did not compose' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
 reset
-CLUSTER=openagentix VALUES_FILE="components/nope.yaml" run --beside-full-demo; rc=$?
+CLUSTER=openagentix VALUES_FILE="components/nope.yaml" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
 check "beside the full demo: a file of the list that cannot be read is refused" "[ $rc = 1 ] && grep -q 'cannot read' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
 reset
 KUBE_CONTEXT=gke_proj_zone_prod VALUES_FILE="$FDLIST" run --beside-full-demo; rc=$?
 check "beside the full demo still refuses a context that is not kind or k3d" "[ $rc = 1 ] && grep -q 'local kind or k3d' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+
+echo "# beside an installed bank: the bank is composed, never dropped"
+ROOT_UC="$HERE/../bank"
+mkdir -p "$TMP/scn"
+cp "$HERE/../bank/eval/scenario.json" "$TMP/scn/scenario.json"; cp "$HERE/eval/software-org-rca.json" "$TMP/scn/software-org-rca.json"
+BANKLIST="components/quickstart/values.yaml examples/use-cases/bank/values.yaml"
+reset
+PROFILE=quickstart STUB_SCENARIOS="$TMP/scn" CLUSTER=oa-both VALUES_FILE="$BANKLIST" FAKE_CONTEXTS=kind-oa-both run --beside-full-demo; rc=$?
+check "beside an installed bank (its own values list, the quick start profile, both scenario files in one directory): exits 0, one platform install" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]" "rc=$rc $(tail -4 "$LOG/out")"
+check "the composed values hold the bank (its agent, its endpoint, its profile) AND this agent, and the quick start caller once" "grep -q 'dispute-agent' '$LOG/platform.values' && grep -q 'pod-rca' '$LOG/platform.values' && grep -q 'disputes-desk' '$LOG/platform.values' && grep -q 'rca-desk' '$LOG/platform.values' && [ \"\$(grep -c '^      - name: quickstart-ask' '$LOG/platform.values')\" = 1 ]"
+check "the platform installer got PROFILE=quickstart and the directory with both scenario files, as the caller gave them" "grep -qx 'PROFILE=quickstart' '$LOG/platform.env' && grep -qx 'STUB_SCENARIOS=$TMP/scn' '$LOG/platform.env'"
+yq . "$LOG/platform.values" > "$TMP/composed-both.json"
+reset
+FAKE_HELM_VALUES="$(jq -c ". * $installer_keys * {\"gateway\":{\"stubModel\":{\"scenarios\":{\"files\":{\"scenario.json\":\"{}\"}}}}}" "$TMP/composed-both.json")" PROFILE=quickstart STUB_SCENARIOS="$TMP/scn" CLUSTER=oa-both VALUES_FILE="$BANKLIST" FAKE_CONTEXTS=kind-oa-both run --beside-full-demo; rc=$?
+check "a second run beside the bank passes: the release holds the bank's scenario.json, and STUB_SCENARIOS gives it again" "[ $rc = 0 ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(jq -c ". * $installer_keys * {\"gateway\":{\"stubModel\":{\"scenarios\":{\"files\":{\"scenario.json\":\"{}\"}}}}}" "$TMP/composed-both.json")" PROFILE=quickstart STUB_SCENARIOS="$HERE/eval/software-org-rca.json" CLUSTER=oa-both VALUES_FILE="$BANKLIST" FAKE_CONTEXTS=kind-oa-both run --beside-full-demo; rc=$?
+check "beside the bank with only this use case's scenario file: the bank's scenario.json would be dropped, so it is refused and named" "[ $rc = 1 ] && grep -qF 'scenarios.files.scenario.json' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(jq -c ". * $installer_keys" "$TMP/composed-both.json")" CLUSTER=oa-both FAKE_CONTEXTS=kind-oa-both run; rc=$?
+check "the plain install (quick start plus this use case only) on a release that holds the bank is refused: dispute-agent is named" "[ $rc = 1 ] && grep -qF '.agents[dispute-agent]' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
 
 echo "# ctl.sh"
 cat > "$BIN/ask" <<'EOF'
@@ -223,7 +296,7 @@ echo "ask $1 :: $2 :: SA=${ASK_SA-} USER=${ASK_USER-} CTX=${KUBE_CONTEXT-}" >> "
 echo "an answer"
 EOF
 chmod +x "$BIN/ask"
-ctl() { FAKE_LOG="$LOG" KUBECTL="$BIN/kubectl" ASK="$BIN/ask" PATH="$BIN:$PATH" bash "$HERE/ctl.sh" "$@" > "$LOG/out" 2>&1; }
+ctl() { CLUSTER="${CLUSTER-oa-rca-demo}" FAKE_LOG="$LOG" KUBECTL="$BIN/kubectl" ASK="$BIN/ask" PATH="$BIN:$PATH" bash "$HERE/ctl.sh" "$@" > "$LOG/out" 2>&1; }
 reset
 ctl analyze crash-start; rc=$?
 check "analyze asks the agent pod-rca as the caller rca-desk and as an analyst, never as another desk" "[ $rc = 0 ] && grep -q 'ask pod-rca :: Pod root-cause analysis for workload crash-start in namespace rca-demo. :: SA=openagentix-system/rca-desk USER=sre:analyst-1' '$LOG/asks'" "rc=$rc $(cat "$LOG/asks" 2>/dev/null)"
@@ -231,8 +304,14 @@ reset
 ctl analyze not-a-workload; rc=$?
 check "analyze refuses a name that is not a workload of the demo" "[ $rc = 1 ] && [ ! -e '$LOG/asks' ]"
 reset
-KUBE_CONTEXT=prod ctl analyze crash-start; rc=$?
+CLUSTER= KUBE_CONTEXT=prod ctl analyze crash-start; rc=$?
 check "ctl.sh refuses a context that is not kind or k3d" "[ $rc = 1 ] && [ ! -e '$LOG/asks' ]"
+reset
+CLUSTER= KUBE_CONTEXT= ctl pods; rc=$?
+check "ctl.sh has no default cluster: with neither CLUSTER nor KUBE_CONTEXT it refuses and calls nothing" "[ $rc = 1 ] && grep -q 'no default cluster' '$LOG/out' && [ ! -e '$LOG/calls' ]"
+reset
+CLUSTER=a KUBE_CONTEXT=kind-b ctl pods; rc=$?
+check "ctl.sh refuses a CLUSTER and a KUBE_CONTEXT that name different clusters" "[ $rc = 1 ] && grep -q 'different clusters' '$LOG/out' && [ ! -e '$LOG/calls' ]"
 reset
 ctl pods; rc=$?
 check "pods reads the namespace rca-demo and nothing else" "[ $rc = 0 ] && grep -q 'get pods -n rca-demo' '$LOG/calls' && [ \"\$(grep -c 'kubectl' '$LOG/calls')\" = 1 ]"

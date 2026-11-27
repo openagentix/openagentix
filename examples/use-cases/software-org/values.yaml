@@ -8,7 +8,7 @@
 # is why `mcp.profiles` restates `lookup` and `callers` restates `quickstart-ask`):
 #
 #   PROFILE=quickstart VALUES_FILE=examples/use-cases/software-org/values.yaml \
-#     STUB_SCENARIOS=examples/use-cases/software-org/eval/scenario.json ./install.sh
+#     STUB_SCENARIOS=examples/use-cases/software-org/eval/software-org-rca.json ./install.sh
 #   examples/use-cases/software-org/install.sh --skip-platform      # the rca-demo workloads and the caller
 #
 # What this file adds, and nothing more:

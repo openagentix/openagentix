@@ -20,7 +20,7 @@ diag_check_vmcps() {
       j=$($k get virtualmcpserver "$name" -n "$ns" -o json 2>/dev/null) || j='{}'
       bad=$(jq -r '[.status.conditions[]?|select((.type|startswith("DiscoveredAuthConfig-")) and .status=="False")|.type+" ("+(.reason//"no reason")+")"]|join(", ")' <<<"$j" 2>/dev/null)
       if [ -n "$bad" ]; then
-        echo "ERROR: the vMCP $name dropped a backend of the diagnostics group: $bad. ToolHive keeps such a vMCP Ready with fewer tools. Check the entry's auth: the type bearerToken is not supported by ToolHive 0.67.1 (the chart sends the bearer value with headerForward)." >&2
+        echo "ERROR: the vMCP $name dropped a backend of ${DIAG_CHECK_WHAT:-the diagnostics group}: $bad. ToolHive keeps such a vMCP Ready with fewer tools. Check the entry's auth: the type bearerToken is not supported by ToolHive 0.67.1 (the chart sends the bearer value with headerForward)." >&2
         return 1
       fi
       seen=$(jq '[.status.conditions[]?|select(.type|startswith("DiscoveredAuthConfig-"))]|length' <<<"$j" 2>/dev/null || echo 0)

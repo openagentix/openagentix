@@ -76,6 +76,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/uninstall-test.sh
 	hack/ci/diagnostics-bearer-test.sh
 	hack/ci/diagnostics-check-test.sh
+	hack/ci/endpoints-check-test.sh
 	hack/ci/recovery-test-test.sh
 	hack/ci/upgrade-test-test.sh
 	hack/ci/lifecycle-test-test.sh
@@ -84,6 +85,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/docs/tests/run.sh
 	examples/use-cases/bank/tests/install-test.sh
 	examples/use-cases/software-org/tests/install-test.sh
+	examples/use-cases/bank/tests/live-guard-test.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'
 

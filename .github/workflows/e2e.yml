@@ -16,7 +16,16 @@ on:
       - hack/ci/diagnostics-live.sh
       - hack/ci/diagnostics-ci-values.yaml
       - hack/ci/rca-live.sh
+      - hack/ci/rca-audit-tools.jq
       - examples/use-cases/software-org/**
+      - hack/ci/endpoints-live.sh
+      - hack/ci/endpoints-ci-setup.sh
+      - hack/ci/endpoints-ci-values.yaml
+      - hack/ci/endpoints-ci/**
+      - hack/ci/bank-live.sh
+      - hack/ci/bank-audit-tools.jq
+      - examples/use-cases/bank/**
+      - examples/use-cases/records/**
       - hack/ci/phases.sh
       - hack/demo.sh
       - hack/ask.sh
@@ -28,6 +37,14 @@ on:
     inputs:
       diagnostics:
         description: 'Run the live check of cluster-read (ADR 0025, slice 4) instead of the profiles: the quick start plus hack/ci/diagnostics-ci-values.yaml'
+        type: boolean
+        default: false
+      endpoints:
+        description: 'Run the live check of mcp.endpoints (ADR 0026, slice 2) instead of the profiles: two tiny endpoints, then the quick start plus hack/ci/endpoints-ci-values.yaml'
+        type: boolean
+        default: false
+      bank:
+        description: 'Run the live proof of the bank use case on mcp.endpoints (ADR 0026, slice 5, issue #229) instead of the profiles: the quick start plus the use case, the stub model with its scenarios, real agent sessions through the A2A gate, tools/oa-eval, the approver path'
         type: boolean
         default: false
       rca:
@@ -45,7 +62,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || !(inputs.diagnostics || inputs.rca) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -172,7 +189,7 @@ jobs:
   # slice 3) and what ToolHive loaded for the dedicated profile (the eight tools) and for the shared vMCP (none). See hack/ci/diagnostics-ci-values.yaml.
   e2e-diagnostics:
     name: e2e (diagnostics, cluster-read)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics && !inputs.rca }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -237,7 +254,199 @@ jobs:
           name: kind-logs-diagnostics
           path: kind-logs
           retention-days: 7
-# Opt-in (workflow_dispatch with the input `rca`; RCA_LIVE=1 for the script): the pod root-cause agent of the software organisation use case through a REAL
+
+  # Opt-in (workflow_dispatch with the input `endpoints`; ENDPOINTS=1 for the scripts): mcp.endpoints on a real cluster (ADR 0026, slice 2). Two tiny MCP endpoints
+  # (hack/ci/endpoints-ci/echo-mcp.py) run in their own namespace BEFORE the platform install, as the ADR says; each takes a header value from a Secret. The job
+  # settles that a profile vMCP on the group of the endpoints lists exactly its tools through a real tools/list, that the shared vMCP lists none and refuses a call,
+  # that the endpoint refuses a wrong header, that no log has the value, that a profile offers tools only (no resource or prompt of a backend it does not list),
+  # and records what the vMCP does with `overrides` and with a redirect. See hack/ci/endpoints-ci-values.yaml.
+  e2e-endpoints:
+    name: e2e (endpoints, mcp.endpoints)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoints }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: cluster, then the endpoints (their namespace and workload come before the platform values)
+        env:
+          ENDPOINTS: "1"
+        run: |
+          set -o pipefail
+          kind create cluster --name openagentix --config hack/kind-config.yaml
+          hack/ci/endpoints-ci-setup.sh 2>&1 | tee setup.log
+      - name: install (PROFILE=quickstart plus the endpoints values, no key, no token)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/endpoints-ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: live check of mcp.endpoints
+        env:
+          ENDPOINTS: "1"
+        run: |
+          set -o pipefail
+          hack/ci/endpoints-live.sh 2>&1 | tee endpoints-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## mcp.endpoints on a real cluster (ADR 0026, slice 2)"
+            echo '```'
+            cat endpoints-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+            echo "### install.sh, endpoint lines"
+            echo '```'
+            grep -iE 'endpoint|DiscoveredAuthConfig|apiserver|API server' install.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "--- the endpoints and their pods (their log holds no secret)"
+          kubectl get pods,svc,networkpolicy -n endpoint-ci || true
+          kubectl logs -n endpoint-ci deploy/echo --tail=60 || true
+          echo "--- the vMCPs, the groups, the entries and their conditions"
+          kubectl get virtualmcpserver,mcpserverentry,mcpgroup -n mcp-tools || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}],backends:[.status.discoveredBackends[]?|{name,status}]}' || true
+          kubectl get networkpolicy -n mcp-tools -o json | jq -c '.items[]|select(.metadata.name|test("egress"))|{name:.metadata.name,egress:(.spec.egress|length)}' || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs-endpoints
+          path: kind-logs
+          retention-days: 7
+
+  # Opt-in (workflow_dispatch with the input `bank`; BANK_LIVE=1 for the script): the bank use case on mcp.endpoints through REAL agent sessions (ADR 0026, slice 5,
+  # issue #229). examples/use-cases/bank/install.sh makes a kind cluster of its own, starts the records service and its Secrets BEFORE the platform values (as
+  # the ADR says), installs the quick start with the use case values and the stub model scenarios (no key, no token), and loads the knowledge base. It runs
+  # twice, to show that the scenarios stay. hack/ci/bank-live.sh asks the dispute agent about the cases through the A2A gate, runs tools/oa-eval, walks the approver
+  # path with ctl.sh, and checks the isolation of the endpoint. The run is scripted by the stub model: it proves the wiring, not a model.
+  e2e-bank:
+    name: e2e (bank, mcp.endpoints)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bank }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: tools/oa-eval/go.mod
+          cache: true
+          cache-dependency-path: tools/oa-eval/go.sum
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install (the records service first, then the quick start plus the bank values, the stub model with the scenarios, no key, no token)
+        env:
+          CLUSTER: oa-bank-demo
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          examples/use-cases/bank/install.sh 2>&1 | tee install.log
+      - name: install again with the same values (the scenarios and the credential stay)
+        env:
+          CLUSTER: oa-bank-demo
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          examples/use-cases/bank/install.sh 2>&1 | tee install2.log
+          grep -q 'Secrets exist' install2.log
+          ! grep -q 'created the Secrets' install2.log
+      - name: live check of the bank use case
+        env:
+          BANK_LIVE: "1"
+          BANK_OUT: bank-out
+          BANK_INSTALL_LOG: install.log
+          BANK_INSTALL_LOG2: install2.log
+          BANK_LIVE_LOG: bank-live.log
+        run: |
+          set -o pipefail
+          hack/ci/bank-live.sh 2>&1 | tee bank-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Bank use case on mcp.endpoints, real agent sessions (issue #229, ADR 0026 slice 5)"
+            echo "The stub model played examples/use-cases/bank/eval/scenario.json: the run is SCRIPTED, not the behaviour of a model."
+            echo '```'
+            cat bank-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "--- the records service (its log holds no secret value)"
+          kubectl get pods,svc,networkpolicy -n fernvale-records || true
+          kubectl logs -n fernvale-records deploy/records --tail=80 | cut -c1-400 || true
+          echo "--- the agent and what kagent says about its tool server"
+          kubectl get agents.api.kagent.dev dispute-agent -n kagent -o json | jq -c '.status' || true
+          kubectl get remotemcpserver -n kagent -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason,message}],tools:[.status.discoveredTools[]?.name]}' || true
+          echo "--- the vMCPs, the groups, the entries and their conditions"
+          kubectl get virtualmcpserver,mcpserverentry,mcpgroup -n mcp-tools || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}],backends:[.status.discoveredBackends[]?|{name,status}]}' || true
+          kubectl logs -n mcp-tools -l app=virtualmcpserver,toolhive-name=tools-disputes --all-containers --tail=150 | cut -c1-500 || true
+          kubectl get networkpolicy -n mcp-tools -o json | jq -c '.items[]|select(.metadata.name|test("egress"))|{name:.metadata.name,egress:(.spec.egress|length)}' || true
+          echo "--- kagent, the stub model and the gate"
+          kubectl logs -n kagent deploy/kagent-controller --tail=150 | cut -c1-500 || true
+          for p in $(kubectl get pods -n kagent -o name 2>/dev/null | grep -v kagent-controller); do echo "--- $p"; kubectl logs -n kagent "$p" --all-containers --tail=60 | cut -c1-500 || true; done
+          kubectl logs -n agentgateway-system deploy/stub-model --tail=60 | cut -c1-300 || true
+          kubectl logs -n openagentix-gateway -l app=a2a-gate --tail=60 | cut -c1-300 || true
+          kind export logs ./kind-logs --name oa-bank-demo || true
+      - name: scan the files that are uploaded for the header value and the approver token
+        if: always()
+        run: |
+          # The values are read from the cluster and given to grep through a process substitution: they are never written to a file. A file that holds one is
+          # removed from the upload and the job fails. When the values cannot be read, none of the bank files is uploaded (the install logs, the live log,
+          # the report and audit file, the cluster logs), because nothing can be scanned.
+          LEAK=0
+          HV=$(kubectl get secret -n mcp-tools records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
+          AT=$(kubectl get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
+          if [ -n "$HV" ] && [ -n "$AT" ]; then
+            for f in kind-logs bank-out install.log install2.log bank-live.log; do
+              [ -e "$f" ] || continue
+              if grep -rlF -f <(printf '%s\n%s\n' "${HV#Bearer }" "$AT") "$f" >/dev/null 2>&1; then
+                echo "a secret value is in $f: it is removed from the upload"; rm -rf "$f"; LEAK=1
+              fi
+            done
+          else
+            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log; LEAK=1
+          fi
+          unset HV AT
+          [ "$LEAK" = 0 ]
+      - name: upload the report, the audit file and the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bank-live
+          path: |
+            bank-out/report.json
+            bank-out/audit.jsonl
+            bank-out/eval.out
+            bank-live.log
+            install.log
+            install2.log
+            kind-logs
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Opt-in (workflow_dispatch with the input `rca`; RCA_LIVE=1 for the script): the pod root-cause agent of the software organisation use case through a REAL
   # agent session (issue #229). examples/use-cases/software-org/install.sh installs the quick start with the use case values and the stub model scenarios (no
   # key, no token), applies the six broken workloads, and hack/ci/rca-live.sh asks the agent about each case through the A2A gate, runs tools/oa-eval, and
   # checks the audit lines and the logs for the planted canaries. It also settles what happens when a chart agent on a diagnostics profile calls a tool (the
@@ -263,6 +472,7 @@ jobs:
       - name: install (the quick start plus the software-org values, the stub model with the scenarios, no key, no token)
         env:
           AGENT_WAIT: 300s
+          CLUSTER: oa-rca-demo   # the script has no default cluster
         run: |
           set -o pipefail
           examples/use-cases/software-org/install.sh 2>&1 | tee install.log
@@ -278,7 +488,7 @@ jobs:
         run: |
           {
             echo "## Pod root-cause agent, a real agent session (software-org use case, issue #229)"
-            echo "The stub model played examples/use-cases/software-org/eval/scenario.json: the run is SCRIPTED, not the behaviour of a model."
+            echo "The stub model played examples/use-cases/software-org/eval/software-org-rca.json: the run is SCRIPTED, not the behaviour of a model."
             echo '```'
             cat rca-live.log 2>/dev/null || echo "the live check did not run"
             echo '```'
@@ -307,6 +517,9 @@ jobs:
           kubectl logs -n agentgateway-system deploy/stub-model --tail=60 | cut -c1-300 || true
           kubectl logs -n openagentix-gateway -l app=a2a-gate --tail=60 | cut -c1-300 || true
           kind export logs ./kind-logs --name oa-rca-demo || true
+      - name: scan what is about to be uploaded for the planted values
+        if: always()
+        run: hack/ci/rca-upload-scan.sh rca-out rca-live.log install.log --platform-logs kind-logs
       - name: upload the report, the audit file and the logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

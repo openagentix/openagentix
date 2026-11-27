@@ -1,23 +1,30 @@
-# Bank use case (Fernvale Bank dispute and fraud-claim case agent), offline mode: chart values only, existing values only.
-# Use it beside the quick start. VALUES_FILE comes after the profile, so maps below are merged into the quick start values and the
-# lists below REPLACE the quick start lists (Helm replaces lists), which is why `callers` restates `quickstart-ask`:
+# Bank use case (Fernvale Bank dispute and fraud-claim case agent), offline mode. Chart values only, and only existing ones (ADR 0026).
+# The records service is NOT a chart object: it runs as its own Deployment in its own namespace and joins the platform through
+# `mcp.endpoints` (own tool group `disputes`, a header credential from a Secret), and the dispute agent reaches it through the tool profile
+# `disputes`, which lists only the records tools it needs and the knowledge base tools. The shared tool server never offers the records tools.
+#
+# Use examples/use-cases/bank/install.sh. It starts the records service first (the endpoint's namespace and the two Secrets must exist before
+# these values are applied), then runs the platform installer with this file composed with the quick start (hack/compose-values.sh):
+#
+#   CLUSTER=oa-bank-demo examples/use-cases/bank/install.sh                     # its own kind cluster: the quick start plus this use case, stub model
+#   VALUES_FILE="<the list you installed with>" CLUSTER=<its cluster> examples/use-cases/bank/install.sh --beside-full-demo
+#                                                                               # adds the agent to a full demo install (values-full-demo.yaml)
+#
+# By hand (VALUES_FILE comes after the profile, so maps below merge into the quick start values and the lists below REPLACE the quick start
+# lists (Helm replaces lists), which is why `mcp.profiles` restates `lookup` and `callers` restates `quickstart-ask`; the records service and
+# its Secrets must exist first, and controlPlane.apiServerCIDRs must be set, which install.sh finds):
 #
 #   PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh
-#   examples/use-cases/bank/install.sh          # records service, knowledge base, graph facts (README, "Install")
 #
 # What this file adds, and nothing more:
 #   - the knowledge base and its graph ON (the quick start has them off), with the graph extraction pointed at the quick start model;
-#   - one chart agent, `dispute-agent` (only chart agents can be started by a schedule or a caller rule today);
+#   - the endpoint `records` in its own tool group `disputes`, and the tool profile `disputes` that lists only what the agent needs;
+#   - one chart agent, `dispute-agent`, on that profile (only chart agents can be started by a schedule or a caller rule today);
 #   - one schedule, the deadline sweep, suspended;
 #   - one caller rule for the disputes desk.
-# What it cannot add with existing values, and why, is in the README, "What could not be wired".
-#
-# QUICK START ONLY. Do not use this file with the full demo, or with any install where another agent uses the shared tool server
-# (the vMCP `tools`) or where that server has code mode on. The records tools join the shared tool server, nothing there limits who may
-# call them, and a script run in code mode (the full demo's `assistant` agent has it) could call the write tools. install.sh checks this
-# and refuses. A tool profile would fix it; the chart cannot express one for this server yet (README, "What could not be wired", item 1).
-# The existing value `mcp.virtual.incomingAuth.toolAccess` cannot do it: it keys on the atespace, which is the namespace `kagent` for
-# every agent, not on the single agent.
+# The records tools are not on the shared tool server, so another agent (the full demo's `assistant`, which has code mode) cannot call them:
+# the group `disputes` is referenced by the profile's tool server only. Every tool server (vMCP) can still read Secrets in the tools namespace
+# through the API (ADR 0026, A3): the header Secret is as safe as that namespace.
 #
 # Prompt clash: with `knowledge: true` the chart appends the knowledge base prompt (for questions about OpenAgentix itself) to the
 # prompt below. The two do not conflict on the dispute steps, but a real model may mix them; watch for it in the live runs.
@@ -31,10 +38,35 @@ knowledge:
       # documents, but the kb still starts its extraction worker with this model name when documents are ingested.
       extractModel: quickstart-model
 
+mcp:
+  endpoints:
+    - name: records
+      url: http://records.fernvale-records.svc.cluster.local:8080/mcp
+      group: disputes                 # a tool group of its own: the shared tool server does not reference it
+      auth:
+        header: {name: Authorization, secret: {name: records-mcp-auth, key: value}}   # the Secret is made by install.sh in the tools namespace
+      ingress:
+        podSelector: {app: records}
+        port: 8080
+  # A list replaces the quick start list, so `lookup` is stated again exactly as components/quickstart/values.yaml has it (a test compares them).
+  profiles:
+    - name: lookup
+      codeMode: false
+      tools:
+        osv: [query_vulnerability]
+    - name: disputes
+      codeMode: false
+      tools:
+        records: [get_case, list_open_cases, list_transactions, get_card_status, get_merchant_history, find_linked_cases,
+                  list_fired_timers, attach_evidence, set_route, set_case_status, draft_letter, draft_chargeback, set_timer,
+                  request_approval, get_approval]
+        knowledge: [kb_search, kb_get_document, kb_list_collections, kb_graph_search, kb_graph_entity, kb_graph_paths]
+
 agents:
   - name: dispute-agent
     description: Works a card dispute case from intake to a decision that waits for approval
     model: quickstart-model
+    toolProfile: disputes
     systemPrompt: |
       You are the Fernvale dispute desk agent. You work card dispute cases for Fernvale Bank, a fictional bank. All data is synthetic.
 
@@ -79,7 +111,7 @@ agents:
           - records_set_timer
           - records_request_approval
           - records_get_approval
-    knowledge: true            # adds the knowledge base tools and, with the graph on, the three graph tools
+    knowledge: true            # adds the knowledge base tools and, with the graph on, the three graph tools (as knowledge-disputes_..., the mirror of the group)
     # No memory, no notify, no egress: the agent reaches the model gateway and its tool path, and nothing else.
 
 schedules:

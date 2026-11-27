@@ -235,7 +235,7 @@ func rcaStartStub(t *testing.T, bin string) string {
 	}
 	addr := ln.Addr().String()
 	_ = ln.Close()
-	abs, _ := filepath.Abs(filepath.Join(rcaDir, "eval/scenario.json"))
+	abs, _ := filepath.Abs(filepath.Join(rcaDir, "eval/software-org-rca.json"))
 	var logs bytes.Buffer
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(), "STUB_MODEL_ADDR="+addr, "STUB_MODEL_SCENARIOS="+abs)

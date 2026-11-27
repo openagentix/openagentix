@@ -60,8 +60,7 @@ made the proposal (with their own token) cannot decide it.
 | Audit has no text | The audit entry has no field for text. Values are cut to a safe alphabet and 64 characters |
 | Least privilege | No outbound network, no secret read, no Kubernetes API, non-root, read-only root file system apart from `/data` |
 
-The MCP endpoint has no login of its own, like the notify service. The tool gateway in front of it authenticates
-agents, and a network policy (a later slice) must keep everyone else out.
+The MCP endpoint has one shared credential: the whole `Authorization` header value (`Bearer <token>`, at least 32 token characters), read on every request from the file named by `RECORDS_MCP_TOKEN_FILE`. The tool gateway sends the same value from a Secret (`mcp.endpoints`, ADR 0026), and a network policy keeps other pods out. A call without the exact value gets 401. The value is compared in constant time and is in no log line, error or answer. Only `GET /healthz` and `GET /readyz` are open. A file that goes bad later refuses every call. The service **does not start** without the file; for a test only, `RECORDS_MCP_INSECURE_NO_AUTH=true` opens the port (it is logged, and refused together with a token file). The value says nothing about which agent called: the service cannot tell agents apart, and what an agent may do is what its tool profile lists.
 
 The loopback rule looks only at the connection's source address. It never reads `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, and a test sends them from a remote address to prove it. **Chart note:** a sidecar in the same pod that forwards traffic to `127.0.0.1:8081` (a mesh proxy, or a ToolHive proxy run as a sidecar) would make every remote caller look like loopback. Do not run one in front of port 8081, or move REST to a Unix socket. A test pins the limit that a manager can decide a proposal that came from loopback without a token.
 
@@ -76,7 +75,7 @@ agent. Only the decision routes and `/audit` need an approver token.
 
 ```sh
 make test                                   # go test ./... -race -count=1
-make build && RECORDS_DATA_DIR=$(mktemp -d) bin/records
+make build && RECORDS_DATA_DIR=$(mktemp -d) RECORDS_MCP_INSECURE_NO_AUTH=true bin/records   # a local try only; a cluster uses RECORDS_MCP_TOKEN_FILE
 ```
 
 Settings (environment):
@@ -86,6 +85,8 @@ Settings (environment):
 | `RECORDS_DOMAIN` | the build default, `bank` | `bank` or `equipment`. Build the image with `--build-arg DOMAIN=equipment` to change the default |
 | `RECORDS_DATA_DIR` | `/data` | Where `records.db` lives |
 | `RECORDS_MCP_ADDR` | `:8080` | MCP and health |
+| `RECORDS_MCP_TOKEN_FILE` | none, required | A file that holds the header value `Bearer <token>`. Without it the service does not start, unless the next value is set |
+| `RECORDS_MCP_INSECURE_NO_AUTH` | none | `true` opens the MCP port with no credential. For tests only; refused together with a token file |
 | `RECORDS_REST_ADDR` | `127.0.0.1:8081` | REST and health. Set `:8081` only if you also add a network policy |
 | `RECORDS_APPROVERS_FILE` | none | JSON array of `{id, role, token_sha256}`. Without it nobody can approve |
 

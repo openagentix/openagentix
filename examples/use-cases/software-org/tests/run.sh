@@ -16,7 +16,7 @@ yq --version 2>&1 | grep -q '^yq 3\.' || { echo "ERROR: yq must be the Python wr
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 QS="$ROOT/components/quickstart/values.yaml"
 VALS="$HERE/values.yaml"
-SC="$HERE/eval/scenario.json"
+SC="$HERE/eval/software-org-rca.json"
 CS="$HERE/eval/cases.yaml"
 M="$HERE/manifests/rca-demo.yaml"
 ARGS=(--set diagnostics.allowAnyApiServerAddress=true)   # the installer finds the API server addresses; a render has none
@@ -223,11 +223,11 @@ for c in json.load(open(sys.argv[2]))['cases']:
 print(bad) if bad else None
 sys.exit(1 if bad or len(suffixes) != 6 else 0)
 PY"
-check "the random parts of the planted values are in no other file of the use case (only the manifest and the evaluation set)" "! grep -rEq '7f3a91c2|41d8be07|c09e5a36|5e2b7d90|a3c84f16|d71e0b53|cmNhY2FuYXJ5LWI2NC1h' '$HERE/README.md' '$HERE/values.yaml' '$HERE/values-full-demo.yaml' '$HERE/eval/scenario.json' '$HERE/install.sh' '$HERE/ctl.sh'"
+check "the random parts of the planted values are in no other file of the use case (only the manifest and the evaluation set)" "! grep -rEq '7f3a91c2|41d8be07|c09e5a36|5e2b7d90|a3c84f16|d71e0b53|cmNhY2FuYXJ5LWI2NC1h' '$HERE/README.md' '$HERE/values.yaml' '$HERE/values-full-demo.yaml' '$HERE/eval/software-org-rca.json' '$HERE/install.sh' '$HERE/ctl.sh'"
 
 echo "# the README and plain English"
 check "the README has a live proof checklist; a ticked item names the run that showed it, and what is not proven is stated" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[[ x]\\]' '$HERE/README.md')\" -ge 10 ] && ! grep '^- \\[x\\]' '$HERE/README.md' | grep -qv 'run [0-9]\\{8,\\}' && grep -q 'What is not proven' '$HERE/README.md'"
-check "the README says a run with the scenarios is scripted by the stub model and names the file" "grep -qi 'scripted' '$HERE/README.md' && grep -q 'examples/use-cases/software-org/eval/scenario.json' '$HERE/README.md'"
+check "the README says a run with the scenarios is scripted by the stub model and names the file" "grep -qi 'scripted' '$HERE/README.md' && grep -q 'examples/use-cases/software-org/eval/software-org-rca.json' '$HERE/README.md'"
 check "the README states the limits: logs and events can hold secrets the scanner does not know, and a person reads the report before acting" "grep -qi 'scanner' '$HERE/README.md' && grep -qi 'a person' '$HERE/README.md'"
 # shellcheck disable=SC2034
 FILES=$(find "$HERE" -type f ! -path '*/tests/*' | sort)
@@ -271,8 +271,42 @@ printf '%s\n' \
 jq -cR -f "$AJ" "$T/audit.in" > "$T/audit.out"
 check "the extractor keeps every tools/call line, whatever the tool is (a call of notify_send is NOT dropped), and only those" "[ \"\$(jq -s 'map(.tool) | join(\",\")' '$T/audit.out' | tr -d '\"')\" = 'cluster-read_pods_get,notify_send' ] && [ \"\$(jq -s '.[1].outcome' '$T/audit.out')\" = '\"failure\"' ]"
 check "the live script reads the audit with that file, asserts the count is above zero, and flags any name outside the eight tools" "grep -q 'rca-audit-tools.jq' '$ROOT/hack/ci/rca-live.sh' && grep -q 'more than zero' '$ROOT/hack/ci/rca-live.sh' && grep -q 'pods_list_in_namespace|pods_get|pods_log|events_list|workloads_list|workloads_get|nodes_list|nodes_get' '$ROOT/hack/ci/rca-live.sh'"
-check "the live script removes the gate token on every way out, and passes the context to ctl.sh and ask.sh" "grep -q 'rm -f \"\$TD/token\"' '$ROOT/hack/ci/rca-live.sh' && grep -q 'export KUBE_CONTEXT=\"\$CTX_NOW\"' '$ROOT/hack/ci/rca-live.sh'"
+check "the live script pins the kube context on every kubectl call and passes it to ctl.sh and ask.sh" "grep -q 'K=\"\$K --context=\$CTX_NOW\"' '$ROOT/hack/ci/rca-live.sh' && grep -q 'export KUBE_CONTEXT=\"\$CTX_NOW\"' '$ROOT/hack/ci/rca-live.sh'"
+check "the live script never writes the gate token to a file: a named pipe in a private directory, removed on every way out" "grep -q 'mkfifo \"\$PRIV/token\"' '$ROOT/hack/ci/rca-live.sh' && ! grep -qE 'token[^|]*> *\"\\\$TD' '$ROOT/hack/ci/rca-live.sh' && ! grep -q -- '--token-file \"\$TD' '$ROOT/hack/ci/rca-live.sh' && grep -q 'rm -rf \"\$PRIV\"' '$ROOT/hack/ci/rca-live.sh'"
+check "no kubectl call of the live script and of its helpers runs without the context (every raw kubectl in rca-live.sh is the pinned \$K)" "! sed 's/#.*//' '$ROOT/hack/ci/rca-live.sh' | grep -qE '(^|[ (|;])kubectl '"
 check "the live script scans the logs of the agent runtime and the model gateway, and the format probe output" "grep -q 'ate-system agentgateway-system' '$ROOT/hack/ci/rca-live.sh' && grep -q 'PROBE\" \"\$FMT' '$ROOT/hack/ci/rca-live.sh'"
+
+echo "# the scan of what the live job uploads (hack/ci/rca-upload-scan.sh)"
+SCAN="$ROOT/hack/ci/rca-upload-scan.sh"
+mkdir -p "$T/up/report" "$T/up/plat/pods/kagent_agent-1" "$T/up/plat/pods/rca-demo_crash-start-1"
+printf '{"cases":[{"id":"x","answer":"all clear"}]}\n' > "$T/up/report/report.json"
+printf 'job log: nothing here\n' > "$T/up/job.log"
+printf 'runtime log: tool result holds the exec output rcacanary-exec-d71e0b53 and blob cmNhY2FuYXJ5LWI2NC1hM2M4NGYxNg==\n' > "$T/up/plat/pods/kagent_agent-1/0.log"
+printf 'workload log: password=rcacanary-log-41d8be07\n' > "$T/up/plat/pods/rca-demo_crash-start-1/0.log"
+"$SCAN" "$T/up/report" "$T/up/job.log" --platform-logs "$T/up/plat" > "$T/scan.out" 2>&1; SC=$?
+check "a clean report, a clean log, and platform logs where only the two model-bound values are in the runtime log and the workload prints its own value: exit 0" "[ $SC = 0 ]" "$(cat "$T/scan.out")"
+printf '{"answer":"the key is rcacanary-env-7f3a91c2"}\n' > "$T/up/report/retry-x.json"
+"$SCAN" "$T/up/report" "$T/up/job.log" > "$T/scan.out" 2>&1; SC=$?
+check "a planted value in the report directory fails the scan and names the file, not the value" "[ $SC = 1 ] && grep -q 'retry-x.json' '$T/scan.out' && ! grep -q '7f3a91c2' '$T/scan.out'"
+rm "$T/up/report/retry-x.json"
+printf 'the model said ZXhlYw== and 7F3A91C2 only\n' > "$T/up/report/eval.out"
+"$SCAN" "$T/up/report" > "$T/scan.out" 2>&1; SC=$?
+check "the random part alone, in upper case, fails the scan (a model may print only that)" "[ $SC = 1 ]"
+rm "$T/up/report/eval.out"
+printf 'echoed: cmNhY2FuYXJ5LWI2NC1hM2M4NGYxNg==\n' > "$T/up/job.log"
+"$SCAN" "$T/up/report" "$T/up/job.log" > "$T/scan.out" 2>&1; SC=$?
+check "the model-bound base64 value in the job log fails the scan (no answer, no job log may hold it)" "[ $SC = 1 ] && grep -q 'job.log' '$T/scan.out'"
+printf 'job log: nothing here\n' > "$T/up/job.log"
+printf 'agent runtime: env value rcacanary-env-7f3a91c2\n' > "$T/up/plat/pods/kagent_agent-1/1.log"
+"$SCAN" "$T/up/report" "$T/up/job.log" --platform-logs "$T/up/plat" > "$T/scan.out" 2>&1; SC=$?
+check "a value the server removes in a platform log outside rca-demo fails the scan" "[ $SC = 1 ] && grep -q 'kagent_agent-1/1.log' '$T/scan.out'"
+"$SCAN" > /dev/null 2>&1; SC=$?
+check "the scan with no argument is a usage error (exit 2)" "[ $SC = 2 ]"
+RCA_MANIFEST="$T/up/empty.yaml"; : > "$RCA_MANIFEST"; export RCA_MANIFEST
+"$SCAN" "$T/up/report" > "$T/scan.out" 2>&1; SC=$?
+unset RCA_MANIFEST
+check "a manifest without the five planted values makes the scan refuse (it would prove nothing): exit 2" "[ $SC = 2 ]"
+check "the workflow scans the report, the logs and the exported platform logs before it uploads them" "grep -q 'rca-upload-scan.sh rca-out rca-live.log install.log --platform-logs kind-logs' '$ROOT/.github/workflows/e2e.yml'"
 
 echo "# the README tells the truth about what showed what"
 check "the README says eight scenarios (seven for workloads and one format probe), not seven" "grep -q 'eight' '$HERE/README.md' && ! grep -q 'seven)' '$HERE/README.md' && ! grep -q 'scenarios (seven' '$HERE/README.md'"

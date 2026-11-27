@@ -5,12 +5,17 @@
 #   ctl.sh pods                    kubectl get pods -n rca-demo (what the six faults look like to a person)
 #   ctl.sh wait [seconds]          wait until every workload shows its fault (default 240 s)
 # Local kind or k3d cluster only: it refuses any other kube context. The agent can read, never change: nothing here changes the cluster.
-# Env: CLUSTER (default oa-rca-demo)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  ASK (the ask script, default hack/ask.sh)
+# Env: CLUSTER (REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  ASK (the ask script, default hack/ask.sh)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-CLUSTER=${CLUSTER:-oa-rca-demo}
+# No default cluster: a script that acts on a cluster must be told which one, so it never runs on a cluster by guess.
+[ -n "${CLUSTER:-}${KUBE_CONTEXT:-}" ] || { echo "ERROR: set CLUSTER (the kind or k3d cluster name) or KUBE_CONTEXT: there is no default cluster. Nothing was changed." >&2; exit 1; }
+if [ -n "${CLUSTER:-}" ] && [ -n "${KUBE_CONTEXT:-}" ] && [ "$KUBE_CONTEXT" != "kind-$CLUSTER" ] && [ "$KUBE_CONTEXT" != "k3d-$CLUSTER" ]; then
+  echo "ERROR: CLUSTER=$CLUSTER and KUBE_CONTEXT=$KUBE_CONTEXT name different clusters. Set one of them, or make them agree. Nothing was changed." >&2; exit 1
+fi
+if [ -z "${CLUSTER:-}" ]; then CLUSTER=${KUBE_CONTEXT#kind-}; CLUSTER=${CLUSTER#k3d-}; fi
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
 ASK=${ASK:-$ROOT/hack/ask.sh}

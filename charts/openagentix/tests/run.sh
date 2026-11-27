@@ -1290,7 +1290,11 @@ eq "profile: code mode on (profile value), with the shared limits" "$(q "$DP" "$
 eq "profile: incoming auth is oidc with its own audience" "$(q "$DP" "$VP|.spec.incomingAuth|[.type,.oidcConfigRef.name,.oidcConfigRef.audience]|join(\" \")")" "oidc substrate-actor-jwt openagentix-vmcp-lookup"
 eq "the audiences of all vMCP servers are unique"      "$(q "$DP" '[.[]|select(.kind=="VirtualMCPServer")|.spec.incomingAuth.oidcConfigRef.audience]|(length==(unique|length))|tostring')" true
 eq "the shared vMCP keeps its audience"                "$(q "$DP" "$VS|.spec.incomingAuth.oidcConfigRef.audience")" openagentix-vmcp
-eq "the profile vMCP is authorized by an explicit allow-all policy (the filter is the limit)" "$(q "$DP" "$VP|.spec.incomingAuth.authzConfig.inline.policies|join(\" \")")" 'permit(principal, action, resource);'
+eq "the profile vMCP is authorized by an ALLOW LIST: call_tool on each tool of the profile (and execute_tool_script with code mode) and list_tools, no permit of every action (the filter covers tools only, so every other method is denied by default)" "$(q "$DP" "$VP|.spec.incomingAuth.authzConfig.inline.policies|tojson")" '["permit(principal, action == Action::\"call_tool\", resource == Tool::\"knowledge_kb_search\");","permit(principal, action == Action::\"call_tool\", resource == Tool::\"osv_query_vulnerability\");","permit(principal, action == Action::\"call_tool\", resource == Tool::\"osv_get_vulnerability\");","permit(principal, action == Action::\"call_tool\", resource == Tool::\"execute_tool_script\");","permit(principal, action == Action::\"list_tools\", resource);"]'
+eq "no profile vMCP of the full demo (shared group) has a policy that permits every action" "$(q "$DP" '[.[]|select(.kind=="VirtualMCPServer" and (.metadata.annotations["openagentix.io/tool-profile"]//"")!="")|.spec.incomingAuth.authzConfig.inline.policies[]|select(test("^permit\\(principal, action, resource\\)"))]|length')" 0
+eq "no profile vMCP policy permits resources or prompts (read_resource, get_prompt, list_resources, list_prompts)" "$(q "$DP" '[.[]|select(.kind=="VirtualMCPServer" and (.metadata.annotations["openagentix.io/tool-profile"]//"")!="")|.spec.incomingAuth.authzConfig.inline.policies[]|select(test("_resource|_prompt|resources|prompts";"i"))]|length')" 0
+eq "the shared vMCP (no profile) keeps its permit-all policy" "$(q "$DP" '.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools")|.spec.incomingAuth.authzConfig.inline.policies|join(" ")')" 'permit(principal, action, resource);'
+
 eq "profile: outgoing auth discovered like the shared one" "$(q "$DP" "$VP|.spec.outgoingAuth.source")" discovered
 eq "profile: telemetry and audit follow observability" "$(q "$DP" "$VP|[(.spec.telemetryConfigRef.name),(.spec.config.audit.enabled|tostring)]|join(\" \")")" "openagentix-telemetry true"
 eq "the shared vMCP is unchanged by the profile"       "$(q "$DP" "$VS|.spec.config.aggregation|has(\"tools\")")" false
@@ -2242,7 +2246,8 @@ PV='.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools-lookup")'
 eq "on: one workload tool server for the opened profile, in the tools namespace" "$(count "$D" '.kind=="VirtualMCPServer" and (.metadata.name|endswith("-workload"))') $(q "$D" "$WV|.metadata.namespace")" "1 mcp-tools"
 eq "on: it filters exactly like the profile's own server (tools, visibility, code mode)" "$(q "$D" "$WV|.spec.config|del(.audit)|tojson")" "$(q "$D" "$PV|.spec.config|del(.audit)|tojson")"
 eq "on: it takes Kubernetes ServiceAccount tokens with the profile's own workload audience" "$(q "$D" "$WV|.spec.incomingAuth|[.type,.oidcConfigRef.name,.oidcConfigRef.audience]|join(\" \")")" "oidc openagentix-workload-sa openagentix-vmcp-lookup-workload"
-eq "on: its policy admits only pod-bound tokens of subjects of the workload namespace" "$(q "$D" "$WV|.spec.incomingAuth.authzConfig.inline.policies|tojson")" '["permit(principal, action, resource) when { context.claim_sub like \"system:serviceaccount:openagentix-workloads:*\" && context has \"claim_kubernetes.io\" && context[\"claim_kubernetes.io\"] has pod };"]'
+eq "on: its policy is an allow list that admits only pod-bound tokens of subjects of the workload namespace (call_tool on the profile's tools, list_tools)" "$(q "$D" "$WV|.spec.incomingAuth.authzConfig.inline.policies|map(select(test(\"when \\\\{ context.claim_sub like .system:serviceaccount:openagentix-workloads:\\\\*. && context has .claim_kubernetes.io. && context\\\\[.claim_kubernetes.io.\\\\] has pod \\\\};\$\")))|length")" 5
+eq "on: and no policy of the workload variant lacks that condition or permits every action" "$(q "$D" "$WV|.spec.incomingAuth.authzConfig.inline.policies|map(select(test(\"when\")|not))|length")" 0
 OC='.[]|select(.kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")'
 eq "on: the token config is type kubernetesServiceAccount with the issuer and key URL set explicitly" "$(q "$D" "$OC|[.metadata.namespace,.spec.type,.spec.kubernetesServiceAccount.issuer,.spec.kubernetesServiceAccount.jwksUrl,(.spec.kubernetesServiceAccount.useClusterAuth|tostring)]|join(\" \")")" "mcp-tools kubernetesServiceAccount https://kubernetes.default.svc.cluster.local https://kubernetes.default.svc/openid/v1/jwks true"
 eq "a key URL outside the API server gets no cluster credentials" "$(q "$(docs "${CP9[@]}" "${CA[@]}" "${TP[@]}" --set controlPlane.containerAgents.serviceAccountTokens.jwksUrl=https://oidc.example.org/keys)" "$OC|.spec.kubernetesServiceAccount.useClusterAuth|tostring")" false
@@ -2411,6 +2416,8 @@ done
 
 # shellcheck source=charts/openagentix/tests/diagnostics.sh
 . "$(dirname "$0")/diagnostics.sh"   # ADR 0025, slice 4: cluster-read
+# shellcheck source=charts/openagentix/tests/endpoints.sh
+. "$(dirname "$0")/endpoints.sh"     # ADR 0026, slice 2: mcp.endpoints[], own group mode
 
 echo
 echo "passed=$PASS failed=$FAIL"

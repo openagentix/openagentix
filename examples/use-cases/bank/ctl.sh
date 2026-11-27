@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The desk's commands for the bank use case. Local kind cluster, after examples/use-cases/bank/install.sh.
+# The desk's commands for the bank use case. Local kind cluster, after examples/use-cases/bank/install.sh. Set CLUSTER=<kind cluster name> on every call.
 #
 #   ctl.sh ask "Work case DSP-2026-0001"     ask the dispute agent through the A2A gate, as the desk (ServiceAccount disputes-desk)
 #   ctl.sh cases                             open cases (id, claim, status, route)
@@ -19,9 +19,10 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-# No default cluster: a script that changes a cluster must be told which one, so it never runs on a cluster by guess (a name like "openagentix" is
+# No default cluster: a script that acts on a cluster must be told which one, so it never runs on a cluster by guess (a name like "openagentix" is
 # also the name of a full demo cluster).
 [ -n "${CLUSTER:-}${KUBE_CONTEXT:-}" ] || { echo "ERROR: set CLUSTER (the kind cluster name) or KUBE_CONTEXT: there is no default cluster. Nothing was changed." >&2; exit 1; }
+DISAGREE=0; [ -z "${CLUSTER:-}" ] || [ -z "${KUBE_CONTEXT:-}" ] || [ "$KUBE_CONTEXT" = "kind-$CLUSTER" ] || DISAGREE=1
 CLUSTER=${CLUSTER:-${KUBE_CONTEXT#kind-}}
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
@@ -33,6 +34,7 @@ case "$KUBE_CONTEXT" in
   kind-*) ;;
   *) die "KUBE_CONTEXT is '$KUBE_CONTEXT': this script is for a local kind cluster (kind-<name>). Set CLUSTER or KUBE_CONTEXT." ;;
 esac
+[ "$DISAGREE" = 0 ] || die "CLUSTER=$CLUSTER and KUBE_CONTEXT=$KUBE_CONTEXT name different clusters (the context of $CLUSTER is kind-$CLUSTER). Set one of them, or make them agree. Nothing was changed."
 usage(){ sed -n 2,13p "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 for c in jq curl; do command -v "$c" >/dev/null || die "$c is required"; done
 [ $# -ge 1 ] || usage

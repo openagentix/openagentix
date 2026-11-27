@@ -78,6 +78,24 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	if domain != "bank" && domain != "equipment" {
 		return fmt.Errorf("unknown domain %q (this build has: bank, equipment)", domain)
 	}
+	// The MCP port needs a credential. Without a token file the service refuses to start, unless the explicit
+	// test flag says the port may be open (never set it on a cluster: anything that reaches the port can call every tool).
+	tokenFile, insecure := getenv("RECORDS_MCP_TOKEN_FILE"), getenv("RECORDS_MCP_INSECURE_NO_AUTH")
+	var guard *core.MCPBearer
+	switch {
+	case tokenFile != "" && insecure != "":
+		return errors.New("RECORDS_MCP_TOKEN_FILE and RECORDS_MCP_INSECURE_NO_AUTH are both set: choose one")
+	case tokenFile != "":
+		g, err := core.NewMCPBearer(tokenFile, log)
+		if err != nil {
+			return err
+		}
+		guard = g
+	case insecure == "true":
+		log.Warn("RECORDS_MCP_INSECURE_NO_AUTH=true: the MCP port has NO credential. This is for tests only")
+	default:
+		return errors.New("the MCP port needs a credential: set RECORDS_MCP_TOKEN_FILE to a file that holds the whole header value (Bearer <token>); for a test only, RECORDS_MCP_INSECURE_NO_AUTH=true")
+	}
 	approvers, err := core.LoadApprovers(getenv("RECORDS_APPROVERS_FILE"))
 	if err != nil {
 		return err
@@ -135,7 +153,11 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	errc := make(chan error, 2)
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() { errc <- serve(sctx, d.MCPHandler(version), mln) }()
+	mcpHandler := d.MCPHandler(version)
+	if guard != nil {
+		mcpHandler = guard.Wrap(mcpHandler)
+	}
+	go func() { errc <- serve(sctx, mcpHandler, mln) }()
 	go func() { errc <- serve(sctx, d.Handler(), rln) }()
 	err = <-errc
 	cancel()

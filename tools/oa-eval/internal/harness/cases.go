@@ -67,6 +67,9 @@ func (c *Case) validate() error {
 	case c.Input != "" && len(c.Event) > 0:
 		return errors.New("give an input or an event, not both")
 	}
+	if m := c.Expect.MaxToolCalls; m != nil && *m < 1 {
+		return fmt.Errorf("max_tool_calls is %d: it must be at least 1 (leave it out for no limit)", *m)
+	}
 	for _, list := range [][]string{c.Expect.AnswerMust, c.Expect.AnswerMustNot} {
 		for _, expr := range list {
 			if _, err := regexp.Compile(expr); err != nil {
