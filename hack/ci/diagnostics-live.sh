@@ -5,8 +5,9 @@
 # Opt-in: it does nothing without DIAGNOSTICS=1, so a stray local run never touches the cluster you are on. The e2e workflow runs it on request.
 #
 # What it settles (the open question R2 of the code review): does the server become Ready on a REAL API server, that is, does its rights check
-# pass with the default discovery rules of a real ServiceAccount? And through the whole chain (kagent -> actor JWT -> vMCP -> bearer header ->
-# server), does the dedicated profile `rca` list the eight tools while the shared tool server lists none?
+# pass with the default rights of a real ServiceAccount? And does the chain around it hold: the bearer value (the server refuses a call without
+# it, the shared vMCP pod never holds it, no log line has it), no dropped backend, and what ToolHive loaded for the dedicated profile `rca` (the
+# eight tools) and for the shared vMCP (none of them)? A tools/list through an agent needs an actor token: that is slice 5 of the ADR.
 # It reads the cluster and makes one port-forward to the server. It never prints the bearer value. Exit 1 when a check fails.
 set -u
 [ "${DIAGNOSTICS:-0}" = 1 ] || { echo "diagnostics-live: set DIAGNOSTICS=1 to run this against the current cluster (it is opt-in)"; exit 0; }
@@ -58,23 +59,27 @@ RCA=$($K get pods -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROF
 check "the pod of the dedicated profile holds the bearer Secret by reference, as an environment value (positive control)" "$(jq '[.items[].spec.containers[].env[]?|select((.valueFrom.secretKeyRef.name//"")=="diagnostics-bearer-cluster-read")]|length>0' <<<"$RCA")" true
 check "no vMCP condition DiscoveredAuthConfig-* is False" "$($K get virtualmcpserver -n "$MCPNS" -o json | jq '[.items[].status.conditions[]?|select((.type|startswith("DiscoveredAuthConfig-")) and .status=="False")]|length')" 0
 
-echo "# through the whole chain: what each tool server lists (kagent asks the vMCPs with an actor token)"
-# kagent's RemoteMCPServer keeps the tools it found in status.discoveredTools. Wait for the dedicated one.
-LIST=""
-for _ in $(seq 1 60); do
-  LIST=$($K get remotemcpserver -n "$KNS" "toolhive-vmcp-$PROFILE" -o json 2>/dev/null | jq -r '[.status.discoveredTools[]?.name]|sort|join(" ")')
-  [ -n "$LIST" ] && break
-  sleep 3
-done
-WANT=$(for t in $TOOLS; do printf 'cluster-read_%s ' "$t"; done | sed 's/ $//')
-check "the dedicated profile $PROFILE lists the eight tools, and only those" "$LIST" "$WANT"
-[ "$LIST" = "$WANT" ] || { $K get remotemcpserver -n "$KNS" "toolhive-vmcp-$PROFILE" -o jsonpath='{.status}' 2>/dev/null | cut -c1-800 | sed 's/^/       status: /'; echo; }
-SHLIST=$($K get remotemcpserver -n "$KNS" toolhive-vmcp -o json 2>/dev/null | jq -r '[.status.discoveredTools[]?.name]|map(select(test("cluster-read")))|length')
-SHALL=$($K get remotemcpserver -n "$KNS" toolhive-vmcp -o json 2>/dev/null | jq -r '[.status.discoveredTools[]?.name]|length')
-check "the shared tool server lists no cluster-read tool" "$SHLIST" 0
-echo "       (the shared tool server lists $SHALL tool(s) in all: a control that the status is read at all)"
-OTHER=$($K get remotemcpserver -n "$KNS" toolhive-vmcp-lookup -o json 2>/dev/null | jq -r '[.status.discoveredTools[]?.name]|map(select(test("cluster-read")))|length')
-check "the shared-group profile lookup lists no cluster-read tool either" "$OTHER" 0
+echo "# what each tool server lists, as ToolHive loaded it"
+# kagent cannot list the tools for us: with actorJwt on, its RemoteMCPServer says DiscoveryDisabled ("Global tool discovery requires an executing Actor"),
+# and an actor token only exists inside an agent session. So this reads what ToolHive itself holds for each vMCP: its status (the backends it found)
+# and its configuration (the tool filter). A real tools/list through an agent is slice 5 of ADR 0025.
+STATUS_RCA=$($K get virtualmcpserver -n "$MCPNS" "tools-$PROFILE" -o json 2>/dev/null)
+STATUS_SH=$($K get virtualmcpserver -n "$MCPNS" tools -o json 2>/dev/null)
+echo "       status of tools-$PROFILE (conditions left out): $(jq -c '.status|del(.conditions)' <<<"$STATUS_RCA" | cut -c1-700)"
+echo "       status of tools (conditions left out): $(jq -c '.status|del(.conditions)' <<<"$STATUS_SH" | cut -c1-700)"
+check "the dedicated vMCP tools-$PROFILE found the backend cluster-read" "$(jq '[.status|.. |strings|select(.=="cluster-read")]|length>0' <<<"$STATUS_RCA")" true
+check "the shared vMCP found no backend cluster-read" "$(jq '[.status|.. |strings|select(test("cluster-read"))]|length' <<<"$STATUS_SH")" 0
+check "no condition of the shared vMCP mentions cluster-read" "$(jq '[.status.conditions[]?|tojson|select(test("cluster-read"))]|length' <<<"$STATUS_SH")" 0
+CMS=$($K get configmap -n "$MCPNS" -o json 2>/dev/null)
+echo "       ConfigMaps of the vMCPs: $(jq -r --arg a "tools-$PROFILE" '[.items[]|select(any(.metadata.ownerReferences[]?;.name=="tools" or .name==$a))|(.metadata.name+" (owner "+(.metadata.ownerReferences[0].name)+")")]|join(", ")' <<<"$CMS")"
+CFG_RCA=$(jq -r --arg a "tools-$PROFILE" '.items[]|select(any(.metadata.ownerReferences[]?;.name==$a))|.data[]?' <<<"$CMS")
+CFG_SH=$(jq -r '.items[]|select(any(.metadata.ownerReferences[]?;.name=="tools"))|.data[]?' <<<"$CMS")
+N=0; for t in $TOOLS; do grep -q "$t" <<<"$CFG_RCA" && N=$((N + 1)); done
+check "the configuration of the dedicated vMCP names all eight tools" "$N" 8
+check "the configuration of the dedicated vMCP hides every other tool (defaultToolVisibility deny)" "$(grep -c 'defaultToolVisibility: deny\|default_tool_visibility: deny\|"defaultToolVisibility": "deny"' <<<"$CFG_RCA" | awk '{print ($1>0)?"yes":"no"}')" yes
+check "the configuration of the shared vMCP names none of them" "$(for t in $TOOLS; do grep -c "$t" <<<"$CFG_SH"; done | paste -sd+ - | bc)" 0
+check "the shared vMCP's configuration was found (the control is not empty)" "$([ -n "$CFG_SH" ] && echo yes || echo no)" yes
+echo "       kagent says: $($K get remotemcpserver -n "$KNS" "toolhive-vmcp-$PROFILE" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)"
 
 echo "# the rights, asked of the real API server as the ServiceAccount"
 SA="system:serviceaccount:$DNS:cluster-read"
