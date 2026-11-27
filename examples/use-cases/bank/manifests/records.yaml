@@ -1,0 +1,125 @@
+# The records service (system of record of the bank use case) in its own namespace. Applied by examples/use-cases/bank/install.sh,
+# not by the chart. The synthetic data is seeded at start into an emptyDir, so deleting the pod resets it.
+#
+# - MCP on 8080 (the port the tool gateway reaches). REST on 127.0.0.1:8081 inside the pod: only `kubectl port-forward` reaches it.
+# - The approvers Secret `records-approvers` (key approvers.json, SHA-256 hashes of approver tokens, never the tokens) is created by
+#   install.sh from generated values. It is not in this file. Without it the pod cannot start, so nobody can approve by accident.
+# - IMAGE_PLACEHOLDER is replaced by install.sh with the image it built.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fernvale-records
+  labels:
+    app.kubernetes.io/part-of: openagentix-use-case-bank
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: records
+  namespace: fernvale-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: records
+  namespace: fernvale-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}          # one SQLite file on an emptyDir: never two pods at once
+  selector:
+    matchLabels: {app: records}
+  template:
+    metadata:
+      labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
+    spec:
+      serviceAccountName: records
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: records
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: mcp, containerPort: 8080}
+          env:
+            - {name: RECORDS_DOMAIN, value: bank}
+            - {name: RECORDS_DATA_DIR, value: /data}
+            - {name: RECORDS_APPROVERS_FILE, value: /etc/records/approvers.json}
+            # RECORDS_REST_ADDR is not set: REST stays on 127.0.0.1:8081 (the default).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 96Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8080}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: approvers, mountPath: /etc/records, readOnly: true}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 64Mi}
+        - name: approvers
+          secret:
+            secretName: records-approvers
+            defaultMode: 0440
+            items:
+              - {key: approvers.json, path: approvers.json}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: records
+  namespace: fernvale-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
+spec:
+  selector: {app: records}
+  ports:
+    - {name: mcp, port: 8080, targetPort: mcp}
+---
+# MCP has no login of its own, so only the vMCP pods of the tool group may reach it. Every vMCP of the group connects to every backend
+# (discovery, health), whichever tools it offers, so the policy admits the shared vMCP `tools` and the profile vMCP of the quick start,
+# `tools-lookup`, as the chart's kb policy admits every profile vMCP. A tool profile of your own needs its name added here.
+# This policy limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. Whether yours does must be tested
+# (README, live proof checklist). Kubelet probes come from the node and are not affected. The pod may call nothing: no egress rule, DNS included.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: records
+  namespace: fernvale-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
+spec:
+  podSelector:
+    matchLabels: {app: records}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports: [{protocol: TCP, port: 8080}]
+      from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: mcp-tools}}
+          podSelector:
+            matchLabels: {app: virtualmcpserver}
+            matchExpressions:
+              - {key: toolhive-name, operator: In, values: [tools, tools-lookup]}
+  egress: []

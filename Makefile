@@ -47,6 +47,7 @@ test-chart: ## Render tests over `helm template` plus helm lint (needs helm, jq,
 	@yq --version 2>&1 | grep -q '^yq 3\.' || { echo "ERROR: yq must be the Python wrapper (kislyuk/yq 3.x), found: $$(yq --version 2>&1 | head -1)" >&2; exit 1; }
 	helm lint charts/openagentix
 	charts/openagentix/tests/run.sh
+	examples/use-cases/bank/tests/run.sh
 
 test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part needs `npm ci` in website/), bench
 	$(call need,jq)
@@ -77,6 +78,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/gke/tests/run.sh
 	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh
+	examples/use-cases/bank/tests/install-test.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'
 
