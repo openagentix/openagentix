@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "dispute-triage",
+      "match": {
+        "system": "(?i)dispute",
+        "user": "(?i)review dispute (?P<id>D-\\d+)"
+      },
+      "steps": [
+        {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
+        {"tool": "get_rule", "args": {"reason_code": "{{result.0.reason_code}}"}},
+        {"tool": "draft_note", "args": {"case_id": "{{user.id}}", "rule": "{{result.1.title}}", "amount": "{{result.0.amount}}"}}
+      ],
+      "answers": [
+        {"when": {"result.1.title": "^$"}, "text": "Inconclusive: I found no rule for case {{user.id}}, so I drafted nothing."},
+        {"text": "Case {{user.id}} (reason {{result.0.reason_code}}) falls under: {{result.1.title}}. Draft: {{result.2.id}}."}
+      ]
+    }
+  ]
+}
