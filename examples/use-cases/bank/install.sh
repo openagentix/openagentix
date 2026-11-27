@@ -2,7 +2,7 @@
 # Installs the parts of the bank use case that are not chart values: the records service, its tool registration, the desk's
 # ServiceAccount, the knowledge base documents and the graph facts. Run it AFTER the platform install that used values.yaml:
 #
-#   PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml ./install.sh
+#   PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh
 #   examples/use-cases/bank/install.sh
 #   examples/use-cases/bank/install.sh --uninstall        # removes what this script made (not the chart values)
 #
@@ -16,9 +16,9 @@
 #   3. applies manifests/records.yaml and manifests/tool-registration.yaml (an MCPServerEntry, like the chart's knowledge entry);
 #   4. creates the ServiceAccount openagentix-system/disputes-desk, the caller of the dispute agent (the rule is in values.yaml);
 #   5. loads seed/kb into the collection fernvale-disputes and seed/graph into the graph (hack/kb-ingest.sh, hack/kb-graph-load.sh);
-#   6. when the stub model is the model: mounts eval/scenario.json into it (a stopgap outside the chart, see README "What could not be
-#      wired"). A later chart upgrade may remove it: check, and run this script again if the stub no longer follows the scenarios.
-#      --uninstall takes the mount out again. --no-scenarios skips it (a real model needs no scenario).
+#   6. when the stub model is the model: only CHECKS that it has scenarios. The scenarios are not made here: the platform install ships
+#      eval/scenario.json through the chart (STUB_SCENARIOS, ADR 0026), so a chart upgrade keeps them. A stub without them gets a warning.
+#      A run with them is SCRIPTED by the stub model, not the behaviour of a model: say so wherever you report it.
 #
 # It REFUSES to install when the shared tool server (the vMCP `tools`) has code mode on, or when any agent other than dispute-agent uses
 # it: the records tools join that shared server, and a script run there could call the write tools. Quick start only (README).
@@ -51,29 +51,20 @@ case "$KUBE_CONTEXT" in
   *) die "KUBE_CONTEXT is '$KUBE_CONTEXT': this script is for a local kind cluster (kind-<name>). Set CLUSTER or KUBE_CONTEXT." ;;
 esac
 
-MODE=install; SCENARIOS=auto
+MODE=install
 for arg in "$@"; do
   case "$arg" in
     --uninstall) MODE=uninstall ;;
-    --no-scenarios) SCENARIOS=no ;;
-    --scenarios) SCENARIOS=yes ;;
     -h|--help) sed -n 2,26p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $arg (--uninstall, --no-scenarios, --scenarios)" ;;
+    *) die "unknown argument: $arg (--uninstall; the stub model scenarios are shipped by the platform install, STUB_SCENARIOS)" ;;
   esac
 done
 
 if [ "$MODE" = uninstall ]; then
-  say "removing the bank use case objects from $KUBE_CONTEXT (the chart values stay: install the platform again without values.yaml to remove the agent)"
-  if "${KC[@]}" get deployment stub-model -n agentgateway-system >/dev/null 2>&1; then
-    say "taking the scenario mount out of the stub model"
-    "${KC[@]}" patch deployment stub-model -n agentgateway-system --type strategic \
-      -p '{"spec":{"template":{"spec":{"containers":[{"name":"stub-model","env":[{"name":"STUB_MODEL_SCENARIOS","$patch":"delete"}],"volumeMounts":[{"mountPath":"/scenarios","$patch":"delete"}]}],"volumes":[{"name":"bank-scenarios","$patch":"delete"}]}}}}' >/dev/null \
-      || die "could not take the scenario mount out of the stub model; nothing else was removed, so that the pod still finds its file"
-  fi
+  say "removing the bank use case objects from $KUBE_CONTEXT (the chart values stay: install the platform again without values.yaml and without STUB_SCENARIOS to remove the agent and the scenarios)"
   "${KC[@]}" delete -f "$HERE/manifests/tool-registration.yaml" --ignore-not-found
   "${KC[@]}" delete namespace "$NS" --ignore-not-found
   "${KC[@]}" delete serviceaccount disputes-desk -n "$DESK_NS" --ignore-not-found
-  "${KC[@]}" delete configmap bank-scenarios -n agentgateway-system --ignore-not-found
   say "the knowledge base keeps the collection $COLLECTION and the fact set $FACTSET; remove them with the kb admin API if you want"
   exit 0
 fi
@@ -153,15 +144,16 @@ KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$KB_INGEST" "$HERE/seed/kb" "$C
 say "loading the graph facts into the fact set $FACTSET"
 KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$KB_GRAPH_LOAD" "$COLLECTION" "$FACTSET" "$HERE/seed/graph/dispute-facts.yaml"
 
-# ---- 6. scenarios for the stub model -------------------------------------------------------------------------------------
-if [ "$SCENARIOS" = auto ]; then
-  if "${KC[@]}" get deployment stub-model -n agentgateway-system >/dev/null 2>&1; then SCENARIOS=yes; else SCENARIOS=no; say "no stub model in this cluster: no scenario is mounted (a real model works the case from the agent instructions)"; fi
-fi
-if [ "$SCENARIOS" = yes ]; then
-  say "mounting eval/scenario.json into the stub model (a stopgap outside the chart; a later chart upgrade may remove it, then run this script again)"
-  "${KC[@]}" create configmap bank-scenarios -n agentgateway-system --from-file=scenario.json="$HERE/eval/scenario.json" --dry-run=client -o yaml | "${KC[@]}" apply -f - >/dev/null
-  "${KC[@]}" patch deployment stub-model -n agentgateway-system --type strategic -p '{"spec":{"template":{"spec":{"volumes":[{"name":"bank-scenarios","configMap":{"name":"bank-scenarios"}}],"containers":[{"name":"stub-model","env":[{"name":"STUB_MODEL_SCENARIOS","value":"/scenarios/scenario.json"}],"volumeMounts":[{"name":"bank-scenarios","mountPath":"/scenarios","readOnly":true}]}]}}}}' >/dev/null
-  "${KC[@]}" rollout status deployment/stub-model -n agentgateway-system --timeout=120s >/dev/null || die "the stub model did not restart with the scenarios: check the file with: kubectl --context $KUBE_CONTEXT logs -n agentgateway-system deploy/stub-model"
+# ---- 6. scenarios for the stub model: checked, not made --------------------------------------------------------------------
+# The chart ships them (STUB_SCENARIOS on the platform install, ADR 0026): the ConfigMap stub-model-scenarios and the mount belong to the release.
+if "${KC[@]}" get deployment stub-model -n agentgateway-system >/dev/null 2>&1; then
+  if "${KC[@]}" get configmap stub-model-scenarios -n agentgateway-system >/dev/null 2>&1; then
+    say "the stub model has scenarios from the chart (runs with them are scripted by the stub model, not the behaviour of a model)"
+  else
+    echo "WARN: the stub model has no scenarios, so it will not work the bank cases. Run the platform install again with STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json (and the same VALUES_FILE)." >&2
+  fi
+else
+  say "no stub model in this cluster: no scenario is needed (a real model works the case from the agent instructions)"
 fi
 
 cat <<EOF

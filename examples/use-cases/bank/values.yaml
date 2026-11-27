@@ -2,7 +2,7 @@
 # Use it beside the quick start. VALUES_FILE comes after the profile, so maps below are merged into the quick start values and the
 # lists below REPLACE the quick start lists (Helm replaces lists), which is why `callers` restates `quickstart-ask`:
 #
-#   PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml ./install.sh
+#   PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh
 #   examples/use-cases/bank/install.sh          # records service, knowledge base, graph facts (README, "Install")
 #
 # What this file adds, and nothing more:

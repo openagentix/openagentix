@@ -257,6 +257,37 @@ else
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG QUICKSTART_BYO=1 VALUES_FILE="$RT/bad-values.yaml")
   eq "byo remote: a values file yq cannot read stops the install, names the file, nothing built" "$(/usr/bin/grep -c "cannot read .*bad-values.yaml" <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^docker buildx build' "$RT/calls")" 1/1/0
 
+  echo "# install.sh: STUB_SCENARIOS (ADR 0026, B): one --set-file per file, in name order, the dot of the name escaped"
+  SCD="$RT/scen"; mkdir -p "$SCD/dir" "$SCD/empty"
+  printf '{"scenarios":[]}' > "$SCD/dir/bank.json"; printf '{"scenarios":[]}' > "$SCD/dir/a-first.json"; printf 'not a scenario' > "$SCD/dir/notes.txt"; cp "$SCD/dir/bank.json" "$SCD/single.json"
+  setfiles() { /usr/bin/grep '^helm upgrade' "$RT/calls" | /usr/bin/grep -o -- '--set-file [^ ]*' | tr '\n' ' '; }
+  REG=europe-west4-docker.pkg.dev/proj/oa
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG)
+  eq "STUB_SCENARIOS unset: no --set-file at all"          "$(setfiles)" ""
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/dir")
+  eq "a directory: the install reaches helm upgrade"       "$(/usr/bin/grep -c '^helm upgrade --install openagentix' "$RT/calls")" 1
+  eq "a directory: one --set-file per *.json file, in name order, dot escaped, no other file" "$(setfiles)" "--set-file gateway.stubModel.scenarios.files.a-first\\.json=$SCD/dir/a-first.json --set-file gateway.stubModel.scenarios.files.bank\\.json=$SCD/dir/bank.json "
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/single.json")
+  eq "one file: one --set-file named after the file"       "$(setfiles)" "--set-file gateway.stubModel.scenarios.files.single\\.json=$SCD/single.json "
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG MODEL_PROVIDER=custom MODEL_BASE_URL=https://h/v1 MODEL_NAME=m STUB_SCENARIOS="$SCD/dir")
+  eq "a real model (stub off): nothing passed, one line says so, the install goes on" "$(setfiles)|$(/usr/bin/grep -c 'STUB_SCENARIOS is set, but the stub model is off in this install: no scenario file is passed' <<<"$OUT")|$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" "|1|1"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/nope")
+  eq "a missing path: refused with its name, nothing built, no helm upgrade" "$(/usr/bin/grep -c "STUB_SCENARIOS=$SCD/nope is not a file or a directory" <<<"$OUT")/$(/usr/bin/grep -c 'exit=1' <<<"$OUT")/$(/usr/bin/grep -c '^docker buildx build\|^helm upgrade' "$RT/calls")" 1/1/0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG MODEL_PROVIDER=custom MODEL_BASE_URL=https://h/v1 MODEL_NAME=m STUB_SCENARIOS="$SCD/nope")
+  eq "a missing path is refused also when the stub is off" "$(/usr/bin/grep -c "STUB_SCENARIOS=$SCD/nope is not a file or a directory" <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/empty")
+  eq "a directory without *.json: refused with its name"   "$(/usr/bin/grep -c "STUB_SCENARIOS=$SCD/empty has no \*.json file" <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
+  printf '{"scenarios":[]}' > "$SCD/Bad_Name.json"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/Bad_Name.json")
+  eq "a file name the chart would refuse: refused with the name" "$(/usr/bin/grep -c 'STUB_SCENARIOS: the file name "Bad_Name.json" is not allowed' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
+  printf 'nope' > "$SCD/broken.json"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/broken.json")
+  eq "a file that is not a JSON object: the chart refuses it before anything is built" "$(/usr/bin/grep -c 'scenarios.files.broken.json is not a JSON object' <<<"$OUT")/$(/usr/bin/grep -c '^docker buildx build\|^helm upgrade' "$RT/calls")" 1/0
+  mkdir -p "$SCD/with,comma"; cp "$SCD/single.json" "$SCD/with,comma/single.json"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/with,comma/single.json")
+  eq "a path with a comma (Helm would split it): refused"  "$(/usr/bin/grep -c 'STUB_SCENARIOS: the path .* has a comma' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
+  eq "install.sh header documents STUB_SCENARIOS"           "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -c 'STUB_SCENARIOS=')" 1
+
   echo "# install.sh on kind with a fake kind (ADR 0022: nothing changes there)"
   mkdir -p "$RT/kbin"; printf '#!/usr/bin/env bash\necho "kind $*" >> "%s/calls"\n[ "$1 $2" = "get clusters" ] && echo openagentix\nexit 0\n' "$RT" > "$RT/kbin/kind"; chmod +x "$RT/kbin/kind"
   : > "$RT/calls"; OUT=$(env -i PATH="$RT/kbin:$RPATH" HOME="$HOME" CLUSTER_TYPE=kind PROFILE=quickstart QUICKSTART_BYO=1 SKIP_PREREQS=1 CONTROL_PLANE_APISERVER_CIDRS=10.0.0.1/32 CONSOLE_APISERVER_CIDRS=10.0.0.1/32 bash "$ROOT/install.sh" 2>&1)

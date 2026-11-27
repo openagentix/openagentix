@@ -28,9 +28,9 @@ A second agent (`aml-triage`) is in the plan and is not built.
 | `manifests/tool-registration.yaml` | An `MCPServerEntry` that adds the records service to the tool group (same pattern as the chart's knowledge entry) |
 | `seed/kb/` | Seven synthetic documents: policy, scheme rules, provisional credit rule, evidence by reason code, letter tone, escalation matrix, the untrusted input rule |
 | `seed/graph/dispute-facts.yaml` | Hand-written graph facts: merchants, devices, the fraud ring pattern, cases, reason codes and the evidence each needs |
-| `eval/scenario.json` | The stub model scenarios (five) |
+| `eval/scenario.json` | The stub model scenarios (five). The platform install ships them through the chart (`STUB_SCENARIOS`, ADR 0026) |
 | `eval/cases.yaml` | The evaluation set for `oa-eval`: five cases with machine checks |
-| `install.sh`, `ctl.sh` | The install steps that are not chart values, and the desk's commands |
+| `install.sh`, `ctl.sh` | The install steps that are not chart values (it makes no scenario object), and the desk's commands |
 | `tests/` | Offline tests (below) |
 
 The service itself is `examples/use-cases/records` (read its README). The scenario replay tests live in `examples/use-cases/records/replay`.
@@ -40,11 +40,14 @@ The service itself is `examples/use-cases/records` (read its README). The scenar
 You need the quick start requirements (a local kind cluster, 6 CPU and 8 GB) plus the knowledge base (about 250 MB more). The stub model answers, so no key and no token are needed.
 
 ```sh
-PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml ./install.sh
+PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml \
+  STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh
 examples/use-cases/bank/install.sh
 ```
 
-The second script builds the records image, loads it into the kind cluster, creates the approver Secrets (the token is generated, never printed, never in a file or in an argument list), applies the manifests, registers the tool server, loads the knowledge base documents and the graph facts, and mounts the scenario file into the stub model. Every step can be run again. `install.sh --uninstall` removes what it made. It refuses any context that is not `kind-*`.
+`STUB_SCENARIOS` hands the scenario file to the chart (`gateway.stubModel.scenarios.files`, ADR 0026). The chart makes the ConfigMap, the mount and the checksum that restarts the stub when the file changes. Give both variables on every run of the platform install, because Helm replaces release values. With a real model (a provider key, so the stub is off) leave `STUB_SCENARIOS` out; if you set it anyway, the installer prints one line and passes nothing.
+
+The second script builds the records image, loads it into the kind cluster, creates the approver Secrets (the token is generated, never printed, never in a file or in an argument list), applies the manifests, registers the tool server, loads the knowledge base documents and the graph facts, and checks that the stub model has its scenarios (it warns when the platform install left out `STUB_SCENARIOS`). Every step can be run again. `install.sh --uninstall` removes what it made. It refuses any context that is not `kind-*`.
 
 Helm replaces lists, so `values.yaml` restates the quick start caller `quickstart-ask` (a test compares the whole entry with the quick start's). You do not have to copy entries by hand for another base: `hack/compose-values.sh` merges the lists by entry name, keeps the restated caller once, and reports what this file adds and changes. Use its output in place of `VALUES_FILE=examples/use-cases/bank/values.yaml` in the install command above:
 
@@ -94,7 +97,9 @@ The sweep only reports: it lists the timers that fired and the open cases due wi
 
 ### What the stub model does here
 
-The stub is a scripted stand-in, not a language model. Each scenario is one fixed chain of tool calls for one case (0001, 0005, 0011), then a templated answer. Any other case gets "needs human review" and no change. A real model works every case from the agent instructions in `values.yaml`; set a provider key (for example `ANTHROPIC_API_KEY=... PROFILE=quickstart ./install.sh`) and run `install.sh --no-scenarios`. The agent's model is `quickstart-model`, so the same agent runs with either.
+The stub is a scripted stand-in, not a language model. Each scenario is one fixed chain of tool calls for one case (0001, 0005, 0011), then a templated answer. Any other case gets "needs human review" and no change. A real model works every case from the agent instructions in `values.yaml`; set a provider key (for example `ANTHROPIC_API_KEY=... PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml ./install.sh`) and leave `STUB_SCENARIOS` out. The agent's model is `quickstart-model`, so the same agent runs with either.
+
+Any run with these scenarios is **scripted by the stub model**, and a demo, a diary entry or a report that uses one must say so and name the file (`examples/use-cases/bank/eval/scenario.json`). It shows the platform's controls and the records service at work. It does not show how a model behaves. A scenario copies text from the user's message into tool arguments, so only the operator who installs the platform sets it.
 
 ## Evaluation
 
@@ -154,7 +159,7 @@ Each item is a public contract change, so each needs an ADR before code. The sma
 |---|---|---|---|
 | 1 | **A tool profile for the records tools.** `mcp.profiles[].tools` may name only backends from `mcp.servers`, the knowledge base and notify. The records service is registered outside the chart, so the check refuses a profile that names it (a test pins the message). The agent therefore uses the shared tool server, with an explicit tool list. That is weaker: the shared server offers every backend of the group to any agent that lists the tool, and the profile's own audience and per-profile server are not used. | An `MCPServerEntry` applied by `install.sh`; the agent lists its tools | Add `mcp.externalServers[]` (`name`, `url`, optionally `port`) that renders an `MCPServerEntry` and its `unauthenticated` config like the knowledge entry, adds its name to `oa.profileWorkloads`, and adds the vMCP ingress rule. Then the profile `disputes` and its policy entry can be written, and `manifests/tool-registration.yaml` goes away |
 | 2 | **Settings for a tool server.** `mcp.servers[]` takes `name`, `image`, `port`, `transport`, `proxyPort` and `resources`. There is no way to pass a file, a Secret or an environment variable. The records service needs the approvers file (without it nobody can decide) and a writable data directory. So it cannot run as a ToolHive-managed `mcp.servers` entry. | The service runs as its own Deployment in its own namespace, as in the plan's "own namespace" option | Add optional `env`, `secretMounts` and `volumes` (allow list of kinds: Secret, emptyDir) to `mcp.servers[]`, rendered into the `MCPServer` spec. Needs a security review: it lets values put a Secret into a tool pod. Item 1 is the smaller way for this use case |
-| 3 | **Mounting the scenario file into the stub model.** `gateway.stubModel` has no value for a file or an environment variable. | `install.sh` creates a ConfigMap and patches the `stub-model` Deployment with `kubectl patch`; `--uninstall` takes the patch out first. Whether a chart upgrade keeps or removes the patch has not been checked: look, and run `install.sh` again if needed | Add `gateway.stubModel.scenarios.configMap` (name and key) that mounts the file read only and sets `STUB_MODEL_SCENARIOS`; off by default, default render byte-identical |
+| 3 | **Mounting the scenario file into the stub model.** Done by ADR 0026, slice 3: `gateway.stubModel.scenarios.files`, filled by `install.sh` with `STUB_SCENARIOS`. | The platform install ships `eval/scenario.json` through the chart. The ConfigMap, the mount and the restart on change belong to the release, so an upgrade keeps them. `install.sh` here only checks and warns. Not yet run on a cluster: see the checklist | None left for this item. Upgrading from the earlier script of this use case (a `kubectl patch`): delete the `stub-model` Deployment in `agentgateway-system` and run the platform install again with `STUB_SCENARIOS`, so that Helm creates it from the chart (Helm does not take over a patched object cleanly) |
 | 4 | **A per-agent token budget.** One number applies to every virtual key. | Not set. The quick start budget (1,000,000 tokens per hour per key) applies | `agents[].budget.tokensPerHour` mapped to the gateway policy per key |
 | 5 | **Lists are replaced, not merged.** `agents`, `schedules`, `governance.a2a.callers` and `mcp.servers` in this file replace the lists of the base. Another base needs its entries copied in. | Done as a helper by ADR 0026, slice 4: `hack/compose-values.sh` merges the lists by entry name and reports every change (see "Install"). `values.yaml` still restates the quick start caller, so the plain `VALUES_FILE` form keeps working. Not yet run on a cluster | None left for this item (a script, no chart contract) |
 | 6 | **An event trigger and the first schedule limits.** The `case.created` webhook needs the Kourier channel, which the quick start does not install, and a signing secret held by the sender. The sweep is a chart schedule: it can only send one fixed prompt, has no failure alert, and runs the agent with one fixed user id. | The sweep is report only and suspended; a person starts case runs with `ctl.sh ask` | No new contract is needed for the sweep. For events, the existing channel values (ADR 0016 when built) |
@@ -184,8 +189,8 @@ Nothing below has been done. The first live run must check each item and write d
 - [ ] With a throwaway agent on the shared server and code mode on, whether a script can call a `records_*` tool. Write down yes or no.
 - [ ] The dispute agent calls the `records_*` and `knowledge_*` tools through its vMCP, and the vMCP audit lines show the tool names with no case text.
 - [ ] The kb ingest and the graph load work for the seven documents and the fact set. With the stub model, the kb's graph extraction does not fail the ingest.
-- [ ] The scenario mount works: the stub model restarts with `STUB_MODEL_SCENARIOS` and the three cases give the answers in the demo. After a chart upgrade, whether the mount is still there.
-- [ ] `install.sh --uninstall` leaves a working stub model, and the quick start agent still answers.
+- [ ] The scenario mount works: the platform install with `STUB_SCENARIOS` makes the ConfigMap `stub-model-scenarios`, the stub's start log names the number of scenarios (five), and the three cases give the answers in the demo. After a second platform install with the same values, the scenarios are still loaded. A changed scenario file restarts the stub. The diary entry says the run was scripted.
+- [ ] `install.sh --uninstall` leaves a working stub model (it does not touch it), and the quick start agent still answers.
 - [ ] Right after the bank install, the quick start agent (`hack/ask.sh quickstart ...`) still answers correctly.
 - [ ] `install.sh` run twice gives no error, and a second kb ingest and graph load create no duplicate documents, entities or relations.
 - [ ] A kb search for each of the four cited titles (Fernvale Dispute Handling Policy, Ficticard Scheme Dispute Rules, Customer Text and Untrusted Input Rule, Fernvale Provisional Credit Rule) returns that document.

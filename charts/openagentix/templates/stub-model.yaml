@@ -1,3 +1,30 @@
+{{- /* Scenario files (ADR 0026, B). Checked first, also while the stub is off, so that files that would have no effect are refused. */ -}}
+{{- $scn := (.Values.gateway.stubModel.scenarios | default dict) }}
+{{- $scnFiles := ($scn.files | default dict) }}
+{{- if not (kindIs "map" $scnFiles) }}{{ fail "gateway.stubModel.scenarios.files must be a map from a file name to the JSON text of a scenario file" }}{{ end }}
+{{- if and $scnFiles (not (and .Values.gateway.enabled .Values.gateway.stubModel.enabled)) }}
+{{- fail "gateway.stubModel.scenarios.files has no effect while gateway.stubModel.enabled is false (or the gateway is off): turn the stub model on, or leave the files out. The stub is a test component." }}
+{{- end }}
+{{- $scnTotal := 0 }}
+{{- range $name, $text := $scnFiles }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,62}[.]json$" $name) }}
+{{- fail (printf "gateway.stubModel.scenarios.files: the file name %q is not allowed: use lowercase letters, digits and dashes, at most 63 characters, then .json" $name) }}
+{{- end }}
+{{- if not (kindIs "string" $text) }}
+{{- fail (printf "gateway.stubModel.scenarios.files.%s must be a string with the JSON text of a scenario file (pass the file with --set-file, or use install.sh STUB_SCENARIOS)" $name) }}
+{{- end }}
+{{- $doc := fromJson $text }}
+{{- if and (hasKey $doc "Error") (not (hasKey $doc "scenarios")) }}
+{{- fail (printf "gateway.stubModel.scenarios.files.%s is not a JSON object" $name) }}
+{{- end }}
+{{- if not (kindIs "slice" $doc.scenarios) }}
+{{- fail (printf "gateway.stubModel.scenarios.files.%s has no \"scenarios\" list" $name) }}
+{{- end }}
+{{- $scnTotal = add $scnTotal (len $text) }}
+{{- end }}
+{{- if gt (int $scnTotal) 262144 }}
+{{- fail (printf "gateway.stubModel.scenarios.files hold %d bytes, more than the limit of 262144 (256 KiB): a ConfigMap and a Helm release are limited to 1 MiB" (int $scnTotal)) }}
+{{- end }}
 {{- if and .Values.gateway.enabled .Values.gateway.stubModel.enabled }}
 {{- $g := .Values.gateway }}
 {{- $s := $g.stubModel }}
@@ -35,9 +62,14 @@ spec:
       labels:
         app: stub-model
         {{- include "oa.labels" . | nindent 8 }}
-      {{- if $s.sourceHash }}
+      {{- if or $s.sourceHash $scnFiles }}
       annotations:
+        {{- if $scnFiles }}
+        openagentix.io/scenarios-checksum: {{ toJson $scnFiles | sha256sum | quote }}   # a change of a scenario file rolls the pod
+        {{- end }}
+        {{- if $s.sourceHash }}
         openagentix.io/source-hash: {{ $s.sourceHash | quote }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with include "oa.priorityClass" $ }}
@@ -72,6 +104,33 @@ spec:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 20
           resources: {{- toYaml $s.resources | nindent 12 }}
+          {{- if $scnFiles }}
+          env:
+            - {name: STUB_MODEL_SCENARIOS, value: /etc/stub-model/scenarios}
+          volumeMounts:
+            - {name: scenarios, mountPath: /etc/stub-model/scenarios, readOnly: true}
+          {{- end }}
+      {{- if $scnFiles }}
+      volumes:
+        - name: scenarios
+          configMap: {name: stub-model-scenarios}
+      {{- end }}
+{{- if $scnFiles }}
+---
+# Scenario files for the stub model (ADR 0026, B): a test value, filled by install.sh STUB_SCENARIOS. A run that uses them is a SCRIPTED run.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stub-model-scenarios
+  namespace: {{ $g.namespace }}
+  labels:
+    app: stub-model
+    {{- include "oa.labels" . | nindent 4 }}
+data:
+  {{- range $name, $text := $scnFiles }}
+  {{ $name }}: {{ toJson $text }}
+  {{- end }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
