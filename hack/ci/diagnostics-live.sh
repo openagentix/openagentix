@@ -36,9 +36,11 @@ sleep 3
 check "/readyz answers 200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/readyz")" 200
 INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"diag-live","version":"0"}}}'
 check "/mcp without a bearer value is refused (401)" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT" "http://127.0.0.1:$PORT/mcp")" 401
-check "/mcp with a wrong bearer value is refused (401)" "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer not-the-value' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT" "http://127.0.0.1:$PORT/mcp")" 401
+# the header goes to curl through a config file made by process substitution: the value is never an argument (not even in a test)
+mcp_init() { curl -s -o /dev/null -w '%{http_code}' -K <(printf 'header = "Authorization: Bearer %s"\n' "$1") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT" "http://127.0.0.1:$PORT/mcp"; }
+check "/mcp with a wrong bearer value is refused (401)" "$(mcp_init not-the-value)" 401
 VAL=$($K get secret -n "$DNS" cluster-read-bearer -o jsonpath='{.data.bearer}' | base64 -d)
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $VAL" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT" "http://127.0.0.1:$PORT/mcp")
+code=$(mcp_init "$VAL")
 check "/mcp with the right bearer value answers initialize (200)" "$code" 200
 HV=$($K get secret -n "$MCPNS" diagnostics-bearer-cluster-read -o jsonpath='{.data.authorization}' | base64 -d)
 check "the two Secrets hold the same value (the gateway's has the scheme word in front)" "$([ "$HV" = "Bearer $VAL" ] && echo same || echo different)" same
