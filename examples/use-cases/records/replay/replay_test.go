@@ -74,6 +74,7 @@ type env struct {
 	stub   string
 	tools  []string // names as the agent sees them: records_<tool>, knowledge-disputes_<tool>
 	called []string
+	kb     func(tool, args string) string // set by a test to change what the knowledge base answers
 }
 
 var (
@@ -229,7 +230,11 @@ func (e *env) run(user string) string {
 		case strings.HasPrefix(name, "knowledge-disputes_"):
 			short := strings.TrimPrefix(name, "knowledge-disputes_")
 			e.called = append(e.called, name)
-			result = kbAnswer(short, tc.Function.Arguments)
+			if e.kb != nil {
+				result = e.kb(short, tc.Function.Arguments)
+			} else {
+				result = kbAnswer(short, tc.Function.Arguments)
+			}
 		case strings.HasPrefix(name, "records_"):
 			short := strings.TrimPrefix(name, "records_")
 			e.called = append(e.called, name)

@@ -319,7 +319,7 @@ WANT=$(printf '%s' "$ALLOWED" | tr ' ' '\n' | grep . | sort | tr '\n' ' ' | sed 
 check "tools/list on the group's tool server lists exactly the 21 tools of the profile (records_* and knowledge-disputes_*)" "$LIST_G" "$WANT"
 CALL=$(mcp_call "$GPORT" "$TD/tg" "$SID_G" 3 tools/call '{"name":"records_get_case","arguments":{"case_id":"DSP-'"$YEAR"'-0002"}}')
 echo "       the group's tool server answered the call: $(printf '%s' "$CALL" | cut -c1-400)"
-check "a call of records_get_case through the group's tool server reaches the service with the header and answers a case" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" ")|test("DSP-"))|tostring' <<<"$CALL" 2>/dev/null)" "false true"
+check "a call of records_get_case through the group's tool server reaches the service with the header and answers a case" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" ")|test("DSP-")|tostring)' <<<"$CALL" 2>/dev/null)" "false true"
 CALL=$(mcp_call "$GPORT" "$TD/tg" "$SID_G" 4 tools/call '{"name":"records_approve","arguments":{"approval_id":"APR-0001"}}')
 check "a tool the profile does not list (records_approve) is refused" "$(jq -r '((.error!=null) or (.result.isError==true))|tostring' <<<"$CALL" 2>/dev/null)" true
 RES=$(mcp_call "$GPORT" "$TD/tg" "$SID_G" 5 resources/list '{}' 2>/dev/null)

@@ -33,19 +33,20 @@
       "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bwork case (?P<id>DSP-\\d{4}-0005)\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
-        {"tool": "kb_search", "args": {"query": "scheme time limit 120 days out of time decline", "collection": "fernvale-disputes", "top_k": 3}},
+        {"tool": "kb_search", "args": {"query": "Ficticard scheme time limits: a cardholder may dispute a charge up to 120 days after the charge, then the dispute is out of time", "collection": "fernvale-disputes", "top_k": 3}},
         {"tool": "attach_evidence", "args": {"case_id": "{{user.id}}", "kind": "rule", "ref": "scheme-time-limit",
-          "note": "Rule applied: {{result.1.output.results.0.title}}. The transaction is {{result.0.output.case.txn_age_days}} days old and the limit is 120 days."}},
+          "note": "Rule applied: the scheme time limit of 120 days. The transaction is {{result.0.output.case.txn_age_days}} days old."}},
         {"tool": "set_route", "args": {"case_id": "{{user.id}}", "route": "decline",
-          "reason": "The transaction is older than the scheme limit of 120 days. Rule: {{result.1.output.results.0.title}}."}},
+          "reason": "The transaction is older than the scheme limit of 120 days."}},
         {"tool": "draft_letter", "args": {"case_id": "{{user.id}}",
           "body": "Dear cardholder,\n\nWe have reviewed your dispute {{user.id}}. The charge is {{result.0.output.case.txn_age_days}} days old. The card scheme accepts disputes only within 120 days of the charge, so we cannot take this dispute forward.\n\nThis letter is a draft until the disputes desk lead approves it. If you have new information, please reply and an analyst will look at it.\n\nFernvale Bank disputes desk"}},
         {"tool": "set_timer", "args": {"case_id": "{{user.id}}", "name": "customer_reply", "due_at": "{{result.0.output.case.response_due}}"}},
         {"tool": "request_approval", "args": {"case_id": "{{user.id}}", "kind": "decline", "amount_cents": 0}}
       ],
       "answers": [
-        {"when": {"result.1.output.results.0.title": "^$"}, "text": "Needs human review: I found no scheme rule for case {{user.id}} in the knowledge base. I did not ask for any approval."},
-        {"text": "Case {{user.id}}: out of time. I applied {{result.1.output.results.0.title}}: the charge is {{result.0.output.case.txn_age_days}} days old and the limit is 120 days. Route: decline. The letter is a draft. Approval request {{result.6.output.approval.id}} is pending approval by the desk lead. No credit has been posted."}
+        {"when": {"result.1.output.results.0.title": "^Ficticard Scheme"}, "text": "Case {{user.id}}: out of time. I applied {{result.1.output.results.0.title}}: the charge is {{result.0.output.case.txn_age_days}} days old and the limit is 120 days. Route: decline. The letter is a draft. Approval request {{result.6.output.approval.id}} is pending approval by the desk lead. No credit has been posted."},
+        {"when": {"result.1.output.results.1.title": "^Ficticard Scheme"}, "text": "Case {{user.id}}: out of time. I applied {{result.1.output.results.1.title}}: the charge is {{result.0.output.case.txn_age_days}} days old and the limit is 120 days. Route: decline. The letter is a draft. Approval request {{result.6.output.approval.id}} is pending approval by the desk lead. No credit has been posted."},
+        {"text": "Case {{user.id}}: needs human review. The knowledge base results did not include the scheme rules, so I cannot cite a rule for the 120 day limit. Approval request {{result.6.output.approval.id}} is pending approval by the desk lead: a person must check the rule before it is decided. No credit has been posted."}
       ]
     },
     {
