@@ -63,7 +63,8 @@ restore_oidc() {
 cleanup() {
   rm -f "$TD/token"   # the gate token (60 minutes) never stays on disk, even when BANK_OUT keeps the directory
   for p in $PF $REF $PFR $PFM $PFG $PFS $PFL; do kill "$p" 2>/dev/null; done
-  $K delete pod egress-probe nettest -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
+  $K delete pod egress-probe egress-control nettest -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
+  $K delete pod egress-target -n default --ignore-not-found --wait=false >/dev/null 2>&1
   $K delete pod nettest -n default --ignore-not-found --wait=false >/dev/null 2>&1
   $K delete serviceaccount branch-kiosk -n "$DESK_NS" --ignore-not-found >/dev/null 2>&1
   restore_oidc
@@ -245,9 +246,24 @@ case "$CODE" in
   000|"") ok "a pod in default timed out against the records port (the ingress policy is enforced here)";;
   *) bad "a pod in default reached the records port (HTTP $CODE)" "the network plugin of this cluster does not enforce ingress policy, or the policies do not select the pod. The header value is then the only check; do not read this as a pass.";;
 esac
-# What the egress policy of the group does on this network plugin. A throwaway pod with the labels of the group's tool server is selected by the policy; it must
-# reach what the policy allows (the records pod: the control) and, if the policy is enforced, must not reach what it does not allow (the A2A gate).
+# What the egress policy of the group does on this network plugin. Three throwaway pods: a target in `default` that nothing restricts (a small web server), a
+# control with no tool server labels (it is not selected by the policy: it must reach the target), and a probe with the labels of the group's tool server (it is
+# selected by the policy: the target is not on its list, so an enforced policy cuts it). A probe that is cut while the control is not shows enforcement; a probe
+# that is not cut shows that the policy is applied and listed, not that it works here. The target is in `default` so that no policy of the platform decides.
+$K delete pod egress-target -n default --ignore-not-found --wait=false >/dev/null 2>&1
 $K apply -f - >/dev/null 2>&1 <<YAML
+apiVersion: v1
+kind: Pod
+metadata: {name: egress-target, namespace: default, labels: {app: egress-target}}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  containers:
+    - name: web
+      image: python:3.12.7-slim
+      command: ["python3", "-I", "-m", "http.server", "8000", "--bind", "0.0.0.0"]
+      readinessProbe: {httpGet: {path: /, port: 8000}, periodSeconds: 2}
+---
 apiVersion: v1
 kind: Pod
 metadata:
@@ -263,21 +279,38 @@ spec:
       image: curlimages/curl:8.10.1
       command: ["sleep", "300"]
       securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: egress-control, namespace: $MCPNS, labels: {app: egress-control}}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      command: ["sleep", "300"]
+      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
 YAML
-$K wait pod/egress-probe -n "$MCPNS" --for=condition=Ready --timeout=120s >/dev/null 2>&1
-eprobe() { $K exec -n "$MCPNS" egress-probe -- curl -s -m 8 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null; }
-CTRL=$(eprobe "http://records.$RNS.svc.cluster.local:8080/healthz")
-OFF=$(eprobe "http://a2a-gate.$GATE_NS.svc.cluster.local:8080/healthz")
-obs "egress probe (a pod with the labels of the group's tool server): the records pod, which the policy allows: HTTP ${CTRL:-none}; the A2A gate, which it does not allow: HTTP ${OFF:-none}"
-if [ "$CTRL" = 200 ]; then
+$K wait pod/egress-target -n default --for=condition=Ready --timeout=180s >/dev/null 2>&1
+$K wait pod/egress-probe pod/egress-control -n "$MCPNS" --for=condition=Ready --timeout=180s >/dev/null 2>&1
+TIP=$($K get pod egress-target -n default -o jsonpath='{.status.podIP}' 2>/dev/null)
+eprobe() { $K exec -n "$MCPNS" "$1" -- curl -s -m 8 -o /dev/null -w '%{http_code}' "$2" 2>/dev/null; }
+CTRL_OK=$(eprobe egress-probe "http://records.$RNS.svc.cluster.local:8080/healthz")
+CTRL=$(eprobe egress-control "http://$TIP:8000/")
+OFF=$(eprobe egress-probe "http://$TIP:8000/")
+obs "egress probe: the records pod, which the policy allows, from the probe: HTTP ${CTRL_OK:-none}; the target pod in default from the control (no tool server labels): HTTP ${CTRL:-none}; the same target from the probe (the tool server labels, not on the policy's list): HTTP ${OFF:-none}"
+if [ "$CTRL_OK" = 200 ] && [ "$CTRL" = 200 ]; then
   case "$OFF" in
-    000|"") ok "the egress policy of the group is ENFORCED on this network plugin: the gate, which it does not allow, timed out while the records pod answered" ;;
-    *) obs "the egress policy of the group is NOT shown to be enforced on this network plugin: the gate answered HTTP $OFF. The policy is applied and listed; on kindnet it does not cut a connection. This is the documented limit (ADR 0026, A5), not a pass of the egress rule." ;;
+    000|"") ok "the egress policy of the group is ENFORCED on this network plugin: the probe with the tool server labels was cut from a target the control reached, while it still reached the records pod" ;;
+    *) obs "the egress policy of the group is NOT shown to be enforced on this network plugin: the probe reached the target (HTTP $OFF). The policy is applied and listed; here it does not cut a connection. This is the documented limit (ADR 0026, A5), not a pass of the egress rule." ;;
   esac
 else
-  obs "the control did not answer (HTTP ${CTRL:-none}): nothing can be said about egress from this probe"
+  obs "a control did not answer (the records pod from the probe: ${CTRL_OK:-none}; the target from the control: ${CTRL:-none}): nothing can be said about egress from this run"
 fi
-$K delete pod egress-probe -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
+$K delete pod egress-probe egress-control -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
+$K delete pod egress-target -n default --ignore-not-found --wait=false >/dev/null 2>&1
 
 # --- 10. the tool servers directly ------------------------------------------------------------------------------------------------------------
 # The agents' own path (above) stays as the platform made it. For this part only, the identity settings of the tool servers are changed: they trust the API
