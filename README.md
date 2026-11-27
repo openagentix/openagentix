@@ -124,6 +124,8 @@ Model, chosen for you in this order: a key in the environment (`ANTHROPIC_API_KE
 
 No key yet? You can still try the platform's controls in minutes: run `PROFILE=quickstart ./install.sh` with nothing set. A built-in **stub model** answers. It is a scripted stand-in, not a language model: it calls a tool for a vulnerability question and reports what the tool returned, and every answer says it is the stub. Use it to see the tool profile, the gate, the budget, the console and the refusals, not for answers. To switch later, run the same command with a key or endpoint above.
 
+The stub can also play whole scripted runs (scenario files, ADR 0026): `STUB_SCENARIOS=<file or directory> PROFILE=quickstart ./install.sh`. It is a test component. A run played from a scenario is scripted, not the behaviour of a model, so say so wherever you show or report it.
+
 What you get: kagent and Agent Substrate (sandboxed agents), the model gateway (a virtual key and a token budget per agent), the tool gateway with one tool server (OSV) and one tool profile that offers one tool, the control plane and the console, the A2A gate, the bundled metrics store and Jaeger (content capture off), and one agent, `quickstart`, created from an `AgentDefinition` (`components/quickstart/agent.yaml`). Off: the Telegram bridge, channels, schedules, notify, the knowledge base and memory.
 
 Ask the agent, with no chat app (the answer comes back through the A2A gate):

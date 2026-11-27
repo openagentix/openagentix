@@ -77,6 +77,12 @@
 #                        such as agents[] or schedules[] are REPLACED by the later file) (e.g. more agents, schedules, networkPolicy.extraA2ACallers for a
 #                        chat gateway of your own). Helm replaces rather than merges the release values, so pass the
 #                        same files on every run, or the extras disappear.
+#   STUB_SCENARIOS=<file or directory>  scenario files for the stub model (ADR 0026, B; services/stub-model/README.md). Each *.json file is passed to
+#                        the chart with --set-file gateway.stubModel.scenarios.files.<name, dots escaped>=<path>, in name order; the chart makes the
+#                        ConfigMap and the mount, and a changed file restarts the stub. Names: lowercase letters, digits, dashes, then .json; at most
+#                        256 KiB in all. When the install uses a real model (the stub is off) it prints one line and passes nothing. Like VALUES_FILE
+#                        it must be given on EVERY run, because Helm replaces release values. The stub is a test component: a run with scenarios
+#                        is SCRIPTED, and a demo or a diary entry must say so and name the file.
 #   KOURIER_VALUES_FILE="k.yaml"  extra values for the Agent Kourier release (see components/channels/kourier-values.yaml)
 #   KOURIER_APISERVER_CIDRS="10.0.0.0/24 ..."  the API server addresses Kourier's NetworkPolicy allows (comma or space separated); default: on kind the
 #                        /24 of the API server's node address, elsewhere the exact endpoint addresses (components/channels/apiserver-cidrs.sh)
@@ -212,6 +218,29 @@ fi
 # What is required is decided from what the chart renders, before anything is created.
 render(){ helm template $RELEASE $CHART -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} "$@" | yq -c 'select(.!=null)'; }
 RENDERED=$(render) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
+# STUB_SCENARIOS (ADR 0026, B): scenario files for the stub model. Each *.json file is passed with --set-file, in name order, with the dot of
+# the name escaped; the chart renders the ConfigMap, the mount and the checksum that rolls the pod. Checked before anything is created.
+if [ -n "${STUB_SCENARIOS:-}" ]; then
+  SCEN_LIST=()
+  if [ -d "$STUB_SCENARIOS" ]; then
+    while IFS= read -r f; do SCEN_LIST+=("$f"); done < <(find "$STUB_SCENARIOS" -maxdepth 1 \( -type f -o -type l \) -name '*.json' | LC_ALL=C sort)
+    [ ${#SCEN_LIST[@]} -gt 0 ] || die "STUB_SCENARIOS=$STUB_SCENARIOS has no *.json file. Nothing was changed."
+  elif [ -f "$STUB_SCENARIOS" ]; then SCEN_LIST=("$STUB_SCENARIOS")
+  else die "STUB_SCENARIOS=$STUB_SCENARIOS is not a file or a directory. Nothing was changed."
+  fi
+  for f in "${SCEN_LIST[@]}"; do
+    [[ "$(basename "$f")" =~ ^[a-z0-9][a-z0-9-]{0,62}\.json$ ]] || die "STUB_SCENARIOS: the file name \"$(basename "$f")\" is not allowed: use lowercase letters, digits and dashes, at most 63 characters, then .json. Nothing was changed."
+    case "$f" in *,*) die "STUB_SCENARIOS: the path \"$f\" has a comma, which Helm would read as a separator. Move the file. Nothing was changed.";; esac
+    [ -r "$f" ] || die "STUB_SCENARIOS: cannot read $f. Nothing was changed."
+  done
+  if jq -e 'select(.kind=="Deployment" and .metadata.name=="stub-model")' <<<"$RENDERED" >/dev/null; then
+    for f in "${SCEN_LIST[@]}"; do n=$(basename "$f"); VALS+=(--set-file "gateway.stubModel.scenarios.files.${n//./\\.}=$f"); done
+    RENDERED=$(render) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
+    echo "NOTE: the stub model plays ${#SCEN_LIST[@]} scenario file(s) from $STUB_SCENARIOS. Runs with them are scripted by the stub, not the behaviour of a model: say so in any demo, diary entry or report."
+  else
+    echo "STUB_SCENARIOS is set, but the stub model is off in this install: no scenario file is passed."
+  fi
+fi
 . components/quickstart/preflight.sh
 problems=()
 while IFS= read -r p; do [ -z "$p" ] || problems+=("$p"); done < <(preflight_secret_problems "$RENDERED" secret_exists; preflight_skill_problems "$RENDERED" "${SKIP_SKILL:-0}")

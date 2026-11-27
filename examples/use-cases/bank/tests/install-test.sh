@@ -14,7 +14,7 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 LOG="$TMP/log"; mkdir -p "$LOG"
 
 # fake kubectl: every call is logged (arguments only), stdin of apply and create is kept, the state of the namespace and of each Secret
-# lives in files. FAKE_CODEMODE=true, FAKE_OTHER_AGENT=1, FAKE_NO_AGENT=1, FAKE_STUB=1 and FAKE_SECRETS=a|t|both|none set the cluster.
+# lives in files. FAKE_CODEMODE=true, FAKE_OTHER_AGENT=1, FAKE_NO_AGENT=1, FAKE_STUB=1, FAKE_SCENARIOS=1 (the chart ConfigMap stub-model-scenarios exists) and FAKE_SECRETS=a|t|both|none set the cluster.
 cat > "$BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG/calls"
@@ -30,6 +30,7 @@ case "$*" in
   *"get secret records-approvers"*) [ -f "$FAKE_LOG/secret_a" ] && exit 0 || exit 1 ;;
   *"get secret records-approver-token"*) [ -f "$FAKE_LOG/secret_t" ] && exit 0 || exit 1 ;;
   *"get deployment stub-model"*) [ -n "${FAKE_STUB:-}" ] && exit 0 || exit 1 ;;
+  *"get configmap stub-model-scenarios"*) [ -n "${FAKE_SCENARIOS:-}" ] && exit 0 || exit 1 ;;
   *"delete secret"*) rm -f "$FAKE_LOG/secret_a" "$FAKE_LOG/secret_t" ;;
   *"create namespace fernvale-records"*) : > "$FAKE_LOG/ns" ;;
   *"create secret generic records-approvers"*) cat > "$FAKE_LOG/approvers.stdin"; : > "$FAKE_LOG/secret_a" ;;
@@ -78,8 +79,8 @@ check "the desk ServiceAccount is made" "grep -q 'create serviceaccount disputes
 check "the documents go into the collection fernvale-disputes" "grep -q 'kb-ingest .*/seed/kb fernvale-disputes' '$LOG/calls'"
 check "the graph facts go into the fact set fernvale-bank" "grep -q 'kb-graph-load fernvale-disputes fernvale-bank .*/seed/graph/dispute-facts.yaml' '$LOG/calls'"
 check "the kb scripts get the same kubectl and context" "grep -q 'KUBECTL=$BIN/kubectl' '$LOG/calls'"
-check "the stub model gets the scenario (ConfigMap and patch)" "grep -q 'create configmap bank-scenarios' '$LOG/calls' && grep -q 'patch deployment stub-model' '$LOG/calls'"
-check "the patch mounts the file read only and sets STUB_MODEL_SCENARIOS" "grep 'patch deployment stub-model' '$LOG/calls' | grep -q 'STUB_MODEL_SCENARIOS' && grep 'patch deployment stub-model' '$LOG/calls' | grep -q 'readOnly'"
+check "the script makes no scenario ConfigMap and does not patch the stub model (the chart ships them)" "! grep -q 'bank-scenarios' '$LOG/calls' && ! grep -q 'patch' '$LOG/calls' && ! grep -q 'create configmap' '$LOG/calls'"
+check "a stub model without the chart ConfigMap: a warning that names STUB_SCENARIOS and the file, exit 0" "grep -q 'WARN: the stub model has no scenarios' '$LOG/out' && grep -q 'STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json' '$LOG/out'"
 check "the script never reads a Secret" "! grep -q 'get secret .*-o' '$LOG/calls'"
 check "the exposure checks are read only (get, no patch or delete before the build)" "awk '/docker build/{exit} /patch|delete|create|apply/{bad=1} END{exit bad}' '$LOG/calls'"
 
@@ -114,11 +115,14 @@ check "the quick start shape (a profile agent and the dispute agent only) passes
 
 echo "# options and refusals"
 reset
+FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
+check "a stub model with the chart scenarios: no warning, one line that says runs are scripted" "[ $rc = 0 ] && ! grep -q WARN '$LOG/out' && grep -q 'scripted by the stub model' '$LOG/out' && ! grep -q 'patch' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
 run --no-scenarios; rc=$?
-check "--no-scenarios: no ConfigMap and no patch" "[ $rc = 0 ] && ! grep -q 'bank-scenarios' '$LOG/calls' && ! grep -q 'patch deployment' '$LOG/calls'"
+check "--no-scenarios and --scenarios are gone: refused as unknown, with a pointer to STUB_SCENARIOS" "[ $rc = 1 ] && grep -q 'unknown argument: --no-scenarios' '$LOG/out' && grep -q STUB_SCENARIOS '$LOG/out'" "exit $rc: $(cat "$LOG/out")"
 reset
 run; rc=$?
-check "without a stub model nothing is patched" "[ $rc = 0 ] && ! grep -q 'patch deployment' '$LOG/calls'" "exit $rc"
+check "without a stub model nothing is patched" "[ $rc = 0 ] && ! grep -q 'patch deployment' '$LOG/calls' && ! grep -q WARN '$LOG/out' && grep -q 'no stub model in this cluster' '$LOG/out'" "exit $rc"
 reset
 KUBE_CONTEXT=gke_example_project run; rc=$?
 check "a context that is not kind is refused before any call" "[ $rc = 1 ] && grep -q 'local kind cluster' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
@@ -139,8 +143,7 @@ echo "# uninstall"
 reset
 FAKE_STUB=1 run --uninstall; rc=$?
 check "--uninstall deletes the namespace, the entry and the ServiceAccount" "[ $rc = 0 ] && grep -q 'delete namespace fernvale-records' '$LOG/calls' && grep -q 'delete -f .*tool-registration.yaml' '$LOG/calls' && grep -q 'delete serviceaccount disputes-desk' '$LOG/calls'" "exit $rc"
-check "--uninstall takes the scenario mount out of the stub model BEFORE it deletes the ConfigMap" "grep -n 'patch deployment stub-model' '$LOG/calls' | head -1 | cut -d: -f1 > '$LOG/p'; grep -n 'delete configmap bank-scenarios' '$LOG/calls' | head -1 | cut -d: -f1 > '$LOG/d'; [ -s '$LOG/p' ] && [ -s '$LOG/d' ] && [ \"\$(cat '$LOG/p')\" -lt \"\$(cat '$LOG/d')\" ]"
-check "the removal patch deletes the env, the mount and the volume" "grep 'patch deployment stub-model' '$LOG/calls' | grep -q 'STUB_MODEL_SCENARIOS' && grep 'patch deployment stub-model' '$LOG/calls' | grep -q 'bank-scenarios' && grep 'patch deployment stub-model' '$LOG/calls' | grep -q 'patch\":\"delete'"
+check "--uninstall does not patch the stub model or touch scenarios (they belong to the chart release)" "! grep -q 'patch' '$LOG/calls' && ! grep -q 'bank-scenarios' '$LOG/calls' && ! grep -q 'stub-model' '$LOG/calls'"
 reset
 run --uninstall; rc=$?
 check "--uninstall without a stub model does not patch" "[ $rc = 0 ] && ! grep -q 'patch deployment' '$LOG/calls'"
