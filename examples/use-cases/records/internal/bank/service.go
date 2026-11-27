@@ -494,6 +494,9 @@ func (s *Service) Describe(ctx context.Context, tx *sql.Tx, subject, kind string
 		return "", 0, err
 	}
 	if kind == RouteCreditThenChargeback {
+		if c.ClaimType == "goods_not_received" {
+			return "", 0, &core.Error{Kind: core.Conflict, Msg: "no provisional credit for goods not received: the route is a chargeback with no credit"}
+		}
 		if prior > 0 {
 			return "", 0, &core.Error{Kind: core.Conflict, Msg: "this transaction was already credited by an earlier case"}
 		}

@@ -135,6 +135,8 @@ Replay of the 30 closed cases (the human decision is kept in the records REST vi
 - No per-agent budget: the gateway has one token budget number for every key (`gateway.policy.tokenBudget`).
 - No notification to the desk: `notify` needs a destination and a chat token; the agent has no notify tool in this offline version.
 - No event trigger (a signed webhook on `case.created`): not wired; a person or the schedule starts the agent.
+- Rules that rely on the prompt and on the approver, not on the record: the record refuses a credit or chargeback outside the scheme window and a provisional credit on goods not received. Every other rule of the policy (for example a subscription claim without a cancellation date, a charge with a refund already posted, evidence per reason code, the 10 minute duplicate window) is enforced only by the agent's instructions and by what the desk lead reads in the payload. Gap items the agent writes are not in the hashed payload.
+- The prompt clash is not tested: the chart appends the knowledge base prompt to the agent's prompt, and how a real model weighs the two is unknown.
 - Approver tokens are unsalted SHA-256 hashes of a long random token, with no lockout. The token Secret is readable by anyone who can read Secrets in `fernvale-records`. Whoever can port-forward to the pod can use the REST routes that need no login (the agent steps). This is a demo, not a bank.
 
 ## What could not be wired with existing chart values and resources
@@ -169,7 +171,7 @@ Nothing below has been done. The first live run must check each item and write d
 
 - [ ] The records pod becomes Ready under the `restricted` pod security level, with the probes on 8080 and the image from `install.sh`.
 - [ ] Memory and CPU of the records pod and its registration, measured, against the estimate.
-- [ ] The `MCPServerEntry` is accepted, the vMCPs `tools` and `tools-lookup` list the records tools, and the tool names are `records_<tool>` as the values file says.
+- [ ] The `MCPServerEntry` is accepted, the vMCP `tools` lists the records tools, the vMCP `tools-lookup` does not (it shows only `osv_query_vulnerability`) and stays Ready, and the tool names are `records_<tool>` as the values file says.
 - [ ] A pod in another namespace cannot reach `records.fernvale-records:8080`. A pod in `mcp-tools` with no vMCP labels cannot either. This is the NetworkPolicy enforcement test: if it fails, the cluster does not enforce the policy.
 - [ ] A pod in another namespace cannot reach the REST port (8081). `kubectl port-forward` to the pod reaches it.
 - [ ] With a throwaway agent on the shared server and code mode on, whether a script can call a `records_*` tool. Write down yes or no.
@@ -177,6 +179,13 @@ Nothing below has been done. The first live run must check each item and write d
 - [ ] The kb ingest and the graph load work for the seven documents and the fact set. With the stub model, the kb's graph extraction does not fail the ingest.
 - [ ] The scenario mount works: the stub model restarts with `STUB_MODEL_SCENARIOS` and the three cases give the answers in the demo. After a chart upgrade, whether the mount is still there.
 - [ ] `install.sh --uninstall` leaves a working stub model, and the quick start agent still answers.
+- [ ] Right after the bank install, the quick start agent (`hack/ask.sh quickstart ...`) still answers correctly.
+- [ ] `install.sh` run twice gives no error, and a second kb ingest and graph load create no duplicate documents, entities or relations.
+- [ ] A kb search for each of the four cited titles (Fernvale Dispute Handling Policy, Ficticard Scheme Dispute Rules, Customer Text and Untrusted Input Rule, Fernvale Provisional Credit Rule) returns that document.
+- [ ] An approval is refused after the case changed since it was proposed (an evidence item, a route or a draft written after the request).
+- [ ] The vMCP `AUDIT` lines have the `tool` field that `oa-eval` reads, and name the caller.
+- [ ] The install guard really refuses on a cluster with code mode on, and on one with a second agent on the shared tool server. The non-kind context refusal works on a cluster, for install, uninstall and `ctl.sh`.
+- [ ] After the half-made Secrets recovery, the restarted pod accepts the new token and refuses the old one.
 - [ ] Case 0001 end to end: approval request, `ctl.sh approve`, one ledger row, letter and filing queued. A second approve is refused. Case 0005 gives a decline and no ledger row. Case 0011 is refused.
 - [ ] A service account with no caller rule (a `branch-kiosk`) gets 403 at the gate. The desk caller works only for the dispute agent.
 - [ ] The suspended `deadline-sweep` runs once by hand from the CronJob and only reports.

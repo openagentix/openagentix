@@ -48,7 +48,7 @@ func ctlWith(t *testing.T, h http.Handler, extraEnv []string, args ...string) (s
 	script := `#!/bin/sh
 echo "$*" >> "` + callsFile + `"
 case "$*" in
-  *port-forward*) echo $$ > "` + pidFile + `"; echo "Forwarding from 127.0.0.1:` + u.Port() + ` -> 8081"; exec sleep 120 ;;
+  *port-forward*) echo $$ >> "` + pidFile + `"; echo "Forwarding from 127.0.0.1:` + u.Port() + ` -> 8081"; exec sleep 120 ;;
   *"get secret records-approver-token"*) printf %s "` + base64.StdEncoding.EncodeToString([]byte(leadToken)) + `" ;;
   *) echo "unexpected kubectl call: $*" >&2; exit 9 ;;
 esac
@@ -69,19 +69,22 @@ esac
 		}
 		code = ee.ExitCode()
 	}
+	// every port-forward the script started is listed in the file, one pid per line, and every one must be gone
 	if raw, err := os.ReadFile(pidFile); err == nil {
-		pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-		gone := false
-		for i := 0; i < 40; i++ {
-			if syscall.Kill(pid, 0) != nil {
-				gone = true
-				break
+		for _, f := range strings.Fields(string(raw)) {
+			pid, _ := strconv.Atoi(f)
+			gone := false
+			for i := 0; i < 40; i++ {
+				if syscall.Kill(pid, 0) != nil {
+					gone = true
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
 			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if !gone {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-			t.Fatalf("ctl.sh %v left its port-forward running (pid %d)", args, pid)
+			if !gone {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Fatalf("ctl.sh %v left a port-forward running (pid %d)", args, pid)
+			}
 		}
 	}
 	if raw, err := os.ReadFile(callsFile); err == nil {
