@@ -90,5 +90,5 @@ t "that file says it is for CI only" "$(grep -c 'CI ONLY' hack/ci/diagnostics-ci
 
 echo "# the installer uses it"
 t "install.sh sources hack/diagnostics-check.sh" "$(grep -c '^[[:space:]]*\. hack/diagnostics-check.sh' install.sh)" 1
-t "install.sh calls diag_check_vmcps and stops the install on its failure" "$(grep -c 'diag_check_vmcps .* || die' install.sh)" 1
+t "install.sh calls diag_check_vmcps and stops the install on its failure" "$(grep -c '^[[:space:]]*diag_check_vmcps .* || die' install.sh)" 1
 [ "$F" = 0 ] && echo "diagnostics-check-test: all passed" || { echo "diagnostics-check-test: FAILED"; exit 1; }

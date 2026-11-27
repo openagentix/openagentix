@@ -306,6 +306,7 @@ Needs the A2A gate (the only way to the MemoryService), the bridge, and the brid
 {{- if .Values.knowledge.enabled }}{{ $w = append $w .Values.knowledge.mcp.entryName }}{{ end -}}
 {{- if .Values.notify.enabled }}{{ $w = append $w .Values.notify.mcp.entryName }}{{ end -}}
 {{- if include "oa.diagOn" . }}{{ $w = append $w "cluster-read" }}{{ end -}}
+{{- range $n := (include "oa.epNames" . | fromJsonArray) }}{{ $w = append $w $n }}{{ end -}}
 {{- $w | toJson -}}
 {{- end -}}
 
@@ -315,7 +316,7 @@ Argument: dict "root" <top-level context> "profile" <one mcp.profiles entry>. */
 {{- $root := .root -}}
 {{- $names := list -}}
 {{- range $w := (keys .profile.tools | sortAlpha) -}}
-{{- $pfx := replace "{workload}" (include "oa.diagWorkload" (dict "root" $root "profile" $.profile "w" $w)) $root.Values.mcp.virtual.prefixFormat -}}
+{{- $pfx := replace "{workload}" (include "oa.groupWorkload" (dict "root" $root "profile" $.profile "w" $w)) $root.Values.mcp.virtual.prefixFormat -}}
 {{- range $t := (index $.profile.tools $w) }}{{ $names = append $names (printf "%s%s" $pfx $t) }}{{ end -}}
 {{- end -}}
 {{- if .profile.codeMode }}{{ $names = append $names "execute_tool_script" }}{{ end -}}
@@ -349,6 +350,7 @@ Argument: dict "root" <top-level context> "profile" <one mcp.profiles entry>. */
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- $_ := include "oa.epCheck" . -}}
 {{- end -}}
 
 {{/* The agent's tool profile as JSON ({} when it has none). Fails for a profile that does not exist. Argument: dict "root" <top> "agent" <agent>. */}}
@@ -385,6 +387,7 @@ reach a vMCP or an unauthenticated backend proxy around the profile. */}}
 {{- $host := regexReplaceAll "^https?://([^:/]+).*$" $o "${1}" | trimPrefix "*." -}}
 {{- $ns := $m.namespace -}}
 {{- if or (eq $host $ns) (eq $host (printf "%s.svc" $ns)) (eq $host (printf "%s.svc.cluster.local" $ns)) (hasSuffix (printf ".%s" $ns) $host) (hasSuffix (printf ".%s.svc" $ns) $host) (hasSuffix (printf ".%s.svc.cluster.local" $ns) $host) }}{{ fail (printf "agent %q: egress.allow entry %q is inside the tools namespace %q: that would reach a vMCP or a tool server around the profile" $a.name $o $ns) }}{{ end -}}
+{{- if include "oa.epHostNamed" (dict "host" (regexReplaceAll "^https?://([^:/]+).*$" $o "${1}") "forms" (include "oa.epHosts" $.root | fromJsonArray)) }}{{ fail (printf "agent %q: egress.allow entry %q names the host of an entry of mcp.endpoints (in any form: <service>.<namespace>, .svc or .svc.cluster.local, or a wildcard that covers it): that would reach the endpoint around its tool profile" $a.name $o) }}{{ end -}}
 {{- $allow = append $allow $o -}}
 {{- end -}}
 {{- end -}}
@@ -458,7 +461,8 @@ adapter's own section (runtime.kagent, tools.toolhive). It holds no secret: name
 {{- $wl := dict -}}{{- range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}{{ $_ := set $wl $w.name $w }}{{ end -}}
 {{- range $p := (.Values.mcp.profiles | default list) -}}
 {{- /* a diagnostics profile is left out of the catalog, and so of the AgentTemplate guard, unless definitions may use it (ADR 0025) */ -}}
-{{- if or (not (include "oa.diagProfile" (dict "root" $ "profile" $p))) (($.Values.diagnostics | default dict).allowDefinitions) -}}
+{{- /* a profile that lists an endpoint tool is left out too, unless every endpoint has allowDefinitions (ADR 0026 A6) */ -}}
+{{- if and (or (not (include "oa.diagProfile" (dict "root" $ "profile" $p))) (($.Values.diagnostics | default dict).allowDefinitions)) (include "oa.epOpen" (dict "root" $ "profile" $p)) -}}
 {{- $e := dict "name" $p.name "toolServer" (printf "%s-%s" $k.remoteMCPServer.name $p.name) "codeMode" (eq (toString (default false $p.codeMode)) "true") "tools" (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) -}}
 {{- with (get $wl $p.name) }}{{ $_ := set $e "workload" (dict "url" .url "audience" .audience "namespace" $.Values.mcp.namespace "podSelector" (dict "app" "virtualmcpserver" "toolhive-name" .server) "port" (int .port)) }}{{ end -}}
 {{- $profiles = append $profiles $e -}}
@@ -509,6 +513,7 @@ the users from the render and fails if one is missing. */ -}}
     "skills" $skills
     "gateUrl" $gate
     "reservedNames" $reserved -}}
+{{- if include "oa.epOn" . }}{{ $_ := set $cat.namespaces "endpoints" (include "oa.epNamespaces" . | fromJsonArray) }}{{ end -}}
 {{- if include "oa.caOn" . -}}
 {{- $ca := .Values.controlPlane.containerAgents -}}
 {{- $gp := int $ca.gatewayPodPort | default (int .Values.gateway.port) -}}
@@ -576,6 +581,17 @@ the users from the render and fails if one is missing. */ -}}
 {{- if not (kindIs "slice" ($p.reservedNames | default list)) }}{{ fail "controlPlane.policy.reservedNames must be a list of names" }}{{ end }}
 {{- $o := $e.allowedOrigins | default list -}}
 {{- if not (kindIs "slice" $o) }}{{ fail "controlPlane.policy.egress.allowedOrigins must be a list of origins (an empty list allows no egress)" }}{{ end -}}
+{{- /* the controller and the guard refuse the whole namespace of an endpoint of mcp.endpoints, so the render refuses a host in it too (the endpoint's own host forms are refused with their own sentence in oa.agentEgress) */ -}}
+{{- $epNs := include "oa.epNamespaces" . | fromJsonArray -}}
+{{- if $epNs -}}
+{{- range $x := $o }}
+{{- if kindIs "string" $x -}}
+{{- $oh := regexReplaceAll "^https?://([^:/]+).*$" $x "${1}" -}}
+{{- $in := include "oa.epInNs" (dict "host" $oh "nss" $epNs) -}}
+{{- if and $in (not (include "oa.epHostNamed" (dict "host" $oh "forms" (include "oa.epHosts" $ | fromJsonArray)))) }}{{ fail (printf "controlPlane.policy.egress.allowedOrigins entry %s is inside the namespace %q of an entry of mcp.endpoints: the controller and the admission guard refuse every host of that namespace, and the controller would not start. Take it out of the list" $x $in) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $_ := include "oa.agentEgress" (dict "root" . "agent" (dict "name" "controlPlane.policy.egress.allowedOrigins" "egress" (dict "allow" $o))) -}}
 {{- $ic := $e.inClusterDestinations | default list -}}
 {{- if not (kindIs "slice" $ic) }}{{ fail "controlPlane.policy.egress.inClusterDestinations must be a list of host:port (an empty list allows no in-cluster destination)" }}{{ end -}}
@@ -588,6 +604,9 @@ the users from the render and fails if one is missing. */ -}}
 {{- if or (hasSuffix (printf ".%s" $fn) $h) (hasSuffix (printf ".%s.svc" $fn) $h) (hasSuffix (printf ".%s.svc.cluster.local" $fn) $h) }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v is inside the %s namespace %q: that would reach a platform service around its own controls and can never be listed" $x $what $fn) }}{{ end }}
 {{- end }}
 {{- if or (eq $h "kubernetes") (eq $h "kubernetes.default") (hasPrefix "kubernetes.default." $h) }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v is the Kubernetes API service and can never be listed" $x) }}{{ end }}
+{{- if include "oa.epHostNamed" (dict "host" $h "forms" (include "oa.epHosts" $ | fromJsonArray)) }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v names the host of an entry of mcp.endpoints (in any form): that would reach the endpoint around its tool profile and can never be listed" $x) }}{{ end }}
+{{- $inEp := include "oa.epInNs" (dict "host" $h "nss" (include "oa.epNamespaces" $ | fromJsonArray)) }}
+{{- if $inEp }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v is inside the namespace %q of an entry of mcp.endpoints: the controller and the admission guard refuse every host of that namespace, and the controller would not start. Take it out of the list" $x $inEp) }}{{ end }}
 {{- end }}
 {{- if ne (len $ic) (len (uniq $ic)) }}{{ fail "controlPlane.policy.egress.inClusterDestinations lists an entry twice" }}{{ end -}}
 {{- if and $p.allowNotify (not (and .Values.notify.enabled .Values.mcp.enabled)) }}{{ fail "controlPlane.policy.allowNotify needs notify.enabled=true and mcp.enabled=true: the catalog has no notify tools, so every definition asking for notify would be refused" }}{{ end -}}

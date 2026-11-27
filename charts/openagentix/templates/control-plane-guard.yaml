@@ -366,16 +366,18 @@ spec:
     #    or the Kubernetes API service (kubernetes, kubernetes.default and its .svc forms);
     #  - only when the operator listed exactly its host:port (the scheme's default port when it names none; none by default): a host that is not public from the
     #    cluster's point of view: no dot, an IP address, a .svc. label, or a last label in the internal list (internal, local, localhost, svc, cluster, lan, home, corp, test,
-    #    invalid, example: names that only look public; example.org, example.com and example.net are real names and stay allowed).
+    #    invalid, example: names that only look public; example.org, example.com and example.net are real names and stay allowed), or a last label that has not the shape of a
+    #    public top level domain (two to 63 letters, or a punycode label): the short form <service>.<namespace> of a cluster name, when the namespace has a dash or a digit
+    #    (ADR 0026). A namespace of letters only has the shape of a top level domain and cannot be told apart offline.
     # DNS rebinding of an allowed public name is not handled here: it needs enforcement at the egress proxy. ([x].all(h, ...) binds a value once.)
     - message: "an EgressPolicy written by the control plane may not name a host inside the cluster (.svc, .cluster.local, a namespace of the platform or kube-system, the Kubernetes API, an IP address, a name without a dot, a name that ends in .internal, .local, .lan, .corp ...), except the exact host:port entries the operator lists (never a platform namespace)"
       expression: |-
         variables.del || (has(variables.cur.spec.destinations) && variables.cur.spec.destinations.all(d, has(d.origin) && type(d.origin) == string && size(d.origin) <= 270 && d.origin.matches({{ $originRE | toJson }}) &&
           [d.origin.split('://')[1]].all(authority, [authority.split(':')[0]].all(h0, [h0.startsWith('*.') ? h0.substring(2) : h0].all(host,
             [authority.contains(':') ? authority : authority + (d.origin.startsWith('https://') ? ':443' : ':80')].all(hp,
-              !{{ list $cat.namespaces.tools $cat.namespaces.agents $cat.namespaces.gateway "kube-system" | toJson }}.exists(n, host.endsWith('.' + n) || host.endsWith('.' + n + '.svc') || host.endsWith('.' + n + '.svc.cluster.local')) &&
+              !{{ concat (list $cat.namespaces.tools $cat.namespaces.agents $cat.namespaces.gateway "kube-system") ($cat.namespaces.endpoints | default list) | toJson }}.exists(n, host.endsWith('.' + n) || host.endsWith('.' + n + '.svc') || host.endsWith('.' + n + '.svc.cluster.local')) &&
               host != 'kubernetes' && host != 'kubernetes.default' && !host.startsWith('kubernetes.default.') &&
-              ((host.contains('.') && !host.matches('^[0-9.]+$') && !host.contains('.svc.') && !({{ $internalSuffixes | toJson }}.exists(s, host.endsWith('.' + s)))) ||
+              ((host.contains('.') && !host.matches('^[0-9.]+$') && !host.contains('.svc.') && !({{ $internalSuffixes | toJson }}.exists(s, host.endsWith('.' + s))) && host.matches('[.]([a-z]{2,63}|xn--[a-z0-9-]{1,59})$')) ||
                hp in {{ $inCluster | toJson }})))))))
 {{- else if eq $k.id "agents" }}
     # Agent <agent>: its template, harness and egress policy are the ones of its own name (it cannot be pointed at another agent's objects), and nothing else is set:

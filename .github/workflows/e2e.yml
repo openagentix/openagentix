@@ -15,6 +15,10 @@ on:
       - hack/ci/smoke.sh
       - hack/ci/diagnostics-live.sh
       - hack/ci/diagnostics-ci-values.yaml
+      - hack/ci/endpoints-live.sh
+      - hack/ci/endpoints-ci-setup.sh
+      - hack/ci/endpoints-ci-values.yaml
+      - hack/ci/endpoints-ci/**
       - hack/ci/phases.sh
       - hack/demo.sh
       - hack/ask.sh
@@ -28,6 +32,10 @@ on:
         description: 'Run the live check of cluster-read (ADR 0025, slice 4) instead of the profiles: the quick start plus hack/ci/diagnostics-ci-values.yaml'
         type: boolean
         default: false
+      endpoints:
+        description: 'Run the live check of mcp.endpoints (ADR 0026, slice 2) instead of the profiles: two tiny endpoints, then the quick start plus hack/ci/endpoints-ci-values.yaml'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,7 +47,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostics }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -229,5 +237,78 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kind-logs-diagnostics
+          path: kind-logs
+          retention-days: 7
+
+  # Opt-in (workflow_dispatch with the input `endpoints`; ENDPOINTS=1 for the scripts): mcp.endpoints on a real cluster (ADR 0026, slice 2). Two tiny MCP endpoints
+  # (hack/ci/endpoints-ci/echo-mcp.py) run in their own namespace BEFORE the platform install, as the ADR says; each takes a header value from a Secret. The job
+  # settles that a profile vMCP on the group of the endpoints lists exactly its tools through a real tools/list, that the shared vMCP lists none and refuses a call,
+  # that the endpoint refuses a wrong header, that no log has the value, that a profile offers tools only (no resource or prompt of a backend it does not list),
+  # and records what the vMCP does with `overrides` and with a redirect. See hack/ci/endpoints-ci-values.yaml.
+  e2e-endpoints:
+    name: e2e (endpoints, mcp.endpoints)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoints }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: cluster, then the endpoints (their namespace and workload come before the platform values)
+        env:
+          ENDPOINTS: "1"
+        run: |
+          set -o pipefail
+          kind create cluster --name openagentix --config hack/kind-config.yaml
+          hack/ci/endpoints-ci-setup.sh 2>&1 | tee setup.log
+      - name: install (PROFILE=quickstart plus the endpoints values, no key, no token)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/endpoints-ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: live check of mcp.endpoints
+        env:
+          ENDPOINTS: "1"
+        run: |
+          set -o pipefail
+          hack/ci/endpoints-live.sh 2>&1 | tee endpoints-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## mcp.endpoints on a real cluster (ADR 0026, slice 2)"
+            echo '```'
+            cat endpoints-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+            echo "### install.sh, endpoint lines"
+            echo '```'
+            grep -iE 'endpoint|DiscoveredAuthConfig|apiserver|API server' install.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "--- the endpoints and their pods (their log holds no secret)"
+          kubectl get pods,svc,networkpolicy -n endpoint-ci || true
+          kubectl logs -n endpoint-ci deploy/echo --tail=60 || true
+          echo "--- the vMCPs, the groups, the entries and their conditions"
+          kubectl get virtualmcpserver,mcpserverentry,mcpgroup -n mcp-tools || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}],backends:[.status.discoveredBackends[]?|{name,status}]}' || true
+          kubectl get networkpolicy -n mcp-tools -o json | jq -c '.items[]|select(.metadata.name|test("egress"))|{name:.metadata.name,egress:(.spec.egress|length)}' || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs-endpoints
           path: kind-logs
           retention-days: 7

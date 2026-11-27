@@ -221,7 +221,14 @@ fi
 # What is required is decided from what the chart renders, before anything is created.
 render(){ helm template $RELEASE $CHART -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} "$@" | yq -c 'select(.!=null)'; }
 # (the planning renders accept the open API server egress of cluster-read: the addresses are found below, and the render that is applied refuses an empty list, review F6)
-RENDERED=$(render --set diagnostics.allowAnyApiServerAddress=true) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
+PLAN_EXTRA=(); EP_APISERVER_PLACEHOLDER=0
+plan_render(){ render --set diagnostics.allowAnyApiServerAddress=true ${PLAN_EXTRA[@]+"${PLAN_EXTRA[@]}"}; }
+RENDERED=$(plan_render 2>/dev/null) || {
+  # mcp.endpoints (ADR 0026) refuses an empty controlPlane.apiServerCIDRs: this installer finds the addresses below. Plan once more with a stand-in
+  # (an address of the documentation range) and render for real with the found addresses. Any other refusal of the chart fails this render too and is printed.
+  PLAN_EXTRA=(--set-json 'controlPlane.apiServerCIDRs=["192.0.2.0/24"]'); EP_APISERVER_PLACEHOLDER=1
+  RENDERED=$(plan_render) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
+}
 # STUB_SCENARIOS (ADR 0026, B): scenario files for the stub model. Each *.json file is passed with --set-file, in name order, with the dot of
 # the name escaped; the chart renders the ConfigMap, the mount and the checksum that rolls the pod. Checked before anything is created.
 if [ -n "${STUB_SCENARIOS:-}" ]; then
@@ -240,7 +247,7 @@ if [ -n "${STUB_SCENARIOS:-}" ]; then
   done
   if jq -e 'select(.kind=="Deployment" and .metadata.name=="stub-model")' <<<"$RENDERED" >/dev/null; then
     for f in "${SCEN_LIST[@]}"; do n=$(basename "$f"); VALS+=(--set-file "gateway.stubModel.scenarios.files.${n//./\\.}=$f"); done
-    RENDERED=$(render --set diagnostics.allowAnyApiServerAddress=true) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
+    RENDERED=$(plan_render) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
     echo "NOTE: the stub model plays ${#SCEN_LIST[@]} scenario file(s) from $STUB_SCENARIOS. Runs with them are scripted by the stub, not the behaviour of a model: say so in any demo, diary entry or report."
   else
     echo "STUB_SCENARIOS is set, but the stub model is off in this install: no scenario file is passed."
@@ -749,6 +756,17 @@ if [ -n "$DIAG_DEP" ]; then
   diag_bearer_ensure "$K" "$DIAG_MCP_NS" "$DIAG_NS" cluster-read || die "could not create the bearer Secrets of cluster-read (see above). The chart was not applied."
 fi
 
+# --- 4g. mcp.endpoints (ADR 0026): the header Secret of each endpoint must exist before the chart is applied ---------------------------------------
+# The chart renders only the reference. A vMCP pod that names a missing Secret as an environment value does not start, and Helm would wait for it. The Secret is the
+# operator's or the use case installer's to make; nothing is created or printed here. hack/endpoints-check.sh, tested without a cluster.
+EP_ENTRIES=$(jq -c 'select(.kind=="MCPServerEntry" and ((.metadata.annotations["openagentix.io/endpoint"]//"")!=""))' <<<"$RENDERED")
+if [ -n "$EP_ENTRIES" ]; then
+  log "mcp.endpoints: the header Secrets"
+  # shellcheck source=hack/endpoints-check.sh
+  . hack/endpoints-check.sh
+  jq -r '.metadata.namespace as $ns | .spec.headerForward.addHeadersFromSecret[]? | [$ns, .valueSecretRef.name, .valueSecretRef.key] | @tsv' <<<"$EP_ENTRIES" | ep_check_secrets "$K" || die "a header Secret of mcp.endpoints is missing (see above). The chart was not applied."
+fi
+
 finish_builds   # wait for the background builds, then load the images into the cluster in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
@@ -816,6 +834,23 @@ if [ -n "$DIAG_DEP" ]; then
     DG_CIDRS=$(kourier_apiserver_cidrs "${DIAGNOSTICS_APISERVER_CIDRS:-}" "$DG_EPS" "$DG_NODES") || die "could not find the API server address for cluster-read's NetworkPolicy; set DIAGNOSTICS_APISERVER_CIDRS"
     echo "diagnostics: cluster-read's NetworkPolicy lets it reach the API server at $DG_CIDRS"
     SET+=(--set-json "diagnostics.apiServerCIDRs=$DG_CIDRS")
+  fi
+fi
+if [ "$EP_APISERVER_PLACEHOLDER" = 1 ]; then
+  # mcp.endpoints (ADR 0026): the egress policy of the vMCPs of each endpoint group lets them reach the API server at controlPlane.apiServerCIDRs. Found the way the
+  # control plane's are. A values file that sets them wins (then the planning render did not need the stand-in). The control plane block above may have set them already.
+  EP_HAVE=0; for a in ${SET[@]+"${SET[@]}"}; do case "$a" in controlPlane.apiServerCIDRs=*) EP_HAVE=1;; esac; done
+  if [ "$EP_HAVE" = 0 ]; then
+    # shellcheck source=components/channels/apiserver-cidrs.sh
+    . components/channels/apiserver-cidrs.sh
+    EP_EPS=""; EP_NODES=""
+    if [ -z "$(printf '%s' "${ENDPOINTS_APISERVER_CIDRS:-}" | tr -d '[:space:],')" ]; then
+      EP_EPS=$($K get endpointslices.discovery.k8s.io -n default -l kubernetes.io/service-name=kubernetes -o json)
+      EP_NODES=$($K get nodes -o json 2>/dev/null || echo '{"items":[]}')   # only used to recognise kind
+    fi
+    EP_CIDRS=$(kourier_apiserver_cidrs "${ENDPOINTS_APISERVER_CIDRS:-}" "$EP_EPS" "$EP_NODES") || die "could not find the API server address for the NetworkPolicy of the endpoint groups' vMCPs; set ENDPOINTS_APISERVER_CIDRS"
+    echo "mcp.endpoints: the vMCPs of the endpoint groups may reach the API server at $EP_CIDRS"
+    SET+=(--set-json "controlPlane.apiServerCIDRs=$EP_CIDRS")
   fi
 fi
 if jq -e -s 'any(.[]; .kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")' <<<"$RENDERED" >/dev/null; then
@@ -974,6 +1009,8 @@ for row in $(jq -r 'select(.kind=="VirtualMCPServer" and (.metadata.annotations[
   $K wait "virtualmcpserver/${row##*/}" -n "${row%%/*}" --for=condition=Ready --timeout=300s || echo "WARN: ${row##*/} not Ready yet: $K get virtualmcpserver ${row##*/} -n ${row%%/*} -o yaml"
 done
 
+# shellcheck source=hack/diagnostics-check.sh
+. hack/diagnostics-check.sh   # diag_check_vmcps: the condition check on DiscoveredAuthConfig-*, used for the diagnostics group and for the groups of mcp.endpoints
 # Diagnostics (ADR 0025): the server is Ready only while its rights check passes (the Helm wait above already needed that). Then every vMCP of the
 # diagnostics group is read: ToolHive keeps a vMCP Ready when it drops a backend whose auth it cannot use, so the install fails on a DiscoveredAuthConfig-*
 # condition that is False. hack/diagnostics-check.sh, tested without a cluster.
@@ -981,8 +1018,6 @@ if [ -n "$DIAG_DEP" ]; then
   log "diagnostics: cluster-read"
   $K rollout status deployment/cluster-read -n "$DIAG_NS" --timeout=180s \
     || die "cluster-read is not Ready: its rights check does not pass, or the Secret is missing. Its log says why (no secret in it): $K logs -n $DIAG_NS deploy/cluster-read --tail=30"
-  # shellcheck source=hack/diagnostics-check.sh
-  . hack/diagnostics-check.sh
   DIAG_ENTRIES=$(jq -rs '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name=="diagnostics")]|length' <<<"$RENDERED")
   DIAG_VMCPS=$(jq -r 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name=="diagnostics")|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
   # A repaired or rotated bearer value: the vMCP pods of the group hold the old one as an environment value until they restart (review F4)
@@ -993,6 +1028,23 @@ if [ -n "$DIAG_DEP" ]; then
   fi
   # shellcheck disable=SC2086   # one word per vMCP
   diag_check_vmcps "$K" "${DIAG_VMCP_SETTLE:-30}" "$DIAG_ENTRIES" $DIAG_VMCPS || die "a vMCP of the diagnostics group dropped a backend (see above)."
+fi
+
+# mcp.endpoints (ADR 0026): ToolHive keeps a vMCP Ready when it drops a backend, so every vMCP of a group that holds an endpoint is read: no condition
+# DiscoveredAuthConfig-<entry> is False, and every endpoint and mirror entry of the group is in status.discoveredBackends with status ready.
+# hack/endpoints-check.sh and hack/diagnostics-check.sh, tested without a cluster.
+if [ -n "$EP_ENTRIES" ]; then
+  log "mcp.endpoints: the vMCPs of the endpoint groups"
+  for g in $(jq -r '.spec.groupRef.name' <<<"$EP_ENTRIES" | sort -u); do
+    EP_BACKENDS=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$RENDERED")
+    EP_VMCPS=$(jq -r --arg g "$g" 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name==$g)|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
+    for row in $EP_VMCPS; do
+      $K wait "virtualmcpserver/${row##*/}" -n "${row%%/*}" --for=condition=Ready --timeout=300s || die "the vMCP ${row##*/} of the group $g is not Ready: $K get virtualmcpserver ${row##*/} -n ${row%%/*} -o yaml"
+      DIAG_CHECK_WHAT="the group $g of mcp.endpoints" diag_check_vmcps "$K" "${EP_VMCP_SETTLE:-30}" "$(wc -w <<<"$EP_BACKENDS" | tr -d ' ')" "$row" || die "a vMCP of the group $g dropped a backend (see above)."
+      # shellcheck disable=SC2086   # one word per backend
+      ep_check_backends "$K" "${EP_VMCP_SETTLE:-60}" "$row" $EP_BACKENDS || die "a vMCP of the group $g does not list every backend as ready (see above)."
+    done
+  done
 fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"

@@ -629,6 +629,37 @@ A small edge: after a repair of the bearer Secrets, the server sees the new valu
 
 What is proven: the chart, the admission policy and the installer steps are tested offline and the policy on a real API server in CI. A live check runs on request (`e2e` workflow, input `diagnostics`). Its first result: on kind with Kubernetes 1.37 the server does not become Ready, because its rights check calls a default read of `clustertrustbundles` forbidden (see the diary page). It also makes real calls through the gateways with tokens of the API server (tools/list, a call, a call refused on the shared tool server) and checks that a pod in another namespace times out. Not proven: a root-cause run by an agent (slice 5 of the ADR). More in [the diagnostics page of the diary](docs/diary/features/diagnostics.md).
 
+## MCP endpoints that already run (opt-in)
+
+Off by default, and with `mcp.endpoints` empty the default render does not change. A tool server that runs as its own Deployment, in its own namespace, can join a tool profile with one entry in `mcp.endpoints` (ADR 0026). The endpoint gets a tool group of its own and a header credential that comes from a Secret you create. The shared tool server never lists or calls its tools, and it never holds the header value as an environment value.
+
+```yaml
+mcp:
+  endpoints:
+    - name: records                       # the tool prefix: records_get_case
+      url: http://records.fernvale-records.svc.cluster.local:8080/mcp
+      group: disputes                     # a tool group of its own (required)
+      auth:
+        header: {name: Authorization, secret: {name: records-mcp-auth, key: value}}   # a Secret in mcp-tools; the value is the whole header value
+      ingress:
+        podSelector: {app: records}       # the endpoint's pods; must not be empty
+        port: 8080                        # the pod port
+  profiles:
+    - name: disputes
+      codeMode: false
+      tools:
+        records: [get_case, list_open_cases]
+        knowledge: [kb_search]            # the model sees knowledge-disputes_kb_search
+```
+
+Install the endpoint and create its Secret first (the chart renders only the reference, and the namespace must exist). Then install the platform values; `install.sh` stops before the chart when a header Secret is missing, finds `controlPlane.apiServerCIDRs` itself, and after the chart fails when a vMCP of the group has a backend that is missing or not `ready` (ToolHive keeps such a vMCP Ready with fewer tools).
+
+What the chart renders for an endpoint: the group, the entry with `headerForward`, the vMCP of each profile that lists it (on the group, audit request and response data always off, and an allow list as its authorization policy, tool calls and tool listing only, because the profile filter covers tools only: a live check showed a profile vMCP listing and reading the resources and prompts of a backend its profile does not list), a Cedar `forbid` for each of its tools in front of the shared vMCP's policy, an ingress NetworkPolicy in the endpoint's namespace (only the group's vMCP pods, on the pod port) and an egress NetworkPolicy on the group's vMCPs (DNS, the endpoint's pods, the knowledge base and notify, the identity provider's pods, the API server and the telemetry endpoint, nothing else; a collector that is a DNS name outside the cluster gets no rule). A profile that lists an endpoint tool has no code mode, stays out of the control plane catalog (definitions and container agents cannot use it), and may list only endpoints of its group, `knowledge` and the notify entry.
+
+The render refuses an address literal, a user name, query or fragment in the URL, an internet URL (a later slice), a platform namespace (the list is computed from every namespace value of the chart, plus `default`, `kube-system`, `kube-public`, `kube-node-lease` and `openagentix-*`), the Kubernetes API service, an empty `podSelector`, a missing `port`, a header name such as `Host` or `Cookie`, a name that is taken, two groups or an `mcp.servers` entry in one profile, code mode, and an `agents[].egress.allow`, `controlPlane.policy.egress.allowedOrigins` or `inClusterDestinations` entry that names the endpoint host in any form.
+
+Limits, stated plainly. The endpoint does not learn which agent called: the vMCP does not forward the caller, so every call reaches it as the platform, and per-agent rights are only what the profile filter gives. Every vMCP can read every Secret in the tools namespace through the API (the ToolHive operator gives each vMCP that Role, and the chart cannot narrow it), so the header Secret is as safe as that namespace. The egress policy is a second layer on kind, whose network plugin does not enforce egress to the internet. The shared group mode (a service with no credential) and internet endpoints are later slices. Evidence and open points: [the diary page](docs/diary/features/mcp-endpoints.md).
+
 ## Control plane and agent builder
 
 An agent can also be made from one small resource, `AgentDefinition` (`openagentix.io/v1alpha1`, short name `oad`). A controller (`services/control-plane`) turns it into the runtime agent, a gateway key and a status. A catalog says what exists and a policy says what is allowed. A definition that breaks the policy is refused with one sentence per rule, and nothing is created. An admission guard of 8 policies lets only the controller write the objects it owns. The controller never reads a Secret. It is off by default (`controlPlane.enabled`), and the default render does not change.

@@ -206,6 +206,11 @@ jq -c '.spec.destinations[0].origin="https://metadata.google.internal"' "$TMP/eg
 refused "M5: a name that only looks public (.internal) is refused" "may not name a host inside the cluster" asctl create --dry-run=server -f "$TMP/eg-int.json"
 jq -c '.spec.destinations[0].origin="https://kubernetes.default.svc"' "$TMP/egresspolicy.json" > "$TMP/eg-k8s.json"
 refused "M5: the Kubernetes API service is refused" "may not name a host inside the cluster" asctl create --dry-run=server -f "$TMP/eg-k8s.json"
+# ADR 0026 (slice 2): the host of an endpoint of mcp.endpoints, in every form. The short form <service>.<namespace> is a cluster name too
+for O in https://records.fernvale-records http://records.fernvale-records:8080 https://records.fernvale-records.svc https://records.fernvale-records.svc.cluster.local https://'*.fernvale-records.svc' https://'*.fernvale-records.svc.cluster.local'; do
+  jq -c --arg o "$O" '.spec.destinations[0].origin=$o' "$TMP/egresspolicy.json" > "$TMP/eg-ep.json"
+  refused "ADR 0026: an EgressPolicy naming an endpoint host as $O is refused" "may not name a host inside the cluster" asctl create --dry-run=server -f "$TMP/eg-ep.json"
+done
 jq -c '.spec.destinations[0].origin="https://registry.ci.svc:5000"' "$TMP/egresspolicy.json" > "$TMP/eg-listed.json"
 allowed "an in-cluster destination the operator listed is allowed" asctl create --dry-run=server -f "$TMP/eg-listed.json"
 jq -c '.spec.workload.command=["/bin/sh","-c","id"]' "$TMP/harness.json" > "$TMP/h-cmd.json"
@@ -578,6 +583,71 @@ done
 for q in "get pods/log -n $DGLOG" "list pods -n $DGLOG" "list events -n $DGST" "list nodes" "get secrets -n $DGLOG" "list configmaps -n $DGLOG" "create pods/exec -n $DGLOG" "get nodes/proxy" "watch pods -n $DGLOG" "list deployments.apps -n $DGST"; do
   [ "$(canas $DBSA $q)" = no ] && ok "db-read may not: $q" || bad "db-read may not: $q" "the API server does not say no"
 done
+# ---- mcp.endpoints (ADR 0026, slice 2): the ToolHive objects and the two network policies, on a real API server ----
+echo "# mcp.endpoints: MCPGroup, MCPServerEntry (headerForward), MCPExternalAuthConfig, VirtualMCPServer and both network policies (a real API server)"
+# The ToolHive CRDs at the version the installer pins (components/tools/install.sh), fetched like the agentgateway CRDs above. The server-side dry run
+# checks the field names against the real schema: a field the schema does not know is refused by --validate=strict, and one that is pruned shows below.
+TH_VER=$(sed -n 's/^TOOLHIVE_VERSION=//p' components/tools/install.sh | head -1)
+TH_DIR="$TMP/thcrds"; mkdir -p "$TH_DIR"
+if [ -n "$TH_VER" ] && helm pull oci://ghcr.io/stacklok/toolhive/toolhive-operator-crds --version "$TH_VER" --untar --untardir "$TH_DIR" >/dev/null 2>&1; then
+  helm template thcrds "$TH_DIR/toolhive-operator-crds" --set crds.install=true | yq -c 'select(.!=null)|select(.metadata.name|IN("mcpgroups.toolhive.stacklok.dev","mcpserverentries.toolhive.stacklok.dev","mcpexternalauthconfigs.toolhive.stacklok.dev","virtualmcpservers.toolhive.stacklok.dev"))' > "$TMP/thcrds.jsonl"
+  [ "$(wc -l < "$TMP/thcrds.jsonl" | tr -d ' ')" = 4 ] && ok "the four ToolHive CRDs of version $TH_VER are in the chart" || bad "the four ToolHive CRDs are in the chart" "got $(wc -l < "$TMP/thcrds.jsonl" | tr -d ' ')"
+  kubectl apply --server-side -f "$TMP/thcrds.jsonl" >/dev/null
+  for c in mcpgroups mcpserverentries mcpexternalauthconfigs virtualmcpservers; do
+    for _ in $(seq 1 90); do
+      [ "$(kubectl get crd "$c.toolhive.stacklok.dev" -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null)" = True ] && break
+      sleep 1
+    done
+  done
+  cat > "$TMP/ep-values.yaml" <<YAML
+controlPlane:
+  apiServerCIDRs: [172.18.0.0/24]
+notify:
+  enabled: true
+mcp:
+  endpoints:
+    - name: records
+      url: http://records.fernvale-records.svc.cluster.local:8080/mcp
+      group: disputes
+      auth:
+        header: {name: Authorization, secret: {name: records-mcp-auth, key: value}}
+      ingress:
+        podSelector: {app: records}
+        port: 8080
+  profiles:
+    - name: disputes
+      codeMode: false
+      tools:
+        records: [get_case, set_route]
+        knowledge: [kb_search]
+        delivery: [notify_send]
+YAML
+  helm template openagentix charts/openagentix -n openagentix-system -f "$TMP/ep-values.yaml" | yq -c 'select(.!=null)' > "$TMP/ep.jsonl"
+  for n in mcp-tools fernvale-records; do kubectl get namespace "$n" >/dev/null 2>&1 || kubectl create namespace "$n" >/dev/null; done
+  jq -c 'select(.kind=="MCPGroup" or .kind=="MCPExternalAuthConfig" or .kind=="MCPServerEntry")' "$TMP/ep.jsonl" > "$TMP/ep-toolhive.jsonl"
+  jq -c 'select(.kind=="VirtualMCPServer" and .metadata.name=="tools-disputes")' "$TMP/ep.jsonl" > "$TMP/ep-vmcp.json"
+  NTH=$(wc -l < "$TMP/ep-toolhive.jsonl" | tr -d ' ')
+  [ "$NTH" = 12 ] && ok "the render has 12 group, auth and entry objects (two groups, five entries with five auth configs: knowledge and delivery of the shared group, the endpoint and the two mirrors)" || bad "the render has 12 group, auth and entry objects" "got $NTH"
+  allowed "the MCPGroup, MCPServerEntry (with headerForward) and MCPExternalAuthConfig objects are accepted (server-side dry run, strict validation)" bash -c "kubectl apply --server-side --dry-run=server --validate=strict -f - < '$TMP/ep-toolhive.jsonl'"
+  allowed "the VirtualMCPServer tools-disputes is accepted (server-side dry run, strict validation)" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/ep-vmcp.json"
+  GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/ep-toolhive.jsonl" 2>/dev/null | jq -s -r '[.[]|.items // [.]|.[]|select(.kind=="MCPServerEntry" and .metadata.name=="records")|.spec.headerForward.addHeadersFromSecret[0]|[.headerName,.valueSecretRef.name,.valueSecretRef.key]|join("/")]|first // "pruned"')
+  [ "$GOT" = "Authorization/records-mcp-auth/value" ] && ok "the API server keeps headerForward.addHeadersFromSecret of the endpoint entry ($GOT)" || bad "headerForward.addHeadersFromSecret is kept" "got '$GOT'"
+  GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/ep-vmcp.json" 2>/dev/null | jq -r '[.spec.groupRef.name,.spec.config.aggregation.defaultToolVisibility,(.spec.config.aggregation.tools|map(.workload)|sort|join(",")),(.spec.config.audit|[.includeRequestData,.includeResponseData]|map(tostring)|join(","))]|join(" ")' 2>/dev/null)
+  [ "$GOT" = "disputes deny delivery-disputes,knowledge-disputes,records false,false" ] && ok "the API server keeps the group, the deny default, the filter and the audit switches of the profile vMCP ($GOT)" || bad "the profile vMCP's fields are kept" "got '$GOT'"
+  # a field the schema does not know is refused by strict validation (a negative control: the check above is not blind)
+  jq -c '.spec.headerForward.addHeadersFromSecrets=.spec.headerForward.addHeadersFromSecret|del(.spec.headerForward.addHeadersFromSecret)' <(jq -c 'select(.kind=="MCPServerEntry" and .metadata.name=="records")' "$TMP/ep-toolhive.jsonl") > "$TMP/ep-badfield.json"
+  refused "a wrong field name under headerForward is refused by the schema (negative control)" "addHeadersFromSecrets" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/ep-badfield.json"
+  # both policies, for real, in namespaces made for the test (the chart renders one of them in a namespace it does not own)
+  jq -c 'select(.kind=="NetworkPolicy" and (.metadata.name|test("^openagentix-(endpoint-records|vmcp-egress-disputes)$")))' "$TMP/ep.jsonl" > "$TMP/ep-np.jsonl"
+  [ "$(wc -l < "$TMP/ep-np.jsonl" | tr -d ' ')" = 2 ] && ok "the render has both network policies of the endpoint (ingress in the endpoint's namespace, egress on the group's vMCPs)" || bad "the render has both network policies" "got $(wc -l < "$TMP/ep-np.jsonl" | tr -d ' ')"
+  allowed "both network policies are applied (strict validation)" bash -c "kubectl apply --server-side --validate=strict -f - < '$TMP/ep-np.jsonl'"
+  GOT=$(kubectl get networkpolicy openagentix-endpoint-records -n fernvale-records -o json | jq -r '[(.spec.podSelector.matchLabels|tojson),(.spec.ingress[0].ports[0].port|tostring),(.spec.ingress[0].from|length|tostring)]|join(" ")')
+  [ "$GOT" = '{"app":"records"} 8080 1' ] && ok "the endpoint's ingress policy is stored as rendered ($GOT)" || bad "the endpoint's ingress policy is stored as rendered" "got '$GOT'"
+  GOT=$(kubectl get networkpolicy openagentix-vmcp-egress-disputes -n mcp-tools -o json | jq -r '[(.spec.podSelector.matchExpressions[0]|[.key,.operator,(.values|join(","))]|join(":")),(.spec.egress|length|tostring)]|join(" ")')
+  [ "$GOT" = "toolhive-name:In:tools-disputes 6" ] && ok "the egress policy of the group's vMCPs is stored as rendered ($GOT)" || bad "the egress policy of the group's vMCPs is stored as rendered" "got '$GOT'"
+else
+  bad "the ToolHive CRDs could be fetched (needs network: ghcr.io)" "fetch failed (version '$TH_VER'); the endpoint objects were not checked on an API server"
+fi
 echo
 echo "apiserver-test: passed=$PASS failed=$FAIL"
 [ "$FAIL" = 0 ]
