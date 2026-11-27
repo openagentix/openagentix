@@ -223,6 +223,7 @@ spec:
             - -memory.allowedPercent=40
             - -promscrape.suppressDuplicateScrapeTargetErrors
           ports: [{name: http, containerPort: 8428}]
+          startupProbe: {httpGet: {path: /health, port: http}, periodSeconds: 2, failureThreshold: 30}
           readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 10}
           livenessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 20, failureThreshold: 6}
           resources: {{- toYaml $b.metrics.resources | nindent 12 }}
@@ -296,6 +297,7 @@ spec:
             - {name: otlp-http, containerPort: 4318}
             - {name: ui, containerPort: 16686}
             - {name: health, containerPort: 13133}
+          startupProbe: {httpGet: {path: /status, port: health}, periodSeconds: 2, failureThreshold: 30}
           readinessProbe: {httpGet: {path: /status, port: health}, periodSeconds: 10}
           livenessProbe: {httpGet: {path: /status, port: health}, periodSeconds: 20, failureThreshold: 6}
           resources: {{- toYaml $b.traces.resources | nindent 12 }}

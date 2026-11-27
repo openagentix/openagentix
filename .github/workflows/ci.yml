@@ -137,6 +137,8 @@ jobs:
           hack/ci/release-notes-test.sh
           hack/ci/verify-release-test.sh
           hack/ci/kind-image-digest-test.sh
+          hack/ci/flake-sweep-test.sh
+          hack/ci/green-streak-test.sh
           components/quickstart/tests/run.sh
           hack/ci/cluster-test.sh
           hack/ci/images-test.sh
@@ -144,6 +146,8 @@ jobs:
           hack/ci/default-storageclass-test.sh
           hack/ci/sa-issuer-test.sh
           hack/ci/uninstall-test.sh
+          hack/ci/upgrade-test-test.sh
+          hack/ci/lifecycle-test-test.sh
           hack/gke/tests/run.sh
           components/runtime/tests/run.sh
       - name: reference docs tests

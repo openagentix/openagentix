@@ -15,7 +15,7 @@ define need
 @command -v $(1) >/dev/null || { echo "ERROR: '$(1)' is required$(if $(2), ($(2)))." >&2; exit 1; }
 endef
 
-.PHONY: help test test-go test-chart test-shell test-integration test-console test-console-e2e e2e lint lint-go lint-shell secrets cover
+.PHONY: help test test-go flake-sweep test-chart test-shell test-integration test-console test-console-e2e e2e lint lint-go lint-shell secrets cover
 
 help: ## List the targets
 	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z0-9_-]+:.*## /{printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -28,6 +28,13 @@ test-go: ## go test -race over every Go module (COVER=1 writes coverage.out in e
 	  echo "=== go test $$m"; \
 	  (cd $$m && go test ./... -race -count=1 $(if $(COVER),-coverprofile=coverage.out -covermode=atomic)); \
 	done
+
+flake-sweep: ## The nightly flake sweep, here: go test -race -count=$(COUNT) per module (COUNT=20, MODULES=<dirs> for fewer)
+	$(call need,go)
+	$(call need,jq)
+	@fail=0; for m in $(or $(MODULES),$(GO_MODULES)); do \
+	  hack/ci/flake-sweep.sh $$m --count $(or $(COUNT),20) || fail=1; \
+	done; exit $$fail
 
 cover: ## Per-module coverage summary
 	@$(MAKE) --no-print-directory test-go COVER=1
@@ -50,6 +57,8 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/dashboard/tests/run.sh
 	hack/ci/image-tag-test.sh
 	hack/ci/phases-test.sh
+	hack/ci/flake-sweep-test.sh
+	hack/ci/green-streak-test.sh
 	hack/demo-test.sh
 	hack/ci/release-notes-test.sh
 	hack/ci/verify-release-test.sh
@@ -61,6 +70,8 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/sa-issuer-test.sh
 	hack/ci/gateway-service-type-test.sh
 	hack/ci/uninstall-test.sh
+	hack/ci/upgrade-test-test.sh
+	hack/ci/lifecycle-test-test.sh
 	hack/gke/tests/run.sh
 	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh

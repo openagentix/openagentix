@@ -45,6 +45,34 @@ case "$_auth" in
 esac
 unset _scheme _rest _auth _tail _userinfo _host _user _pw
 
+# Wait for DNS and the database before the first real try (issue #202). A node that restarted a minute ago has no DNS yet, and
+# kagent's PostgreSQL may still be starting. The wait is bounded by WAIT_SECONDS (the chart sets half of activeDeadlineSeconds).
+# A refused login is not waited for: it exits 78, which the chart's podFailurePolicy turns into a failed job with no retry.
+# Any other failure of the probe is a wait. Past the limit the script exits 1 and the job's backoffLimit allows a few more runs.
+# The messages hold no host name, user name or password.
+WAIT_SECONDS="${WAIT_SECONDS:-120}"
+WAIT_INTERVAL="${WAIT_INTERVAL:-5}"
+_start=$(date +%s)
+while :; do
+  if _err=$(psql "$CONN" -X -q -tA -c 'select 1' 2>&1 >/dev/null); then break; fi
+  case "$_err" in
+    *"authentication failed"*|*"no pg_hba.conf entry"*|*"role "*"does not exist"*|*"database "*"does not exist"*)
+      echo "memory-expiry: the database refused the login; not retrying" >&2
+      exit 78 ;;
+  esac
+  case "$_err" in
+    *"translate host name"*|*"Name or service not known"*|*"name resolution"*) _why="DNS does not answer yet" ;;
+    *) _why="the database does not answer yet" ;;
+  esac
+  if [ $(( $(date +%s) - _start )) -ge "$WAIT_SECONDS" ]; then
+    echo "memory-expiry: $_why after waiting ${WAIT_SECONDS}s; giving up for this try" >&2
+    exit 1
+  fi
+  echo "memory-expiry: $_why; waiting" >&2
+  sleep "$WAIT_INTERVAL"
+done
+unset _start _err _why
+
 psql "$CONN" -X -q -v ON_ERROR_STOP=1 -v schema="$SCHEMA" -v role="$ROLE" -v scan="$SCAN" -v scandel="$SCANDEL" <<'SQL'
 SET ROLE :"role";
 SET search_path TO :"schema", public;

@@ -33,7 +33,10 @@ eq "bridge token env has no literal value"             "$(q "$D" '.[]|select(.ki
 eq "allowlist env present by default, optional"        "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].env[]|select(.name=="TELEGRAM_ALLOWED_CHAT_IDS")|.valueFrom.secretKeyRef.optional')" true
 eq "bot is not open to everyone by default"            "$(q "$D" '[.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].env[]|select(.name=="TELEGRAM_ALLOW_ALL")]|length')" 0
 eq "bridge liveness probe hits /healthz"               "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].livenessProbe.httpGet|.path+":"+(.port|tostring)')" /healthz:health
-eq "bridge exposes health port 8080"                   "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].ports[]|select(.name=="health")|.containerPort')" 8080
+BRG='.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0]'
+eq "bridge readiness probe hits /readyz (ready after the first poll)" "$(q "$D" "$BRG|.readinessProbe.httpGet|.path+\":\"+(.port|tostring)")" /readyz:health
+eq "bridge startup probe hits /readyz, 5 s period, 24 tries (the first long poll can take 30 s)" "$(q "$D" "$BRG|.startupProbe|[.httpGet.path,.periodSeconds,.failureThreshold]|join(\" \")")" "/readyz 5 24"
+eq "bridge exposes health port 8080"                  "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="telegram-bridge")|.spec.template.spec.containers[0].ports[]|select(.name=="health")|.containerPort')" 8080
 
 echo "# bridge toggles"
 D=$(docs --set bridge.enabled=false)
@@ -1461,7 +1464,9 @@ MCT="$MP|.containers[0]"
 eq "one CronJob memory-expiry in the kagent namespace" "$(q "$DM" "[$MC|.metadata.namespace]|join(\",\")")" kagent
 eq "default schedule is nightly"                        "$(q "$DM" "$MC|.spec.schedule")" "17 3 * * *"
 eq "overlapping runs are forbidden"                     "$(q "$DM" "$MC|.spec.concurrencyPolicy")" Forbid
-eq "a failed run is not retried (the next night runs again)" "$(q "$DM" "$MC|.spec.jobTemplate.spec.backoffLimit|tostring")" 0
+eq "a failed run is retried twice at most (issue #202)"  "$(q "$DM" "$MC|.spec.jobTemplate.spec.backoffLimit|tostring")" 2
+eq "a refused login fails the job at once (exit 78, no retry)" "$(q "$DM" "$MC|.spec.jobTemplate.spec.podFailurePolicy.rules|map([.action,.onExitCodes.operator,(.onExitCodes.values|join(\",\"))]|join(\" \"))|join(\";\")")" "FailJob In 78"
+eq "the script may wait for the database for half the deadline" "$(q "$DM" "$MCT|.env[]|select(.name==\"WAIT_SECONDS\")|.value")" 150
 eq "the run is bounded in time"                         "$(q "$DM" "$MC|.spec.jobTemplate.spec.activeDeadlineSeconds|tostring")" 300
 eq "image is the server's own pinned image (client matches the server major version)" "$(q "$DM" "$MCT|.image")" "pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd"
 eq "the image is never pulled when present"             "$(q "$DM" "$MCT|.imagePullPolicy")" IfNotPresent
@@ -1479,6 +1484,37 @@ eq "non-root, read-only root filesystem, no capabilities" "$(q "$DM" "$MP|[.secu
 eq "restartPolicy Never"                                "$(q "$DM" "$MP|.restartPolicy")" Never
 eq "the job has resource limits"                        "$(q "$DM" "$MCT|.resources.limits|has(\"memory\") and has(\"cpu\")|tostring")" true
 eq "no Secret object and no URL with a password"        "$(q "$DM" '[.[]|select(.kind=="Secret")]|length')" 0
+
+echo "# memory expiry script: wait for DNS and the database (issue #202), with a fake psql"
+MEJOB="$CHART/files/memory-expiry.sh"
+MEDIR=$(mktemp -d)
+cat > "$MEDIR/psql" <<'FAKE'
+#!/bin/sh
+# Fake psql. The probe is the call with "select 1"; the job's own call reads a script on stdin.
+# PROBE_FAIL_FIRST=n: the first n probes fail with PROBE_ERR. PROBE_ERR_ALWAYS=1: every probe fails.
+case " $* " in
+  *"select 1"*)
+    n=$(cat "$MEDIR/probes" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$MEDIR/probes"
+    if [ "${PROBE_ERR_ALWAYS:-0}" = 1 ] || [ "$n" -le "${PROBE_FAIL_FIRST:-0}" ]; then echo "$PROBE_ERR" >&2; exit 2; fi
+    exit 0 ;;
+  *) cat >/dev/null; echo "memory-expiry: total_before=0 expired=0 extended=0 deleted=0 total_after=0"; exit 0 ;;
+esac
+FAKE
+chmod +x "$MEDIR/psql"
+# me_run <probes that fail first> <psql error text> [always]  -> prints "<exit code> <probe count>"
+me_run() {
+  rm -f "$MEDIR/probes"
+  ( PATH="$MEDIR:$PATH" MEDIR="$MEDIR" KAGENT_DB_URL="postgresql://u@db.example:5432/kagent" WAIT_SECONDS="${WAIT_SECONDS:-5}" WAIT_INTERVAL=0.05 \
+    PROBE_FAIL_FIRST="$1" PROBE_ERR="$2" PROBE_ERR_ALWAYS="${3:-0}" sh "$MEJOB" >/dev/null 2>"$MEDIR/stderr"; echo "$? $(cat "$MEDIR/probes" 2>/dev/null || echo 0)" )
+}
+DNSERR='psql: error: could not translate host name "kagent-pg.kagent.svc" to address: Temporary failure in name resolution'
+eq "database down for the first 3 tries (DNS not up): the job still succeeds, after 4 probes" "$(me_run 3 "$DNSERR")" "0 4"
+eq "connection refused for the first 2 tries: the job succeeds" "$(me_run 2 'psql: error: connection to server at "10.0.0.1", port 5432 failed: Connection refused')" "0 3"
+eq "a refused password fails at once with exit 78 and one probe, no loop" "$(me_run 99 'psql: error: connection to server failed: FATAL:  password authentication failed for user "x"')" "78 1"
+eq "a missing role fails at once with exit 78" "$(me_run 99 'psql: error: FATAL:  role "x" does not exist')" "78 1"
+eq "a database that stays down ends with exit 1 (the job retries) after the wait" "$(WAIT_SECONDS=1 me_run 0 "$DNSERR" 1 | cut -d' ' -f1)" 1
+eq "the wait message names no host, user or password" "$(/usr/bin/grep -c 'db.example\|kagent-pg' "$MEDIR/stderr")" 0
+rm -rf "$MEDIR"
 eq "no rendered document holds a connection string"     "$(q "$DM" 'tostring|test("postgres(ql)?://[^ ]*@")')" false
 DM2=$(docs "${MON[@]}" --set memory.expiry.secretScan=false)
 eq "secretScan=false passes 0"                          "$(q "$DM2" "$MCT|.env[]|select(.name==\"SECRET_SCAN\")|.value")" 0
@@ -2218,6 +2254,34 @@ HI0=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" 2>
 HI1=$(helm template openagentix "$CHART" -n openagentix-system "${IMGALL[@]}" --set-string bridge.image.digest= --set-string scheduling.image.digest= --set-string gateway.stubModel.image.digest= --set-string knowledge.kb.image.digest= --set-string notify.image.digest= --set-string governance.a2a.image.digest= --set-string controlPlane.image.digest= --set-string console.image.digest= 2>&1 | shasum -a 256)
 eq "every image.digest empty: byte-identical to the render without them" "$HI1" "$HI0"
 eq "default values: every installer-built image path has image.digest \"\"" "$(yq -r '[.bridge, .scheduling, .gateway.stubModel, .knowledge.kb, .notify, .governance.a2a, .controlPlane, .console]|map(.image.digest)|map(.=="")|all' "$CHART/values.yaml")" true
+echo "# every container of our workloads has probes and requests and limits (issue #201)"
+# Every container of every Deployment, StatefulSet and DaemonSet needs liveness, readiness and startup probes and CPU and memory
+# requests and limits. Init containers and CronJob containers are out of scope. Workloads of upstream projects are not rendered by
+# this chart, so nothing needs an allowlist except the entries below (an entry is "kind/name/container/missing", with the reason).
+# Issue #211 tracks anything we cannot fix because the image is not ours.
+PROBE_ALLOW=(
+)
+RC="$REPO/components"
+RCDEMO=(-f "$RC/channels/demo-values.yaml" -f "$RC/schedules/demo-values.yaml" -f "$RC/notify/demo-values.yaml" -f "$RC/observability/demo-values.yaml" -f "$RC/knowledge/graph-demo-values.yaml" -f "$RC/governance/demo-values.yaml" -f "$RC/governance/profiles-demo-values.yaml" -f "$RC/governance/memory-demo-values.yaml" -f "$RC/control-plane/demo-values.yaml" -f "$RC/console/demo-values.yaml" --set gateway.stubModel.enabled=true)
+# gaps <docs-json> -> one line per missing item: kind/name/container/what
+GAPS='.[]|select(.kind=="Deployment" or .kind=="StatefulSet" or .kind=="DaemonSet")|. as $w|.spec.template.spec.containers[]|. as $c|
+  ([["livenessProbe",$c.livenessProbe],["readinessProbe",$c.readinessProbe],["startupProbe",$c.startupProbe],
+    ["requests.cpu",$c.resources.requests.cpu],["requests.memory",$c.resources.requests.memory],
+    ["limits.cpu",$c.resources.limits.cpu],["limits.memory",$c.resources.limits.memory]]|.[]|select(.[1]==null)|.[0])
+  as $m|$w.kind+"/"+$w.metadata.name+"/"+$c.name+"/"+$m'
+probe_check() {   # probe_check <label> <helm args...>
+  local label=$1; shift
+  local rendered; rendered=$(docs "$@")
+  local missing; missing=$(jq -r "$GAPS" <<<"$rendered" | sort)
+  local a; for a in "${PROBE_ALLOW[@]+"${PROBE_ALLOW[@]}"}"; do missing=$(printf '%s\n' "$missing" | /usr/bin/grep -vxF "$a"); done
+  eq "$label: workloads rendered (the check is not empty)" "$(q "$rendered" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet" or .kind=="DaemonSet")]|length>0')" true
+  eq "$label: every container has liveness, readiness and startup probes and requests and limits" "$missing" ""
+}
+probe_check "defaults"
+probe_check "quick start" -f "$RC/quickstart/values.yaml"
+probe_check "minimal" -f "$RC/quickstart/minimal-values.yaml"
+probe_check "bring your own agent" -f "$RC/quickstart/byo-values.yaml"
+probe_check "full demo" "${RCDEMO[@]}" $GKAPI
 
 echo
 echo "passed=$PASS failed=$FAIL"

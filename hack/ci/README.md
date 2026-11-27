@@ -34,9 +34,64 @@ The branch protection rule for `main` requires **`ci-ok`** and **`DCO`** (the DC
 
 `.github/workflows/e2e.yml` installs the quick start on a hosted `ubuntu-24.04` runner with no key and no token (`PROFILE=quickstart ./install.sh`, the stub model; a matrix also runs `PROFILE=minimal`, issue #29), then runs `hack/ci/smoke.sh`: the agent is Ready, a question is answered through the A2A gate with a tool call, a tool outside the profile returns nothing, a forbidden definition is refused, the console API answers 401 without the token and lists the agent with it. It runs on pull requests that touch install-relevant paths, nightly, and by hand. The job summary has the time to the first working agent and the install steps with their times. After the smoke test it runs `hack/demo.sh` (the demo walkthrough, `docs/diary/guide/demo.md`) and prints the phases of the time to the first working agent (`hack/ci/phases.sh`; the offline tests are `hack/ci/phases-test.sh` and `hack/demo-test.sh`, both in `make test-shell`). Local equivalent: `PROFILE=quickstart ./install.sh && hack/ci/smoke.sh && hack/demo.sh`. The record of the runs, including gVisor on the runner, is below.
 
+## upgrade (v0.2.0 to this checkout)
+
+`.github/workflows/upgrade.yml` (issue #205) runs `hack/ci/upgrade-test.sh` on a hosted `ubuntu-24.04` runner. No image of v0.2.0 is published, so the script takes the tag with `git archive` and runs ITS `install.sh` (placeholder provider and chat tokens, bridge off, one suspended schedule, no skill: nothing calls a paid model or Telegram). It seeds a knowledge base document (collection `upgrade-canary`) and a memory row, records the state, runs this checkout's `./install.sh` with the same values ("upgrade A"), and compares. Then it adds the control plane to the values ("upgrade B"), because the CRD `agentdefinitions.openagentix.io` is new since v0.2.0.
+
+State that must be unchanged after upgrade A (and still after B): UIDs of the agent `assistant`, the CronJob and the PVCs; the content (checksum only) of the agent's gateway virtual-key Secret, the knowledge base Secrets and the key ConfigMap; the knowledge base collections and document counts; `kb_search` finding the canary; the memory row. The agent must be Ready and no pod may wait in a failing state. After B: the CRD is Established, an `AgentDefinition` is accepted (the script retries while Kubernetes' quota controller learns the new CRD, and nudges the quota after every 10 attempts as `install.sh` does, issue #210), the control plane applies it and the agent it builds is Ready, and the old agent is untouched.
+
+Not checked, and printed at the end of every run: an answer from the old agent (v0.2.0 has no stub model and no paid call is made in tests), A2A gate audit lines (the gate is off in the v0.2.0 default values), a request with the virtual key. The installer of v0.2.0 is run up to three times, because a fresh v0.2.0 install has a start-up race on kagent's PostgreSQL (fixed in main) and, with the bridge off, writes its Telegram Secret before the namespace exists (fixed in main).
+
+It runs on pull requests that touch the installer or the chart, nightly at 05:47 UTC and by hand (`gh workflow run upgrade.yml -f from=v0.2.0`; do this before a release). It is not in `ci-ok`. Offline test of the script: `hack/ci/upgrade-test-test.sh` (fake `kubectl`, `helm` and kb, in `make test-shell`).
+## lifecycle (install twice, uninstall, reinstall)
+
+`.github/workflows/lifecycle.yml` (issue #206) runs `hack/ci/lifecycle-test.sh` on a hosted `ubuntu-24.04` runner with the keyless quick start (stub model, `PROFILE=quickstart`): install, smoke test, install again with the same values, uninstall (no `PURGE_*`), install again, smoke test. It checks:
+
+- after the second install: every object in `helm get manifest` has the same UID, no object or workload was added, the AgentDefinition and the Agent have the same UIDs (not rebuilt), no Secret in the OpenAgentix namespaces changed (compared by checksum, values are never printed), every pod is Ready and none crash-loops, the smoke test passes;
+- after the uninstall: the Helm release is gone, no object of the release is left except those with `helm.sh/resource-policy: keep` (the CRD and the key ConfigMap), no AgentDefinition and no Agent is left, and the only PVCs left are the documented data volumes (the list is in `uninstall.sh`);
+- after the reinstall: the smoke test passes and the kept Secrets have the same content as after the first install. The one exception is the Secret `model-gateway-session-key`: the agentgateway controller (upstream) makes a new one when the Gateway is created again.
+
+It runs on pull requests that touch the installer, the chart or `components/`, nightly at 04:47 UTC and by hand. It is not in `ci-ok`. Offline test of the script: `hack/ci/lifecycle-test-test.sh` (fake `kubectl` and `helm`, in `make test-shell`). Local run on a cluster you may use: `PROFILE=quickstart hack/ci/lifecycle-test.sh` (it installs and uninstalls on the current context: never point it at a cluster you use).
+
+First live run: [what-works.md](../../docs/diary/what-works.md), row "Install twice, uninstall, reinstall".
+
 ## e2e-k3s (the quick start on k3s)
 
-`.github/workflows/e2e-k3s.yml` is the same install and smoke test as `e2e`, on k3s in Docker made by k3d (`CLUSTER_TYPE=k3d`, `hack/cluster.sh`), with the sample container agent (`QUICKSTART_BYO=1`, `SMOKE_BYO=1`). It then runs `hack/ci/netpol-test.sh`, which checks live whether the cluster enforces NetworkPolicy for ingress and for egress to the internet. The job has `continue-on-error`, is not in `ci-ok` and never turns a pull request red; read its steps, not its colour. It runs nightly, by hand, and on pull requests that touch the installer or the cluster helper. Local equivalent: `CLUSTER_TYPE=k3d CLUSTER=oa-k3s-test PROFILE=quickstart ./install.sh && hack/ci/smoke.sh` (use a `KUBECONFIG` file of your own; do not run it beside another cluster in a small Docker VM). The record of the runs is in [Install on k3s](../../docs/diary/guide/install-k3s.md).
+`.github/workflows/e2e-k3s.yml` is the same install and smoke test as `e2e`, on k3s in Docker made by k3d (`CLUSTER_TYPE=k3d`, `hack/cluster.sh`), with the sample container agent (`QUICKSTART_BYO=1`, `SMOKE_BYO=1`). It then runs `hack/ci/netpol-test.sh`, which checks live whether the cluster enforces NetworkPolicy for ingress and for egress to the internet. The job shows its real result (issue #195: `continue-on-error` is gone, so it is no longer always green). It is not in `ci-ok` and is not a required check of `main` (those are `ci-ok` and `DCO`), so a red run does not block a merge. A red run means the install, the anonymous-access check (issue #189), the smoke test or the NetworkPolicy test failed on k3s: open the failed step and the job summary. Before this change the job was green even when it failed (13 of 23 completed runs failed unseen), so older runs of it say nothing; the four runs after the fix of #189 were green. Do not merge a pull request that touches the installer with this check red unless you know why. It runs nightly, by hand, and on pull requests that touch the installer or the cluster helper. Local equivalent: `CLUSTER_TYPE=k3d CLUSTER=oa-k3s-test PROFILE=quickstart ./install.sh && hack/ci/smoke.sh` (use a `KUBECONFIG` file of your own; do not run it beside another cluster in a small Docker VM). The record of the runs is in [Install on k3s](../../docs/diary/guide/install-k3s.md).
+
+## flake-sweep (nightly)
+
+`.github/workflows/flake-sweep.yml` runs at 02:23 UTC and by hand. It finds the Go modules (`hack/ci/go-modules.sh --json`) and runs one job per module: `go test ./... -race -count=20 -timeout 30m` through `hack/ci/flake-sweep.sh`. Every test runs 20 times, so a test that fails 1 time in 10 fails the sweep almost every night. The job summary lists each failing test, its package and how many of the 20 runs failed (for example `2 of 20`). A failure that is not a test (a build error, a timeout, a panic outside a test) is reported with its last lines. One module failing does not stop the others (`fail-fast: false`).
+
+It never runs on a pull request and is not in `ci-ok`: a red sweep is a report, not a block. What to do with a red run: open the job summary, find the test, reproduce it with the command below, and fix the test or the code under it (a test that fails only under `-race -count=20` is usually a timing assumption or a shared variable). Do not retry the sweep until it turns green.
+
+```
+make flake-sweep                                            # every module, 20 runs each (slow)
+make flake-sweep MODULES=services/a2a-gate COUNT=50         # one module, more runs
+hack/ci/flake-sweep.sh services/kb --count 20               # the same command the workflow runs
+```
+
+The offline test builds a throwaway Go module with a test that fails 2 times in 20, and checks the exit code and that the test is named (`hack/ci/flake-sweep-test.sh`, in `make test-shell`).
+## Nightly runs and the green streak
+
+`e2e.yml` (03:17 UTC) and `e2e-k3s.yml` (03:47 UTC) have a `schedule:` trigger. The cron lines are valid, both files are on `main`, Actions is enabled for the repository with all actions allowed, and both workflows are active. Even so, the Actions API listed no run with event `schedule` for either workflow on 2026-11-26, about 22 hours after the first possible tick. We could not find a setting that explains it. GitHub does not promise that a scheduled run starts on time, and it can drop one when its queue is busy. So the claim is only this: no nightly run has been seen yet. Check again after 03:50 UTC on the next day: `hack/ci/green-streak.sh` prints a warning for `e2e` and `e2e-k3s` while the window holds no `schedule` run, and it prints the date of the newest one when there is one. If a night passes with no run, start the workflow by hand (`gh workflow run e2e.yml`) and record the gap in issue #196.
+
+`hack/ci/green-streak.sh` counts the green runs in a row on `main` for `ci`, `docs`, `e2e` and `e2e-k3s`. It is the check for the release 0.3 exit criterion "30 green runs on main".
+
+```
+hack/ci/green-streak.sh                    # text, one line per workflow
+hack/ci/green-streak.sh --json             # the same as JSON
+hack/ci/green-streak.sh --target 30 --check ci docs   # exit 1 when ci or docs is below 30
+```
+
+How to read a line, for example `ci  17 in a row  (target 30, not met)  counted 62  last red: <run url>`:
+
+- The streak is the number of green runs before the first red one, newest first. The link is the run that ended it.
+- Cancelled, skipped and still running runs are ignored. They do not add to the streak and they do not break it. Pull request runs are ignored too.
+- `counted` is how many runs the window held (`--limit`, default 100). A streak equal to `counted` may be longer than shown.
+- `e2e` and `e2e-k3s` run on `main` only at night or by hand, so 30 green runs of them take 30 nights. A manual run counts like a nightly one.
+
+The offline test is `hack/ci/green-streak-test.sh` (in `make test-shell`).
 
 ## Tools and pins
 

@@ -618,9 +618,9 @@ func TestRunReconcilesNewDefinitionsAndRelistsOnGone(t *testing.T) {
 				d, _ := api.FromObject(o)
 				return d.Status.Condition("Ready").Status == "True"
 			})
-			if !e.c.Ready() {
-				t.Fatal("the controller must report ready after its first pass")
-			}
+			// The status is written during the first pass; Ready turns true when the pass returns,
+			// a moment later. Wait for it instead of reading it at once.
+			waitFor(t, "the controller to report ready after its first pass", e.c.Ready)
 			lists := len(e.srv.Matching("GET", "/agentdefinitions"))
 			e.srv.GoneNextWatch("agentdefinitions", "kagent", mode)
 			// the next watch (opened after the next event ends the current one) answers 410; a new definition must still be found

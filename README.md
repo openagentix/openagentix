@@ -170,6 +170,13 @@ Expect `TASK_STATE_COMPLETED` and an answer that says 4. Then message your bot o
 
 Note: the controller's NetworkPolicy (`openagentix-kagent-controller`, on by default) admits only named callers on port 8083 (the bridge pod by its label `app=telegram-bridge`, Kourier, schedule pods, the A2A gate when it is on, and `networkPolicy.extraA2ACallers`). The test pod above is none of these, so by reading the chart the call should time out; this was not re-run for this note. Send a test from an admitted caller, list the test namespace in `networkPolicy.extraA2ACallers`, or use the quick start, where `hack/ask.sh` goes through the gate.
 
+**Upgrade from 0.2.0.** Run `./install.sh` from the new checkout with the same values (`VALUES_FILE` and the same environment): Helm replaces the release values on every run, so a file you leave out is dropped. No other manual step was needed in the test (`hack/ci/upgrade-test.sh`, run on a kind cluster). It kept the agent, the schedule, the volumes, the gateway virtual key and its hash, the knowledge base documents and the memory rows. Things to know:
+
+- The CRD `agentdefinitions.openagentix.io` and the control plane are new since 0.2.0 and off by default. You get them with the first upgrade that sets `controlPlane.enabled`. Kubernetes' quota controller then refuses the first `AgentDefinition` with "status unknown for quota" (issue #210) for anything from under a minute to more than five minutes. Apply it again. To end it at once, change the limit of the ResourceQuota `openagentix-agentdefinitions` in the namespace `kagent` (`count/agentdefinitions.openagentix.io`) up by one and back: `install.sh` does this for its own quick start agent.
+- An `AgentDefinition` shows `Ready=False`, reason `NoEndpoint`, while the A2A gate is off, even though the agent it built is Ready. Turn the gate on (`governance.a2a.enabled`) to get an endpoint.
+- Helm adds one revision per run (`helm history openagentix -n openagentix-system`).
+- Not tested: an answer from the old agent (the test calls no paid model), audit lines, a full demo install (channels, notify, graph) and upgrades from a cluster that used `PURGE_*`.
+
 To remove OpenAgentix: `./uninstall.sh`. It removes only the `openagentix` Helm release. kind, kagent, Substrate, agentgateway, ToolHive, namespaces and all Secrets stay. `PURGE_SECRETS=1` also deletes the Secrets and the key ConfigMap that `install.sh` created (the knowledge base's database credentials stay); `PURGE_DATA=1` deletes the knowledge base volumes and database credentials.
 
 ## Knowledge base

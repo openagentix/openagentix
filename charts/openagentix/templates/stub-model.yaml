@@ -57,6 +57,10 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
           readinessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5
