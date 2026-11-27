@@ -371,6 +371,29 @@ func TestDefaultDiscoveryRulesDoNotFailTheCheck(t *testing.T) {
 	}
 }
 
+// Seen live (CI run 46010375067, kind with Kubernetes 1.37): the API server's default ClusterRole
+// system:cluster-trust-bundle-discovery gives every authenticated identity get, list and watch on
+// clustertrustbundles (public CA certificates). The rights review of a real ServiceAccount holds it.
+func TestDefaultClusterTrustBundleDiscoveryDoesNotFailTheCheck(t *testing.T) {
+	ctb := authv1.ResourceRule{Verbs: []string{"get", "list", "watch"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"clustertrustbundles"}}
+	if bad := evalRules("rca-demo", true, []authv1.ResourceRule{ctb}, nil); len(bad) != 0 {
+		t.Fatalf("the default clustertrustbundles read was refused: %v", bad)
+	}
+	// nothing else of that group, and no write on the bundles, is let through with it
+	for _, r := range []authv1.ResourceRule{
+		{Verbs: []string{"create"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"clustertrustbundles"}},
+		{Verbs: []string{"update", "patch", "delete"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"clustertrustbundles"}},
+		{Verbs: []string{"get"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"certificatesigningrequests"}},
+		{Verbs: []string{"get", "list", "watch"}, APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"podcertificaterequests"}},
+		{Verbs: []string{"get", "list", "watch"}, APIGroups: []string{""}, Resources: []string{"secrets"}},
+		{Verbs: []string{"get", "list", "watch"}, APIGroups: []string{"other.example"}, Resources: []string{"clustertrustbundles"}},
+	} {
+		if bad := evalRules("rca-demo", true, []authv1.ResourceRule{r}, nil); len(bad) == 0 {
+			t.Errorf("%v passed", r)
+		}
+	}
+}
+
 func TestRightsCheckNamespaceThatGrantsNothing(t *testing.T) {
 	cfg := testConfig()
 	c, a := newAuthzClient(cfg)
