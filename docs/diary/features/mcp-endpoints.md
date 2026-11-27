@@ -98,6 +98,6 @@ Live, on one kind cluster in CI (the `e2e` workflow, input `endpoints`; two tiny
 - That the endpoints in the job are the real records service. They are a small test server. The job's vMCPs trust the API server's tokens, so the path of an agent through Substrate was not run.
 - The egress policy of the group on a network plugin that enforces egress. kindnet is the plugin of the CI cluster, and the policy was applied and listed, not shown to cut a connection.
 - A redirect with another status or method; relayed requests of a backend (sampling, elicitation) and `list_changed` notifications.
-- The identity provider rule uses the labels and port of the Substrate chart 1.0.1 (`app: ate-idp-server`, 8443), read from its manifests and not from a cluster that enforces egress.
+- **Not verified live:** the identity provider rule. It uses the labels and port of the Substrate chart 1.0.1 (`app: ate-idp-server`, 8443), read from its manifests. kindnet, the plugin of the CI cluster, does not enforce egress, so a wrong label or port would not show. The render refuses an empty selector and a missing port.
 - Definitions, container agents and `-workload` variants on an endpoint group (refused in this slice).
 - Every vMCP of the tools namespace can read every Secret there through the API. The header Secret is as safe as that namespace. The follow-up in ADR 0026 (a namespace per credentialed group) is not built.

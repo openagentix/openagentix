@@ -278,6 +278,25 @@ done
 yq -y '{agents: (.agents|.[0].egress={allow:["http://other.records-ns.svc.cluster.local"]})}' "$CHART/values.yaml" > "$EX2"
 okr "another service of the same namespace is not named by this rule (it is only the endpoint host)" -f "$EX2" -f "$EX"
 okr "a wildcard of another namespace is fine" -f "$EX" --set controlPlane.enabled=true --set 'controlPlane.policy.egress.allowedOrigins={https://*.example.com}'
+# The control plane refuses the WHOLE namespace of an endpoint (the controller refuses to start with such a value, and the guard refuses it): the render says so first
+for FORM in other.records-ns:8080 other.records-ns.svc:8080 other.records-ns.svc.cluster.local:8080; do
+  er "controlPlane.policy.egress.inClusterDestinations naming ANOTHER service of the endpoint's namespace ($FORM) is refused" "inClusterDestinations entry $FORM is inside the namespace \"records-ns\" of an entry of mcp.endpoints" -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.inClusterDestinations={$FORM}"
+done
+for FORM in 'https://*.records-ns.svc' 'https://*.records-ns.svc.cluster.local'; do
+  er "controlPlane.policy.egress.allowedOrigins with a wildcard over the whole namespace ($FORM) is refused (it covers the endpoint host)" "names the host of an entry of mcp.endpoints (in any form" -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.allowedOrigins={$FORM}"
+done
+for FORM in http://other.records-ns https://other.records-ns.svc https://other.records-ns.svc.cluster.local:8443; do
+  er "controlPlane.policy.egress.allowedOrigins naming a host of the endpoint's namespace ($FORM) is refused" "allowedOrigins entry $FORM is inside the namespace \"records-ns\" of an entry of mcp.endpoints" -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.allowedOrigins={$FORM}"
+done
+okr "inClusterDestinations of another namespace is fine" -f "$EX" --set controlPlane.enabled=true --set 'controlPlane.policy.egress.inClusterDestinations={registry.ci.svc:5000}'
+okr "agents[].egress.allow keeps the host-only rule: another service of the namespace renders (the sandbox's proxy is not the controller)" -f "$EX2" -f "$EX"
+okr "the same values without endpoints render (the namespace rule is for endpoints only)" --set controlPlane.enabled=true --set 'controlPlane.policy.egress.inClusterDestinations={other.records-ns.svc:8080}'
+# the identity provider values must be usable when endpoints are on
+er "an empty networkPolicy.substrate.idp.podLabels is refused with an endpoint (an empty selector would admit every pod of the Substrate namespace)" 'networkPolicy.substrate.idp.podLabels must be a non-empty map' -f "$EX" --set networkPolicy.substrate.idp.podLabels=null
+er "a podLabels value that is not a string is refused" 'networkPolicy.substrate.idp.podLabels must be a non-empty map' -f "$EX" --set-json 'networkPolicy.substrate.idp.podLabels={"app":1}'
+er "a missing networkPolicy.substrate.idp.port is refused with an endpoint" 'networkPolicy.substrate.idp.port must be a port number' -f "$EX" --set networkPolicy.substrate.idp.port=null
+er "networkPolicy.substrate.idp.port 0 is refused" 'networkPolicy.substrate.idp.port must be a port number' -f "$EX" --set networkPolicy.substrate.idp.port=0
+okr "an empty idp selector is not looked at without endpoints (the default render does not change)" --set-json 'networkPolicy.substrate.idp.podLabels={}\'
 
 echo "# endpoints: the values file"
 eq "values.yaml documents the shape (endpoints, group, auth.header, ingress, allowDefinitions) in comments" "$(/usr/bin/grep -c '#  *- name: records\|#    group:\|#      header:\|#      podSelector:\|#    allowDefinitions:' "$CHART/values.yaml" | awk '{print ($1>=5)?"yes":"no"}')" yes
