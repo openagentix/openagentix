@@ -554,7 +554,8 @@ for rn in openagentix-cluster-read openagentix-cluster-read-logs openagentix-clu
   done
 done
 echo "# diagnostics: what the ServiceAccount may do (kubectl auth can-i, impersonated)"
-can() { kubectl auth can-i "$@" 2>/dev/null || true; }
+# kubectl reads "pods/exec" as the pod NAMED exec; a subresource is --subresource=exec. The lists below use the ADR's shorthand (pods/exec), so it is translated here.
+can() { local a=() r; for r in "$@"; do case "$r" in -*) a+=("$r");; */*) a+=("${r%%/*}" "--subresource=${r#*/}");; *) a+=("$r");; esac; done; kubectl auth can-i "${a[@]}" 2>/dev/null || true; }
 canas() { local who=$1; shift; can "$@" --as="$who"; }
 # yes: exactly what the three roles give
 for q in "get pods/log -n $DGLOG" "list pods -n $DGLOG" "list events -n $DGLOG" "list events -n $DGST" "list pods -n $DGST" "get deployments.apps -n $DGST" "list statefulsets.apps -n $DGLOG" "list daemonsets.apps -n $DGLOG" "list replicasets.apps -n $DGST" "list nodes" "get nodes"; do

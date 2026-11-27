@@ -216,6 +216,12 @@ jobs:
           kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}]}' || true
           kubectl get remotemcpserver -n kagent -o json | jq -c '.items[]|{name:.metadata.name,tools:[.status.discoveredTools[]?.name]}' || true
           kubectl get validatingadmissionpolicy openagentix-diagnostics-rbac -o json | jq -c '.status' || true
+          echo "--- R2: every right the ServiceAccount has, and who grants the ones the rights check calls forbidden"
+          kubectl auth can-i --list --as=system:serviceaccount:openagentix-diagnostics:cluster-read -n diag-ci || true
+          kubectl auth can-i --list --as=system:serviceaccount:openagentix-diagnostics:cluster-read || true
+          kubectl get clusterrole -o json | jq -r '.items[]|select([.rules[]?|(.resources//[])[]]|index("clustertrustbundles"))|"ClusterRole "+.metadata.name' || true
+          kubectl get clusterrolebinding -o json | jq -c '.items[]|select(.roleRef.name as $r|["system:cluster-trust-bundles-reader"]|index($r))|{name:.metadata.name,role:.roleRef.name,subjects:.subjects}' || true
+          kubectl get clusterrolebinding -o json | jq -c '.items[]|select(any(.subjects[]?;.kind=="Group" and (.name=="system:authenticated" or .name=="system:serviceaccounts")))|{name:.metadata.name,role:.roleRef.name}' || true
           kind export logs ./kind-logs --name openagentix || true
       - name: upload cluster logs
         if: failure()

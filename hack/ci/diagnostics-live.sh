@@ -78,7 +78,8 @@ check "the shared-group profile lookup lists no cluster-read tool either" "$OTHE
 
 echo "# the rights, asked of the real API server as the ServiceAccount"
 SA="system:serviceaccount:$DNS:cluster-read"
-can() { $K auth can-i "$@" --as="$SA" 2>/dev/null || true; }
+# kubectl reads "pods/exec" as the pod NAMED exec; a subresource is --subresource=exec: translate the ADR's shorthand
+can() { local a=() r; for r in "$@"; do case "$r" in -*) a+=("$r");; */*) a+=("${r%%/*}" "--subresource=${r#*/}");; *) a+=("$r");; esac; done; $K auth can-i "${a[@]}" --as="$SA" 2>/dev/null || true; }
 check "may list pods in the log namespace" "$(can list pods -n "$LOGNS")" yes
 check "may get pod logs in the log namespace" "$(can get pods/log -n "$LOGNS")" yes
 check "may list events in a status namespace" "$(can list events -n "$KNS")" yes
