@@ -135,7 +135,7 @@ check "the scenario file is shipped through the chart contract (ADR 0026): quick
 check "the chart ConfigMap stub-model-scenarios holds eval/scenario.json byte for byte" "[ \"\$(doc '$T/bank-scn.yaml' ConfigMap stub-model-scenarios | jq -j '.data[\"scenario.json\"]' | shasum -a 256 | cut -c1-64)\" = \"\$(cat '$SC' | shasum -a 256 | cut -c1-64)\" ]"
 check "the stub model Deployment reads the mounted directory and rolls on a change" "doc '$T/bank-scn.yaml' Deployment stub-model | jq -e '(.spec.template.spec.containers[0].env[0].value == \"/etc/stub-model/scenarios\") and (.spec.template.metadata.annotations | has(\"openagentix.io/scenarios-checksum\"))' >/dev/null"
 check "without the scenario file the bank render has no scenario ConfigMap (off by default)" "! grep -q 'stub-model-scenarios' '$T/bank.yaml'"
-check "install.sh does not patch the stub model or make a scenario ConfigMap any more" "! grep -Eq 'patch deployment|create configmap|bank-scenarios' '$HERE/install.sh'"
+check "install.sh does not patch the stub model or make a scenario ConfigMap any more (it only deletes the old one on --uninstall)" "! grep -Eq 'patch deployment|create configmap' '$HERE/install.sh' && [ \"\$(grep -c 'bank-scenarios' '$HERE/install.sh')\" -le 2 ]"
 check "the README ships the scenarios with STUB_SCENARIOS and says a run with them is scripted" "grep -q 'STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json' '$HERE/README.md' && grep -qi 'scripted' '$HERE/README.md'"
 CS="$HERE/eval/cases.yaml"
 yq -c . "$CS" > "$T/cases.json"
@@ -151,7 +151,7 @@ bash "$ROOT/hack/compose-values.sh" "$QS" "$VALS" > "$T/composed.yaml" 2> "$T/co
 check "hack/compose-values.sh composes the quick start and values.yaml, with no refusal and the restated caller kept once" "[ $COMP_RC = 0 ] && yq -e '[.governance.a2a.callers[] | select(.name==\"quickstart-ask\")] | length == 1' '$T/composed.yaml' >/dev/null" "$(cat "$T/composed.err")"
 helm template t "$CHART" -f "$T/composed.yaml" > "$T/composed.render" 2> "$T/composed.render.err"; COMP_R=$?
 check "the composed file renders byte for byte like the quick start plus values.yaml (the same behaviour)" "[ $COMP_R = 0 ] && cmp -s '$T/bank.yaml' '$T/composed.render'" "$(head -3 "$T/composed.render.err")"
-check "the README shows the compose command" "grep -q 'hack/compose-values.sh components/quickstart/values.yaml examples/use-cases/bank/values.yaml' '$HERE/README.md'"
+check "the README shows the compose command" "grep -q 'hack/compose-values.sh -o /tmp/bank-values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml' '$HERE/README.md'"
 check "the quick start has exactly the one caller that values.yaml restates (so nothing else is lost)" "[ \"\$(yq -r '.governance.a2a.callers | length' '$QS')\" = 1 ]"
 check "the quick start renders the profile vMCP tools-lookup that the records policy admits" "doc '$T/qs.yaml' VirtualMCPServer tools-lookup | jq -e '.metadata.name == \"tools-lookup\"' >/dev/null && yq -e 'select(.kind==\"NetworkPolicy\") | .spec.ingress[0].from[0].podSelector.matchExpressions[0].values | index(\"tools-lookup\") != null' '$M' >/dev/null"
 check "the quick start shared vMCP has code mode off (install.sh refuses it on)" "! doc '$T/qs.yaml' VirtualMCPServer tools | jq -e '.spec.config.codeMode' >/dev/null 2>&1"

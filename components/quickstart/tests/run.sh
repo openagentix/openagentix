@@ -286,6 +286,9 @@ else
   mkdir -p "$SCD/with,comma"; cp "$SCD/single.json" "$SCD/with,comma/single.json"
   OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/with,comma/single.json")
   eq "a path with a comma (Helm would split it): refused"  "$(/usr/bin/grep -c 'STUB_SCENARIOS: the path .* has a comma' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
+  mkdir -p "$SCD/back\\slash"; cp "$SCD/single.json" "$SCD/back\\slash/single.json"
+  OUT=$(rinst PROFILE=quickstart KUBE_CONTEXT=gke_p_z_c FAKE_API=up "${PUSH[@]}" IMAGE_REGISTRY=$REG STUB_SCENARIOS="$SCD/back\\slash/single.json")
+  eq "a path with a backslash (Helm would read it as an escape): refused with a clear message" "$(/usr/bin/grep -c 'STUB_SCENARIOS: the path .* has a backslash' <<<"$OUT")/$(/usr/bin/grep -c '^helm upgrade' "$RT/calls")" 1/0
   eq "install.sh header documents STUB_SCENARIOS"           "$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -c 'STUB_SCENARIOS=')" 1
 
   echo "# install.sh on kind with a fake kind (ADR 0022: nothing changes there)"

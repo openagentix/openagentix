@@ -52,7 +52,7 @@ The second script builds the records image, loads it into the kind cluster, crea
 Helm replaces lists, so `values.yaml` restates the quick start caller `quickstart-ask` (a test compares the whole entry with the quick start's). You do not have to copy entries by hand for another base: `hack/compose-values.sh` merges the lists by entry name, keeps the restated caller once, and reports what this file adds and changes. Use its output in place of `VALUES_FILE=examples/use-cases/bank/values.yaml` in the install command above:
 
 ```sh
-hack/compose-values.sh components/quickstart/values.yaml examples/use-cases/bank/values.yaml > /tmp/bank-values.yaml
+hack/compose-values.sh -o /tmp/bank-values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml
 PROFILE=quickstart VALUES_FILE=/tmp/bank-values.yaml ./install.sh
 ```
 
@@ -190,7 +190,7 @@ Nothing below has been done. The first live run must check each item and write d
 - [ ] The dispute agent calls the `records_*` and `knowledge_*` tools through its vMCP, and the vMCP audit lines show the tool names with no case text.
 - [ ] The kb ingest and the graph load work for the seven documents and the fact set. With the stub model, the kb's graph extraction does not fail the ingest.
 - [ ] The scenario mount works: the platform install with `STUB_SCENARIOS` makes the ConfigMap `stub-model-scenarios`, the stub's start log names the number of scenarios (five), and the three cases give the answers in the demo. After a second platform install with the same values, the scenarios are still loaded. A changed scenario file restarts the stub. The diary entry says the run was scripted.
-- [ ] `install.sh --uninstall` leaves a working stub model (it does not touch it), and the quick start agent still answers.
+- [ ] `install.sh --uninstall` leaves a working stub model (it does not patch it; it only deletes the ConfigMap `bank-scenarios` that the first version of the script made, if it is there), and the quick start agent still answers.
 - [ ] Right after the bank install, the quick start agent (`hack/ask.sh quickstart ...`) still answers correctly.
 - [ ] `install.sh` run twice gives no error, and a second kb ingest and graph load create no duplicate documents, entities or relations.
 - [ ] A kb search for each of the four cited titles (Fernvale Dispute Handling Policy, Ficticard Scheme Dispute Rules, Customer Text and Untrusted Input Rule, Fernvale Provisional Credit Rule) returns that document.

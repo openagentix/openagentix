@@ -215,7 +215,8 @@ w ns2.yaml <<'EOF'
 controlPlane: {policy: {allowedProfiles: [p], allowKnowledge: true}}
 EOF
 run "$T/ns1.yaml" "$T/ns2.yaml"
-check "an allow list is never joined: a security key that only the later file sets is kept, noted, and the earlier one is untouched" "[ $RC = 0 ] && out_has '.controlPlane.policy.allowedModels == [\"a\"] and .controlPlane.policy.allowedProfiles == [\"p\"]' && grep -qi 'security' '$T/err' && grep -q 'allowedProfiles' '$T/err'"
+check "a security key that only the later file sets and that differs from the chart default is refused (allowedProfiles: the default is [])" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'allowedProfiles' '$T/err' && grep -q 'ns2.yaml' '$T/err' && grep -qi 'chart default' '$T/err'"
+check "allowKnowledge: true equals the chart default: not a change, not refused" "! grep -i 'refused' '$T/err' | grep -q 'allowKnowledge'"
 w ns3.yaml <<'EOF'
 controlPlane: {policy: {allowedModels: [b]}}
 EOF
@@ -240,8 +241,129 @@ EOF
 run "$T/ref1.yaml" "$T/ref2.yaml"
 check "a profile added by the later file does not widen controlPlane.policy.allowedProfiles by itself" "[ $RC = 0 ] && out_has '.controlPlane.policy.allowedProfiles == [\"lookup\"] and (.mcp.profiles|length) == 2'"
 
-echo "# the quick start plus the bank values (the use case this helper is for)"
 QS="$ROOT/components/quickstart/values.yaml"; BANK="$ROOT/examples/use-cases/bank/values.yaml"
+echo "# security keys that only a later file sets are compared with the chart defaults (the chart values file is the implicit base)"
+CHART_VALUES="$ROOT/charts/openagentix/values.yaml"
+yq -c . "$CHART_VALUES" > "$T/chart.json"
+w base.yaml <<'EOF'
+unrelated: 1
+EOF
+# every leaf (arrays count as one leaf) of the chart defaults under a security key, as a JSON path array
+jq -c --argjson pfx '["controlPlane.policy.allowedModels","controlPlane.policy.allowedProfiles","controlPlane.policy.allowedSkills","controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge","controlPlane.policy.allowNotify","controlPlane.policy.memory","controlPlane.policy.allowedRuntimes","controlPlane.policy.runtimes","controlPlane.containerAgents.toolProfiles","networkPolicy","governance.a2a.enabled","mcp.virtual.incomingAuth","mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy"]' \
+  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
+check "the chart defaults hold security keys to test (more than 40 leaves)" "[ \"\$(wc -l < '$T/secpaths.jsonl' | tr -d ' ')\" -gt 40 ]"
+NSEC=0
+while IFS= read -r P; do
+  NSEC=$((NSEC+1)); DOT=$(jq -r 'join(".")' <<<"$P")
+  jq -c --argjson p "$P" 'getpath($p) | if type=="boolean" then (. | not) elif type=="number" then (. + 1) elif type=="string" then (. + "-x") elif type=="array" then (. + ["added-by-test"]) else "x" end' "$T/chart.json" > "$T/newval.json"
+  jq -c -n --argjson p "$P" --slurpfile v "$T/newval.json" 'setpath($p; $v[0])' > "$T/sec-later.json"
+  run "$T/base.yaml" "$T/sec-later.json"
+  check "$DOT: set only by a later file to a value other than the chart default: refused (exit 1, nothing on stdout, key and file named)" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'sec-later.json' '$T/err' && grep -qF '$DOT' '$T/err'" "rc=$RC $(head -c 400 "$T/err")"
+  run --later-wins "$T/base.yaml" "$T/sec-later.json"
+  check "$DOT: --later-wins takes it and reports a change of a security key" "[ $RC = 0 ] && out_json | jq -e --slurpfile v '$T/newval.json' 'getpath($P) == \$v[0]' >/dev/null && grep -i 'security key' '$T/err' | grep -qF '$DOT'" "rc=$RC $(head -c 400 "$T/err")"
+done < "$T/secpaths.jsonl"
+# the chart default itself, set by the later file, is not a change
+jq -c -n --slurpfile c "$T/chart.json" '$c[0] | {networkPolicy, observability: {capture: .observability.capture}, gateway: {policy: .gateway.policy}, mcp: {virtual: {codeMode: .mcp.virtual.codeMode, incomingAuth: .mcp.virtual.incomingAuth}}, governance: {a2a: {enabled: .governance.a2a.enabled}}}' > "$T/sec-default.json"
+run "$T/base.yaml" "$T/sec-default.json"
+check "a later file that sets security keys to the chart defaults: exit 0, no refusal" "[ $RC = 0 ] && ! grep -qi 'refused' '$T/err'" "$(head -c 400 "$T/err")"
+for pv in 'networkPolicy.enabled|false' 'observability.capture.content|true' 'mcp.virtual.incomingAuth.type|"anonymous"' 'mcp.virtual.codeMode.enabled|false' 'governance.a2a.enabled|true' 'gateway.policy.tokenBudget.tokens|99999999' 'mcp.egress.allow|["api.example"]'; do
+  K=${pv%%|*}; V=${pv#*|}
+  jq -c -n --arg k "$K" --argjson v "$V" 'setpath(($k|split(".")); $v)' > "$T/sec-named.json"
+  run "$T/base.yaml" "$T/sec-named.json"
+  check "$K = $V from a later file only: refused (named case from the review)" "[ $RC = 1 ] && grep -qF '$K' '$T/err' && [ ! -s '$T/out' ]" "rc=$RC $(head -c 300 "$T/err")"
+done
+check "the compose of the quick start and the bank values still exits 0 with the chart defaults as the base" "bash '$SCRIPT' '$ROOT/components/quickstart/values.yaml' '$ROOT/examples/use-cases/bank/values.yaml' >/dev/null 2>&1"
+check "the first file is never compared with the chart defaults (the quick start sets allowedModels and stays)" "bash '$SCRIPT' '$ROOT/components/quickstart/values.yaml' 2>/dev/null | yq -e '.controlPlane.policy.allowedModels == [\"quickstart-model\"]' >/dev/null"
+
+echo "# redaction: the key, every path segment, keys with dots; numbers and labels stay visible"
+w r1.yaml <<'EOF'
+annotations: {"my.secret.value": SENTINEL-OLD-DOT}
+credentials: {user: SENTINEL-OLD-PARENT}
+secretStore: {name: SENTINEL-OLD-STORE, deep: {x: SENTINEL-OLD-DEEP}}
+plain: visible-old
+EOF
+w r2.yaml <<'EOF'
+annotations: {"my.secret.value": SENTINEL-NEW-DOT}
+credentials: {user: SENTINEL-NEW-PARENT}
+secretStore: {name: SENTINEL-NEW-STORE, deep: {x: SENTINEL-NEW-DEEP}}
+plain: visible-new
+EOF
+run "$T/r1.yaml" "$T/r2.yaml"
+check "a key with dots that names a secret, a parent that names a credential, and a deep child of a secret store: path only" "[ $RC = 0 ] && ! grep -q 'SENTINEL' '$T/err' && grep -q 'credentials.user' '$T/err' && grep -q 'secretStore.deep.x' '$T/err'" "$(cat "$T/err")"
+check "an ordinary value is still shown" "grep 'plain' '$T/err' | grep -q 'visible-old'"
+w t1.yaml <<'EOF'
+gateway: {policy: {tokenBudget: {tokens: 1000, unit: Hours}, apiKeyLabel: label/old-apikey}}
+EOF
+w t2.yaml <<'EOF'
+gateway: {policy: {tokenBudget: {tokens: 2000, unit: Hours}, apiKeyLabel: label/new-apikey}}
+EOF
+run --later-wins "$T/t1.yaml" "$T/t2.yaml"
+check "tokenBudget.tokens (a number) and apiKeyLabel (a label) are shown, not hidden" "grep 'tokenBudget.tokens' '$T/err' | grep -q '1000' && grep 'tokenBudget.tokens' '$T/err' | grep -q '2000' && grep 'apiKeyLabel' '$T/err' | grep -q 'label/old-apikey' && grep 'apiKeyLabel' '$T/err' | grep -q 'label/new-apikey'" "$(cat "$T/err")"
+w t3.yaml <<'EOF'
+agents:
+  - {name: alpha, model: m1, secretRef: {value: SENTINEL-OLD-ENTRY}}
+EOF
+w t4.yaml <<'EOF'
+agents:
+  - {name: alpha, model: m1, secretRef: {value: SENTINEL-NEW-ENTRY}}
+EOF
+run --later-wins "$T/t3.yaml" "$T/t4.yaml"
+check "inside a replaced list entry, a value under a secret-like parent is not shown either" "[ $RC = 0 ] && ! grep -q 'SENTINEL' '$T/err' && grep -q 'secretRef' '$T/err'" "$(cat "$T/err")"
+
+echo "# robustness: yq stderr, --, file names, -o FILE"
+mkdir -p "$T/fakebin"
+printf '#!/usr/bin/env bash\necho "yq: a warning that must stay out of the data" >&2\nexec "%s" "$@"\n' "$(command -v yq)" > "$T/fakebin/yq"; chmod +x "$T/fakebin/yq"
+PATH="$T/fakebin:$PATH" bash "$SCRIPT" "$T/a.yaml" > "$T/out" 2> "$T/err"; RC=$?
+check "a warning that yq prints on stderr does not become data" "[ $RC = 0 ] && yq -e '.x.keep == 1' '$T/out' >/dev/null"
+printf 'x: {dash: 1}\n' > "$T/-dash.yaml"
+(cd "$T" && bash "$SCRIPT" -- -dash.yaml > "$T/out" 2> "$T/err"); RC=$?
+check "-- ends the options: a file name that starts with a dash works" "[ $RC = 0 ] && yq -e '.x.dash == 1' '$T/out' >/dev/null" "$(cat "$T/err")"
+NLF="$T/line"$'\n'"break.yaml"; printf 'x: 1\n' > "$NLF"
+run "$NLF"
+check "a file name with a newline is refused (exit 2) before anything is read" "[ $RC = 2 ] && [ ! -s '$T/out' ] && grep -qi 'newline' '$T/err'"
+rm -f "$T/o1.yaml"
+run -o "$T/o1.yaml" "$T/a.yaml" "$T/b.yaml"
+check "-o FILE writes the composed values, nothing on stdout, the report still on stderr" "[ $RC = 0 ] && [ ! -s '$T/out' ] && [ -s '$T/o1.yaml' ] && yq -e '.x.over == 2' '$T/o1.yaml' >/dev/null && grep -q 'x.over' '$T/err'"
+run "$T/a.yaml" "$T/b.yaml"
+check "-o FILE has the same content as the standard output" "cmp -s '$T/o1.yaml' '$T/out'"
+check "-o leaves no temporary file next to the output" "[ \"\$(ls -A '$T' | grep -c '^\\.compose')\" = 0 ]"
+printf 'KEEP-ME\n' > "$T/o2.yaml"
+run -o "$T/o2.yaml" "$T/d1.yaml" "$T/d3.yaml"
+check "-o with a refusal: exit 1, the output file is not created or changed" "[ $RC = 1 ] && [ \"\$(cat '$T/o2.yaml')\" = KEEP-ME ]"
+rm -f "$T/o3.yaml"; run -o "$T/o3.yaml" "$T/d1.yaml" "$T/d3.yaml"
+check "-o with a refusal: no file appears" "[ $RC = 1 ] && [ ! -e '$T/o3.yaml' ] && [ \"\$(ls -A '$T' | grep -c '^\\.compose')\" = 0 ]"
+run -o "$T/a.yaml" "$T/a.yaml" "$T/b.yaml"
+check "-o naming an input file is refused (exit 2)" "[ $RC = 2 ] && grep -q 'a.yaml' '$T/err' && grep -q 'keep: 1' '$T/a.yaml'"
+run -o
+check "-o without a file name: exit 2" "[ $RC = 2 ]"
+run -o "$T/nodir/o.yaml" "$T/a.yaml"
+check "-o into a directory that does not exist: exit 2, no output" "[ $RC = 2 ]"
+
+echo "# additions that matter for security are called out"
+w p1.yaml <<'EOF'
+mcp: {profiles: [{name: lookup, codeMode: false, tools: {osv: [q]}}]}
+governance: {a2a: {callers: [{name: ask, agents: [a]}]}}
+EOF
+w p2.yaml <<'EOF'
+mcp: {profiles: [{name: lookup, codeMode: false, tools: {osv: [q]}}, {name: scripted, codeMode: true, tools: {osv: [q]}}, {name: plain, codeMode: false, tools: {osv: [q]}}]}
+governance: {a2a: {callers: [{name: ask, agents: [a]}, {name: desk, agents: [b]}]}}
+EOF
+run "$T/p1.yaml" "$T/p2.yaml"
+check "a profile with code mode on, added by a later file, is called out as security relevant (exit 0: the ADR key list covers only mcp.virtual.codeMode.enabled)" "[ $RC = 0 ] && grep -i 'security-relevant' '$T/err' | grep -q 'scripted' && grep -i 'security-relevant' '$T/err' | grep -qi 'code mode'"
+check "a profile without code mode is not called out" "! grep -i 'security-relevant' '$T/err' | grep -q 'plain'"
+check "a new caller rule added by a later file is called out" "grep -i 'security-relevant' '$T/err' | grep -q 'desk'"
+check "a caller rule that both files have is not called out" "! grep -i 'security-relevant' '$T/err' | grep -q 'rule ask '"
+w p3.yaml <<'EOF'
+mcp: {profiles: [{name: lookup, codeMode: true, tools: {osv: [q]}}]}
+EOF
+run --later-wins "$T/p1.yaml" "$T/p3.yaml"
+check "--later-wins turning code mode on for an existing profile is called out too" "[ $RC = 0 ] && grep -i 'security-relevant' '$T/err' | grep -q 'lookup'"
+run "$T/p1.yaml" "$T/p3.yaml"
+check "without --later-wins that change of an existing profile is refused as a changed entry" "[ $RC = 1 ]"
+run "$QS" "$BANK"
+check "the bank composition calls out its new caller rule disputes-desk" "[ $RC = 0 ] && grep -i 'security-relevant' '$T/err' | grep -q 'disputes-desk'"
+
+echo "# the quick start plus the bank values (the use case this helper is for)"
 run "$QS" "$BANK"
 check "they compose: exit 0, no refusal" "[ $RC = 0 ] && ! grep -qi 'refused' '$T/err'" "$(cat "$T/err")"
 check "the caller the bank file restates (quickstart-ask) is kept once" "out_has '[.governance.a2a.callers[] | select(.name==\"quickstart-ask\")] | length == 1' && out_has '.governance.a2a.callers | map(.name) == [\"quickstart-ask\",\"disputes-desk\"]'"
