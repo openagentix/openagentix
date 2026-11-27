@@ -9,6 +9,17 @@
 # What cannot work there is in docs/diary/guide/openshift.md. Container agents (controlPlane.containerAgents) are refused on openshift.
 platform: ""
 
+# ---- Availability (ADR 0024) --------------------------------------------------------------------
+availability:
+  podDisruptionBudgets:
+    enabled: true          # one PodDisruptionBudget (maxUnavailable: 1) per Deployment and StatefulSet of this chart.
+                           # false: none. Turn it off when you write your own budgets for these pods: a pod selected by
+                           # two budgets cannot be evicted at all. The account that runs Helm needs create, update and
+                           # delete on poddisruptionbudgets (group policy) in each platform namespace. Needs Kubernetes 1.30 or newer.
+  priorityClassName: ""    # an existing PriorityClass for the pods of every Deployment and StatefulSet of this chart; empty: none.
+                           # The chart does not create the class and cannot check that it exists: if it does not, the API server
+                           # refuses the pods. Not set on CronJobs or on what the control plane creates.
+
 # ---- NetworkPolicies ---------------------------------------------------------------------------
 # Ingress-only policies for the two services that were open to every pod in the cluster. They need a CNI that
 # enforces NetworkPolicy (kindnet on kind 1.37 does; verify yours). Sources were found by reading the logs of the

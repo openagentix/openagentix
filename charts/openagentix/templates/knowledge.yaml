@@ -47,6 +47,7 @@
 {{- end }}
 {{- if or (lt (int $g.maxHops) 1) (gt (int $g.maxHops) 3) }}{{ fail (printf "knowledge.kb.graph.maxHops must be 1..3, got %v" $g.maxHops) }}{{ end }}
 {{- end }}
+{{- include "oa.pdb" (dict "root" $ "name" "kb" "app" "kb" "ns" $ns) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -85,6 +86,9 @@ spec:
         openagentix.io/source-hash: {{ $kb.sourceHash | quote }}
       {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 35
       securityContext:
@@ -207,6 +211,7 @@ spec:
   ports:
     - {name: postgres, port: 5432, targetPort: postgres}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" "kb-postgres" "app" "kb-postgres" "ns" $ns) }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -226,6 +231,9 @@ spec:
         app: kb-postgres
         {{- include "oa.labels" . | nindent 8 }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
       securityContext:
@@ -316,6 +324,7 @@ spec:
   ports:
     - {name: http, port: 8080, targetPort: http}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" "kb-embeddings" "app" "kb-embeddings" "ns" $ns) }}
 # OpenAI-compatible /v1/embeddings on CPU. The model is downloaded from HuggingFace on the first start into the PVC;
 # later starts load it from there. /health answers 200 only after the model is loaded, so the Pod is not Ready before.
 apiVersion: apps/v1
@@ -338,6 +347,9 @@ spec:
         app: kb-embeddings
         {{- include "oa.labels" . | nindent 8 }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

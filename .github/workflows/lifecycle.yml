@@ -3,6 +3,8 @@ name: lifecycle
 # Install twice, uninstall and reinstall (issue #206): a kind cluster on a hosted runner, the keyless quick start (stub model), and
 # hack/ci/lifecycle-test.sh: install, smoke, install again (no object recreated, lost or doubled), uninstall (only the documented keep-policy
 # objects and data volumes stay), install again, smoke. The offline test of the script is hack/ci/lifecycle-test-test.sh (in `make test-shell`).
+# The `drain` job (ADR 0024, issue #198) installs the same quick start on a kind cluster with two workers and drains the worker with the most platform
+# pods: the PodDisruptionBudgets of the chart must not block it (hack/ci/drain-test.sh).
 # NOT part of the required `ci-ok` gate; see hack/ci/README.md.
 on:
   pull_request:
@@ -13,6 +15,8 @@ on:
       - components/**
       - hack/cluster.sh
       - hack/ci/lifecycle-test.sh
+      - hack/ci/drain-test.sh
+      - hack/kind-config-drain.yaml
       - hack/ci/smoke.sh
       - hack/ask.sh
       - hack/kind-config.yaml
@@ -74,3 +78,48 @@ jobs:
           name: kind-logs
           path: kind-logs
           retention-days: 7
+
+  drain:
+    name: drain (two workers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PROFILE: quickstart          # no key, no chat token: the built-in stub model
+      AGENT_WAIT: 300s
+      NODE_SETTINGS: daemonset     # the runtime's node sysctls on every node, not by docker exec on the control plane only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: kind cluster with a control plane and two workers
+        run: |
+          kind create cluster --name openagentix --config hack/kind-config-drain.yaml --wait 180s
+          kubectl get nodes -o wide
+      - name: install (PROFILE=quickstart) on that cluster
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: drain the worker with the most platform pods
+        run: |
+          set -o pipefail
+          hack/ci/drain-test.sh 2>&1 | tee drain.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Drain of one of two workers, PROFILE=quickstart (stub model)"
+            echo '```'
+            cat drain.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get pdb -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
