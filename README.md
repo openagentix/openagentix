@@ -623,7 +623,7 @@ mcp:
         cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
 ```
 
-What is proven: the chart, the admission policy and the installer steps are tested offline and the policy on a real API server in CI. A live check of the whole chain runs on request (`e2e` workflow, input `diagnostics`). Not proven yet: a root-cause run by an agent (slice 5 of the ADR). More in [the diagnostics page of the diary](docs/diary/features/diagnostics.md).
+What is proven: the chart, the admission policy and the installer steps are tested offline and the policy on a real API server in CI. A live check runs on request (`e2e` workflow, input `diagnostics`). Its first result: on kind with Kubernetes 1.37 the server does not become Ready, because its rights check calls a default read of `clustertrustbundles` forbidden (see the diary page). Not proven: a root-cause run by an agent (slice 5 of the ADR). More in [the diagnostics page of the diary](docs/diary/features/diagnostics.md).
 
 ## Control plane and agent builder
 

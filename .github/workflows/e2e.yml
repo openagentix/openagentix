@@ -162,7 +162,7 @@ jobs:
 
   # Opt-in (workflow_dispatch with the input `diagnostics`; DIAGNOSTICS=1 for the script): cluster-read on a real API server. It settles whether the server
   # becomes Ready (its rights check passes with the default discovery rules of a real ServiceAccount, the open question R2 of the code review of ADR 0025
-  # slice 3) and whether the dedicated profile lists the eight tools while the shared tool server lists none. See components/diagnostics/ci-values.yaml.
+  # slice 3) and what ToolHive loaded for the dedicated profile (the eight tools) and for the shared vMCP (none). See components/diagnostics/ci-values.yaml.
   e2e-diagnostics:
     name: e2e (diagnostics, cluster-read)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics }}
