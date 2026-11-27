@@ -74,6 +74,37 @@ eq "no toleration: tainted (dedicated) nodes are left alone" "$(ds | jq -c '.spe
 eq "the selector matches the pod labels" "$(ds | jq -r '(.spec.selector.matchLabels|to_entries) - (.spec.template.metadata.labels|to_entries) == []')" true
 eq "nothing applies it by default (only cluster_node_settings, behind NODE_SETTINGS=daemonset)" "$(grep -lE '^[^#]*node-settings\.yaml' "$HERE/../../install.sh" "$HERE/up.sh" "$HERE/../../hack/cluster.sh" | sed 's|.*/||' | tr '\n' ' ')" "cluster.sh "
 
+echo "# kagent database secrets: no password in a process argument"
+# shellcheck source=../kagent-db.sh
+. "$HERE/kagent-db.sh"
+mkdir -p "$D/dbbin"
+# The fake kubectl records every argument, the standard input of exec, and the files behind --from-file.
+cat > "$D/dbbin/kubectl" <<EOS
+#!/usr/bin/env bash
+echo "ARGV: \$*" >> "$D/db-argv"
+case "\$*" in *"get secret"*) exit 1;; esac
+for a in "\$@"; do case "\$a" in --from-file=*) echo "FILE: \$(cat "\${a##*=}")" >> "$D/db-in";; esac; done
+case "\$*" in *" exec "*) cat >> "$D/db-in";; esac
+exit 0
+EOS
+# openssl gives a different canary on each call, so a leak of either password is found
+cat > "$D/dbbin/openssl" <<EOS
+#!/usr/bin/env bash
+n=\$(cat "$D/dbn" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$D/dbn"
+printf 'canary%02dcanary\n' "\$n"
+EOS
+chmod +x "$D/dbbin/kubectl" "$D/dbbin/openssl"
+(cd "$HERE" && PATH="$D/dbbin:$PATH" KUBECTL="$D/dbbin/kubectl" kagent_pg_admin_secret && PATH="$D/dbbin:$PATH" KUBECTL="$D/dbbin/kubectl" kagent_db_secrets) >/dev/null 2>&1
+eq "every kubectl call was recorded (2 gets, 3 creates, 1 exec)" "$(grep -c '^ARGV:' "$D/db-argv")" 6
+eq "no password value in any argument" "$(grep -c 'canary' "$D/db-argv")" 0
+eq "the admin password is passed as a file" "$(grep -c '^FILE: canary01canary$' "$D/db-in")" 1
+eq "the owner password reaches psql on standard input" "$(grep -c "kagent_owner_password 'canary02canary'" "$D/db-in")" 1
+eq "the read and write password reaches psql on standard input" "$(grep -c "kagent_readwrite_password 'canary03canary'" "$D/db-in")" 1
+eq "the setup SQL follows on standard input" "$(grep -c 'kagent.setup_owner_password' "$D/db-in")" 2
+eq "both connection strings are passed as files" "$(grep -cE '^FILE: postgresql://kagent_(owner|readwrite)_user:canary0[23]canary@' "$D/db-in")" 2
+eq "no --from-literal is used" "$(grep -c -- '--from-literal' "$D/db-argv")" 0
+eq "up.sh uses the helpers" "$(grep -cE '^kagent_(pg_admin_secret|db_secrets)$' "$HERE/up.sh")" 2
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
