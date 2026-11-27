@@ -9,6 +9,7 @@ DG_TOOLS='pods_list_in_namespace, pods_get, pods_log, events_list, workloads_lis
 cat > "$DX" <<YAML
 diagnostics:
   enabled: true
+  apiServerCIDRs: [172.18.0.0/24]
   cluster:
     enabled: true
     logNamespaces: [rca-demo]
@@ -126,7 +127,7 @@ eq "profile rca: its own audience, oidc" "$(q "$D" "$RCA|.spec.incomingAuth|[.ty
 eq "every vMCP of the group has audit data off" "$(q "$D" '[.[]|select(.kind=="VirtualMCPServer" and .spec.groupRef.name=="diagnostics")|.spec.config.audit|select(.includeRequestData!=false or .includeResponseData!=false)]|length')" 0
 eq "no vMCP outside the group names the group, an entry of it or a diagnostics tool (apart from the shared vMCP's forbid policies)" "$(q "$D" '[.[]|select(.kind=="VirtualMCPServer" and .spec.groupRef.name!="diagnostics")|del(.spec.incomingAuth.authzConfig)|tojson|select(test("diagnostics|cluster-read"))]|length')" 0
 eq "the shared-group profile lookup is untouched" "$(q "$D" '.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools-lookup")|[.spec.groupRef.name,(.spec.config.aggregation.tools|tojson)]|join(" ")')" 'tools [{"workload":"osv","filter":["query_vulnerability"]}]'
-DCP=$(docs "${DA[@]}" --set controlPlane.enabled=true)
+DCP=$(docs "${DA[@]}" --set controlPlane.enabled=true --set diagnostics.allowDefinitions=true)
 eq "the catalog's rca profile lists the tools as the vMCP serves them (entry names of the group)" "$(q "$DCP" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.tools.toolhive.profiles[]|select(.name=="rca")|.tools|sort|join(",")')" "cluster-read_events_list,cluster-read_nodes_get,cluster-read_nodes_list,cluster-read_pods_get,cluster-read_pods_list_in_namespace,cluster-read_pods_log,cluster-read_workloads_get,cluster-read_workloads_list,delivery-diagnostics_notify_send,knowledge-diagnostics_kb_search"
 echo "# diagnostics: the shared vMCP lists none (own group, and a Cedar forbid in front of the permit)"
 SH='.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools")'
@@ -147,7 +148,11 @@ eq "server ingress never admits the shared vMCP or a shared-group profile" "$(q 
 EG='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="cluster-read-egress")'
 DC=(--set 'diagnostics.apiServerCIDRs={172.18.0.0/24}')
 eq "server egress: only the API server CIDRs on 443 and 6443, no DNS, nothing else" "$(q "$(docs "${DA[@]}" "${DC[@]}")" "$EG|[(.spec.policyTypes|join(\",\")),(.spec.egress|length|tostring),(.spec.egress[0].to|tojson),(.spec.egress[0].ports|map(.port)|tojson)]|join(\" \")")" 'Egress 1 [{"ipBlock":{"cidr":"172.18.0.0/24"}}] [443,6443]'
-eq "server egress without CIDRs: the API ports toward any address (stated fallback), still only those ports" "$(q "$D" "$EG|[(.spec.egress|length|tostring),(.spec.egress[0]|has(\"to\")|tostring),(.spec.egress[0].ports|map(.port)|tojson)]|join(\" \")")" '1 false [443,6443]'
+DFB=$(docs "${DA[@]}" --set-json 'diagnostics.apiServerCIDRs=[]' --set diagnostics.allowAnyApiServerAddress=true)
+eq "server egress without CIDRs but with the explicit opt-in: the API ports toward any address (stated fallback), still only those ports" "$(q "$DFB" "$EG|[(.spec.egress|length|tostring),(.spec.egress[0]|has(\"to\")|tostring),(.spec.egress[0].ports|map(.port)|tojson)]|join(\" \")")" '1 false [443,6443]'
+eq "F6: empty API server CIDRs without the opt-in is refused, naming both values" "$(render_err "${DA[@]}" --set-json 'diagnostics.apiServerCIDRs=[]' | /usr/bin/grep -c 'diagnostics.apiServerCIDRs is empty.*diagnostics.allowAnyApiServerAddress')" 1
+eq "F6: allowAnyApiServerAddress defaults to false" "$(yq -r '.diagnostics.allowAnyApiServerAddress' "$CHART/values.yaml")" false
+eq "F6: with the CIDRs set the egress names them and the opt-in changes nothing" "$(q "$(docs "${DA[@]}" --set diagnostics.allowAnyApiServerAddress=true)" "$EG|.spec.egress[0].to|tojson")" '[{"ipBlock":{"cidr":"172.18.0.0/24"}}]'
 eq "the ingress and egress policies select the server pod" "$(q "$D" "[($NP|.spec.podSelector.matchLabels.app),($EG|.spec.podSelector.matchLabels.app)]|join(\",\")")" "cluster-read,cluster-read"
 eq "a malformed CIDR fails the render" "$(render_err "${DA[@]}" --set 'diagnostics.apiServerCIDRs={nope}' | /usr/bin/grep -c 'diagnostics.apiServerCIDRs')" 1
 eq "the kb and notify ingress policies admit the profile vMCP of the group (as every profile vMCP)" "$(q "$D" '[.[]|select(.kind=="NetworkPolicy" and (.metadata.name=="kb-ingress" or .metadata.name=="notify-ingress"))|[.spec.ingress[0].from[]|.podSelector.matchLabels["toolhive-name"]]|index("tools-rca")!=null]|all')" true
@@ -242,8 +247,47 @@ eq "a binding for another agent is not affected" "$([ -z "$(render_err -f "$DX2"
 rm -f "$CHX"
 eq "the no-preview list is one helper (the bridge, nothing else: a new channel joins it only with a test)" "$(/usr/bin/grep -A2 'define "oa.diagNoPreviewPaths"' "$CHART/templates/_diagnostics.tpl" | /usr/bin/grep -c 'list "bridge" "notify" | toJson')" 1
 
+echo "# diagnostics: an agent cannot reach a diagnostics profile's server without being on the profile (review F1)"
+SRV='toolhive-vmcp-rca'
+BYP='{name:"bypass", model:"claude-haiku", systemPrompt:"x", tools:[{server:"toolhive-vmcp-rca", tools:["cluster-read_pods_log"]},{server:"toolhive-vmcp-lookup", tools:["osv_query_vulnerability"]}]}'
+agent_file ". + [$BYP]"
+eq "an agent without toolProfile that names the server of a diagnostics profile is refused (outbound tools could sit next to log access)" "$(render_err -f "$DX2" -f "$DX" | /usr/bin/grep -c 'agent "bypass" names the tool server "toolhive-vmcp-rca" of the diagnostics profile "rca" without being on that profile')" 1
+BYP1='{name:"bypass", model:"claude-haiku", systemPrompt:"x", tools:[{server:"toolhive-vmcp-rca", tools:["cluster-read_pods_log"]}]}'
+agent_file ". + [$BYP1]"
+eq "... also when it names only that server" "$(render_err -f "$DX2" -f "$DX" | /usr/bin/grep -c 'without being on that profile')" 1
+BYP2='{name:"bypass", model:"claude-haiku", systemPrompt:"x", toolProfile:"lookup", tools:[{server:"toolhive-vmcp-rca", tools:["cluster-read_pods_log"]}]}'
+agent_file ". + [$BYP2]"
+eq "... and an agent on another profile that names it is refused too" "$([ -n "$(render_err -f "$DX2" -f "$DX")" ] && echo refused || echo rendered)" refused
+BYP3='{name:"bypass", model:"claude-haiku", systemPrompt:"x", tools:[{server:"toolhive-vmcp-rca", tools:["cluster-read_pods_log"]}]}'
+agent_file ". + [$BYP3]"
+CHX2="$(dirname "$0")/.diag-channel2.yaml"
+cat > "$CHX2" <<YAML
+channels:
+  kourier: {enabled: true}
+  connections:
+    - {name: hook, platform: webhook, existingSecret: hook-secret, webhook: {identity: src, verify: {scheme: hmac-sha256, header: X-S, prefix: "sha256="}, channel: {from: [/c]}, actor: {from: [/u]}, thread: {field: conv, prefix: c-}, delivery: {header: X-D}, fields: [{name: conv, from: [/conv], kind: id}]}}
+  bindings:
+    - {name: b, connection: hook, channel: c, agent: bypass, output: none, triggers: [{type: webhookEvent, match: {event: x}, promptTemplate: "go", limits: {rateLimit: {maxRuns: 1, per: 1h, maxConcurrent: 1}, maxRunsPerDay: 1}}]}
+YAML
+eq "a Kourier binding to such an agent cannot reach log access around the reply-path rule: the agent is refused first" "$(render_err -f "$DX2" -f "$DX" -f "$CHX2" --api-versions agentkourier.dev/v1alpha1 | /usr/bin/grep -c 'without being on that profile')" 1
+rm -f "$CHX2"
+agent_file ". + [$RCAAGENT]"
+eq "an agent on the profile may name its own server explicitly" "$([ -z "$(render_err -f "$DX2" -f "$DX")" ] && echo rendered || echo failed)" rendered
+eq "no diagnostics profile: naming toolhive-vmcp-lookup directly is still allowed (the rule is about diagnostics profiles)" "$([ -z "$(render_err -f <(yq -y '{agents: (.agents|. + [{name:"o", model:"claude-haiku", systemPrompt:"x", tools:[{server:"toolhive-vmcp-lookup", tools:["osv_query_vulnerability"]}]}])}' "$CHART/values.yaml") -f "$DX")" ] && echo rendered || echo failed)" rendered
+
+echo "# diagnostics: profiles stay out of the control plane catalog and the AgentTemplate guard while allowDefinitions is false (review F2)"
+DCP0=$(docs "${DA[@]}" --set controlPlane.enabled=true)
+CATP='.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|[.tools.toolhive.profiles[]|.name]|sort|join(",")'
+eq "catalog, allowDefinitions false: the diagnostics profile rca is absent, lookup is there" "$(q "$DCP0" "$CATP")" lookup
+GUARDTXT='[.[]|select(.kind=="ValidatingAdmissionPolicy")|tojson]|join(" ")'
+eq "the AgentTemplate guard names neither the server of rca nor a cluster-read tool" "$(q "$DCP0" "$GUARDTXT" | /usr/bin/grep -c 'toolhive-vmcp-rca\|cluster-read_')" 0
+DCP1=$(docs "${DA[@]}" --set controlPlane.enabled=true --set diagnostics.allowDefinitions=true)
+eq "catalog, allowDefinitions true: rca is listed, with its tools" "$(q "$DCP1" "$CATP")" "lookup,rca"
+eq "the guard then knows the server of rca" "$(q "$DCP1" "$GUARDTXT" | /usr/bin/grep -c 'toolhive-vmcp-rca')" 1
+eq "the control plane's own policy and the rest of the catalog are the same either way (only the profile list differs)" "$(q "$DCP0" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|del(.tools.toolhive.profiles)|tojson' | shasum -a 256)" "$(q "$DCP1" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|del(.tools.toolhive.profiles)|tojson' | shasum -a 256)"
+
 echo "# diagnostics: the values of the live check (components/diagnostics/ci-values.yaml) on the quick start"
-CIV=(-f "$REPO/components/quickstart/values.yaml" -f "$REPO/components/diagnostics/ci-values.yaml")
+CIV=(-f "$REPO/components/quickstart/values.yaml" -f "$REPO/components/diagnostics/ci-values.yaml" --set diagnostics.allowAnyApiServerAddress=true)   # install.sh sets the addresses itself
 eq "they render on the quick start, and with the sample container agent" "$([ -z "$(render_err "${CIV[@]}")" ] && [ -z "$(render_err "${CIV[@]}" -f "$REPO/components/quickstart/byo-values.yaml")" ] && echo rendered || echo failed)" rendered
 DCI=$(docs "${CIV[@]}")
 eq "lookup stays on the shared group, rca is on the diagnostics group" "$(q "$DCI" '[.[]|select(.kind=="VirtualMCPServer")|.metadata.name+"@"+.spec.groupRef.name]|sort|join(" ")')" "tools-lookup@tools tools-rca@diagnostics tools@tools"

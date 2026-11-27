@@ -499,6 +499,8 @@ notify:
 # (mcp.profiles) that lists a `cluster-read` tool is rendered on that group (deny by default, no audit data), so the shared tool server never
 # lists or calls these tools. Needs networkPolicy.enabled, mcp.enabled and observability.capture.content=false (the render refuses the rest).
 # install.sh creates the two bearer Secrets (never printed) and the image, and labels the namespace for Pod Security `restricted`.
+# A helm-only install (no install.sh) must first create the namespace openagentix-diagnostics with the Pod Security labels (enforce, audit and warn `restricted`),
+# then the two Secrets cluster-read-bearer (key bearer, the value) in it and diagnostics-bearer-cluster-read (key authorization, `Bearer <value>`) in mcp.namespace.
 # Read docs/decisions/0025-read-only-diagnostic-tools.md before you turn it on: what an agent on these tools can read, and the stated limits.
 diagnostics:
   enabled: false                      # the master switch (also needed for the render refusals below)
@@ -520,6 +522,9 @@ diagnostics:
   # server ports towards ANY address (a closed policy would cut the server off from the API server); set the CIDRs on a real cluster.
   apiServerCIDRs: []
   apiServerPorts: [443, 6443]
+  # With the CIDRs empty the render is refused, because the egress policy would then allow the API server ports towards ANY address (it cannot be
+  # closed without knowing the address, and the chart cannot look it up). true is the explicit opt-in to that, for a helm-only install that sets no addresses.
+  allowAnyApiServerAddress: false
   cluster:
     enabled: false                    # cluster-read
     # pods, events, workloads and pod logs of these namespaces. Never a platform namespace, kube-system or openagentix-diagnostics (the render refuses them).

@@ -220,7 +220,8 @@ fi
 
 # What is required is decided from what the chart renders, before anything is created.
 render(){ helm template $RELEASE $CHART -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} "$@" | yq -c 'select(.!=null)'; }
-RENDERED=$(render) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
+# (the planning renders accept the open API server egress of cluster-read: the addresses are found below, and the render that is applied refuses an empty list, review F6)
+RENDERED=$(render --set diagnostics.allowAnyApiServerAddress=true) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
 # STUB_SCENARIOS (ADR 0026, B): scenario files for the stub model. Each *.json file is passed with --set-file, in name order, with the dot of
 # the name escaped; the chart renders the ConfigMap, the mount and the checksum that rolls the pod. Checked before anything is created.
 if [ -n "${STUB_SCENARIOS:-}" ]; then
@@ -239,7 +240,7 @@ if [ -n "${STUB_SCENARIOS:-}" ]; then
   done
   if jq -e 'select(.kind=="Deployment" and .metadata.name=="stub-model")' <<<"$RENDERED" >/dev/null; then
     for f in "${SCEN_LIST[@]}"; do n=$(basename "$f"); VALS+=(--set-file "gateway.stubModel.scenarios.files.${n//./\\.}=$f"); done
-    RENDERED=$(render) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
+    RENDERED=$(render --set diagnostics.allowAnyApiServerAddress=true) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
     echo "NOTE: the stub model plays ${#SCEN_LIST[@]} scenario file(s) from $STUB_SCENARIOS. Runs with them are scripted by the stub, not the behaviour of a model: say so in any demo, diary entry or report."
   else
     echo "STUB_SCENARIOS is set, but the stub model is off in this install: no scenario file is passed."
@@ -984,6 +985,11 @@ if [ -n "$DIAG_DEP" ]; then
   . hack/diagnostics-check.sh
   DIAG_ENTRIES=$(jq -rs '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name=="diagnostics")]|length' <<<"$RENDERED")
   DIAG_VMCPS=$(jq -r 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name=="diagnostics")|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
+  # A repaired or rotated bearer value: the vMCP pods of the group hold the old one as an environment value until they restart (review F4)
+  if [ "${DIAG_BEARER_CHANGED:-0}" = 1 ]; then
+    # shellcheck disable=SC2086   # one word per vMCP
+    diag_bearer_restart "$K" $DIAG_VMCPS || die "could not restart the vMCPs of the diagnostics group after the bearer value changed (see above)."
+  fi
   # shellcheck disable=SC2086   # one word per vMCP
   diag_check_vmcps "$K" "${DIAG_VMCP_SETTLE:-30}" "$DIAG_ENTRIES" $DIAG_VMCPS || die "a vMCP of the diagnostics group dropped a backend (see above)."
 fi

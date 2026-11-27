@@ -82,6 +82,21 @@ R2 was the open question of the review of slice 3: the server's rights check all
 - That change is slice 3's code (the rights check) and is a security decision, so it is **not** in this pull request. Until a follow-up takes it, `cluster-read` is not Ready on a cluster with this default role, and the opt-in live job fails at the install step.
 - What the live job does not prove: a real `tools/list` through the gateway. kagent's `RemoteMCPServer` for a profile says `DiscoveryDisabled` ("Global tool discovery requires an executing Actor because actorJwt is enabled"), and an actor token exists only inside an agent session. So the job reads what ToolHive loaded. A call through an agent, with canaries, is slice 5.
 
+## What the admission policy does not cover
+
+- Anyone who can create a Pod in `openagentix-diagnostics`, or a token for the ServiceAccount, runs with the rights of `cluster-read` (pod logs of the log namespaces and the reads of the first role). A cluster-wide `edit` or `admin` binding gives that right, and the policy checks RBAC objects only. Treat the right to create Pods in that namespace as the right to read those logs.
+- A binding that existed before the policy was applied is never evaluated (the policy checks create and update). Only the rights check of the server finds it.
+- Whoever can change or delete the policy and its binding (cluster admins) can remove it. It does not protect itself.
+- Bindings to a cluster-wide group (`system:serviceaccounts`, `system:authenticated`) cannot be refused without breaking the cluster.
+
+## Other rules added after the security review of this slice
+
+- An agent may name the RemoteMCPServer of a diagnostics profile in `tools[].server` only when its `toolProfile` is that profile. Otherwise the per-tool mixing rule and the reply-path rule could be bypassed by naming the server directly. The render refuses it.
+- A diagnostics profile is left out of the control plane catalog, and so out of the AgentTemplate guard, while `diagnostics.allowDefinitions` is false.
+- The render refuses an empty `diagnostics.apiServerCIDRs` unless `diagnostics.allowAnyApiServerAddress` is true (a helm-only install that sets no addresses). `install.sh` finds the addresses.
+- `hack/diagnostics-bearer.sh` treats only "not found" as an absent Secret. Any other error while reading stops the run, so an API error can never make a new value. When an existing Secret was rewritten, `install.sh` restarts the vMCP Deployments of the group, because they hold the value as an environment value.
+- A helm-only install creates the namespace (with the Pod Security labels) and the two bearer Secrets itself. See the comment of the `diagnostics` values.
+
 ## Limits, stated
 
 - The ToolHive operator gives every vMCP ServiceAccount, the shared one included, read access to Secrets in `mcp-tools`. The own group keeps the bearer values out of the shared vMCP's environment, not out of its reach through the API. ToolHive 0.67.1 offers no way to narrow this.

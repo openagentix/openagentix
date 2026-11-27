@@ -21,3 +21,12 @@ mcp:
       codeMode: false
       tools:
         cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
+  virtual:
+    incomingAuth:
+      # Only for this job (review F5): the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/diagnostics-live.sh can make a
+      # token and make real calls through them. The script puts the cluster CA into the ConfigMap below and restarts the vMCPs. Agents' tool calls do
+      # not work in a cluster installed with these values: use them for this check and nothing else.
+      oidc:
+        issuer: https://kubernetes.default.svc.cluster.local
+        jwksUrl: https://kubernetes.default.svc/openid/v1/jwks
+        caBundle: {configMap: ci-apiserver-ca, key: ca.crt}

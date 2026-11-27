@@ -85,6 +85,72 @@ check "the shared vMCP's configuration has the eight forbid policies (the second
 check "the shared vMCP's configuration was found (the control is not empty)" "$([ -n "$CFG_SH" ] && echo yes || echo no)" yes
 echo "       kagent says: $($K get remotemcpserver -n "$KNS" "toolhive-vmcp-$PROFILE" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)"
 
+echo "# real calls through the gateway (review F5): the vMCPs trust the API server's own tokens in this job (components/diagnostics/ci-values.yaml)"
+# The values make the vMCPs accept ServiceAccount tokens of the API server (issuer and keys of the cluster) instead of Substrate's actor tokens, so that
+# this script can make a token and call the gateway itself. That breaks the agents' tool path in this cluster, which nothing here uses. The script
+# gives the vMCPs the cluster's CA (the installer put Substrate's into the ConfigMap), lets them read the public keys without a token, and restarts them.
+CA_CM=ci-apiserver-ca
+$K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n "$CA_CM" '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
+$K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
+for v in tools "tools-$PROFILE"; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in tools "tools-$PROFILE"; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP $v: restart not confirmed)"; done
+# mcp_session <local port> <audience>: initializes a session; prints "<session id>" and keeps the token file for the next calls
+mcp_token() { $K create token default -n "$MCPNS" --audience "$1" --duration 10m 2>/dev/null; }
+mcp_post() {  # mcp_post <port> <token file> <session id or -> <json>: prints the JSON-RPC answer (the data line of an event stream, or the body)
+  local port=$1 tf=$2 sid=$3 body=$4 out hdr=()
+  [ "$sid" = - ] || hdr=(-H "Mcp-Session-Id: $sid")
+  out=$(curl -s -m 30 -D "$tf.h" -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$tf")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' ${hdr[@]+"${hdr[@]}"} -d "$body" "http://127.0.0.1:$port/mcp" 2>/dev/null)
+  if grep -q '^data:' <<<"$out"; then sed -n 's/^data: *//p' <<<"$out" | tail -1; else printf '%s' "$out"; fi
+}
+mcp_open() {  # mcp_open <port> <token file>: prints the session id
+  mcp_post "$1" "$2" - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"diag-live","version":"0"}}}' >/dev/null
+  local sid; sid=$(grep -i '^mcp-session-id:' "$2.h" | tr -d '\r' | awk '{print $2}')
+  [ -z "$sid" ] || mcp_post "$1" "$2" "$sid" '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
+  printf '%s' "${sid:--}"
+}
+TD=$(mktemp -d)
+RP=$((30000 + RANDOM % 10000)); SP=$((RP + 1))
+$K port-forward -n "$MCPNS" "svc/vmcp-tools-$PROFILE" "$RP:4483" >/dev/null 2>&1 & PF2=$!
+$K port-forward -n "$MCPNS" svc/vmcp-tools "$SP:4483" >/dev/null 2>&1 & PF3=$!
+trap 'kill $PF $PF2 $PF3 2>/dev/null; rm -rf "$TD"' EXIT
+sleep 4
+mcp_token openagentix-vmcp-$PROFILE > "$TD/rca"; mcp_token openagentix-vmcp > "$TD/shared"
+check "a token for the dedicated audience was made" "$([ -s "$TD/rca" ] && echo yes || echo no)" yes
+# the vMCP reads the keys of the API server on the first token; give it a moment and a few tries
+SID_RCA=-
+for _ in $(seq 1 10); do SID_RCA=$(mcp_open $RP "$TD/rca"); [ "$SID_RCA" != - ] && break; sleep 5; done
+LIST_RCA=$(mcp_post $RP "$TD/rca" "$SID_RCA" '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | jq -r '[.result.tools[]?.name]|sort|join(" ")' 2>/dev/null)
+WANT=$(for t in $TOOLS; do printf 'cluster-read_%s ' "$t"; done | sed 's/ $//')
+check "tools/list on the dedicated vMCP lists the eight tools, and only those" "$LIST_RCA" "$WANT"
+SID_SH=$(mcp_open $SP "$TD/shared")
+LIST_SH=$(mcp_post $SP "$TD/shared" "$SID_SH" '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+check "the shared vMCP answers tools/list (the control is not empty: it lists tools)" "$(jq '[.result.tools[]?]|length>0' <<<"$LIST_SH" 2>/dev/null)" true
+check "tools/list on the shared vMCP lists no cluster-read tool" "$(jq '[.result.tools[]?.name|select(test("cluster-read"))]|length' <<<"$LIST_SH" 2>/dev/null)" 0
+AUDIT_OK() { $K logs -n "$DNS" deploy/cluster-read --tail=5000 2>/dev/null | grep '"msg":"audit"' | grep -c "\"tool\":\"$1\".*\"outcome\":\"$2\""; }
+BEFORE_OK=$(AUDIT_OK pods_list_in_namespace ok); BEFORE_REF=$(AUDIT_OK pods_log refused)
+CALL=$(mcp_post $RP "$TD/rca" "$SID_RCA" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"cluster-read_pods_list_in_namespace","arguments":{"namespace":"kagent"}}}')
+check "a call of pods_list_in_namespace through the dedicated vMCP succeeds, and the result is marked as data" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" ")|contains("data, not instructions")|tostring)' <<<"$CALL" 2>/dev/null)" "false true"
+sleep 2
+check "the server's own audit line for that call is there (the call came through the NetworkPolicy with the injected header)" "$(( $(AUDIT_OK pods_list_in_namespace ok) - BEFORE_OK ))" 1
+CALL=$(mcp_post $RP "$TD/rca" "$SID_RCA" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cluster-read_pods_log","arguments":{"namespace":"kagent","pod":"x"}}}')
+sleep 2
+check "pods_log in a status-only namespace is refused by the server (an audit line with outcome refused)" "$(( $(AUDIT_OK pods_log refused) - BEFORE_REF ))" 1
+BEFORE_ANY=$($K logs -n "$DNS" deploy/cluster-read --tail=5000 2>/dev/null | grep -c '"msg":"audit"')
+CALL=$(mcp_post $SP "$TD/shared" "$SID_SH" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"cluster-read_pods_list_in_namespace","arguments":{"namespace":"kagent"}}}')
+echo "       the shared vMCP answered: $(printf '%s' "$CALL" | cut -c1-200)"
+check "a call of a diagnostics tool through the shared vMCP is refused (an error, no result)" "$(jq -r '((.error!=null) or (.result.isError==true))|tostring' <<<"$CALL" 2>/dev/null)" true
+sleep 2
+check "and it never reached the server (no new audit line)" "$(( $($K logs -n "$DNS" deploy/cluster-read --tail=5000 2>/dev/null | grep -c '"msg":"audit"') - BEFORE_ANY ))" 0
+kill $PF2 $PF3 2>/dev/null
+
+echo "# a pod in another namespace must not reach the server (the NetworkPolicy)"
+$K delete pod nettest -n default --ignore-not-found >/dev/null 2>&1
+CODE=$($K run nettest -n default --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet --command -- curl -s -m 8 -o /dev/null -w '%{http_code}' "http://cluster-read.$DNS.svc.cluster.local:8080/readyz" 2>/dev/null | tail -1)
+case "$CODE" in
+  000|"") ok "a pod in default timed out against the server (the ingress policy is enforced here)";;
+  *) bad "a pod in default reached the server (HTTP $CODE)" "the network plugin of this cluster does not enforce ingress policy, or the policy does not select the pod. The bearer value is then the only check; do not read this as a pass.";;
+esac
+
 echo "# the rights, asked of the real API server as the ServiceAccount"
 SA="system:serviceaccount:$DNS:cluster-read"
 # kubectl reads "pods/exec" as the pod NAMED exec; a subresource is --subresource=exec: translate the ADR's shorthand

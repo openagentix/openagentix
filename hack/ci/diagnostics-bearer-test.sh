@@ -22,7 +22,8 @@ S="$D/state"
 case "\$*" in
   "get secret -n "*)
     ns=\$4; name=\$5; key=\${7#jsonpath=\{.data.}; key=\${key%\}}
-    f="\$S/\${ns}__\${name}/\$key"; [ -f "\$f" ] || exit 1
+    [ "\${FAKE_GET_FAIL:-0}" != 1 ] || { echo "Unable to connect to the server: dial tcp: i/o timeout" >&2; exit 1; }
+    f="\$S/\${ns}__\${name}/\$key"; [ -f "\$f" ] || { echo "Error from server (NotFound): secrets \"\$name\" not found" >&2; exit 1; }
     base64 < "\$f" | tr -d '\n'; exit 0;;
   "create secret generic "*)
     name=\$4; ns=\$6; spec=\${7#--from-file=}; key=\${spec%%=*}; path=\${spec#*=}
@@ -35,7 +36,7 @@ esac
 exit 0
 EOS
 chmod +x "$D/bin/"*
-run() { : > "$D/calls"; PATH="$D/bin:$PATH" bash -c '. hack/diagnostics-bearer.sh; diag_bearer_ensure kubectl mcp-tools openagentix-diagnostics cluster-read' 2>&1; echo "exit=$?"; }
+run() { : > "$D/calls"; PATH="$D/bin:$PATH" bash -c '. hack/diagnostics-bearer.sh; diag_bearer_ensure kubectl mcp-tools openagentix-diagnostics cluster-read; r=$?; echo "changed=${DIAG_BEARER_CHANGED:-unset}"; exit $r' 2>&1; echo "exit=$?"; }
 SERVER="$D/state/openagentix-diagnostics__cluster-read-bearer/bearer"
 HEADER="$D/state/mcp-tools__diagnostics-bearer-cluster-read/authorization"
 rm -rf "$D/state"; mkdir -p "$D/state"; : > "$D/openssl-calls"
@@ -84,6 +85,36 @@ OUT=$(FAKE_APPLY_FAIL=1 run)
 t "exit 1" "$(grep -c '^exit=1$' <<<"$OUT")" 1
 t "a fixed message names the Secret" "$(grep -c 'ERROR: could not write Secret openagentix-diagnostics/cluster-read-bearer' <<<"$OUT")" 1
 t "the output holds neither the value nor the error text of kubectl" "$(grep -c "$CANARY\|CANARY-NOT-REAL" <<<"$OUT")" 0
+
+echo "# review F4: an error while reading a Secret is an error, never 'absent' (no unintended rotation)"
+rm -rf "$D/state"; mkdir -p "$D/state"; run >/dev/null; : > "$D/openssl-calls"
+OUT=$(FAKE_GET_FAIL=1 run)
+t "exit 1 when the API cannot be read" "$(grep -c '^exit=1$' <<<"$OUT")" 1
+t "a fixed message, not a new value" "$(grep -c 'ERROR: could not read the Secret' <<<"$OUT")" 1
+t "no new value was made, nothing was written" "$(wc -l < "$D/openssl-calls" | tr -d ' ')/$(grep -c '^kubectl apply' "$D/calls")" 0/0
+t "the existing value is unchanged" "$(cat "$SERVER")" "$CANARY"
+t "the error text of kubectl is not repeated" "$(grep -c 'i/o timeout' <<<"$OUT")" 0
+rm -rf "$D/state/openagentix-diagnostics__cluster-read-bearer" "$D/state/mcp-tools__diagnostics-bearer-cluster-read"
+OUT=$(FAKE_GET_FAIL=1 run)
+t "also with nothing stored yet: an unreadable API is not 'first install'" "$(grep -c '^exit=1$' <<<"$OUT")/$(wc -l < "$D/openssl-calls" | tr -d ' ')" 1/0
+
+echo "# review F4: the vMCPs are told to restart only when an existing Secret was rewritten"
+rm -rf "$D/state"; mkdir -p "$D/state"; : > "$D/openssl-calls"
+OUT=$(run)
+t "a fresh install: changed=0 (no vMCP holds an old value)" "$(grep -c '^changed=0$' <<<"$OUT")" 1
+OUT=$(run)
+t "a second run that keeps both: changed=0" "$(grep -c '^changed=0$' <<<"$OUT")" 1
+printf 'Bearer someoneelse' > "$HEADER"
+OUT=$(run)
+t "a repair of an existing Secret: changed=1" "$(grep -c '^changed=1$' <<<"$OUT")" 1
+rm -rf "$D/state/mcp-tools__diagnostics-bearer-cluster-read"
+OUT=$(run)
+t "a Secret created while the other one existed: changed=1" "$(grep -c '^changed=1$' <<<"$OUT")" 1
+: > "$D/calls"
+PATH="$D/bin:$PATH" bash -c '. hack/diagnostics-bearer.sh; diag_bearer_restart kubectl mcp-tools/tools-rca mcp-tools/tools-rca2' > "$D/out.txt" 2>&1
+t "diag_bearer_restart restarts and waits for each vMCP Deployment" "$(grep -c '^kubectl rollout restart deployment/tools-rca -n mcp-tools$' "$D/calls")/$(grep -c '^kubectl rollout status deployment/tools-rca2 -n mcp-tools' "$D/calls")" 1/1
+t "the restart output holds no value" "$(cat "$D/out.txt" "$D/calls" | grep -c "$CANARY")" 0
+t "install.sh restarts the vMCPs of the group when the value changed" "$(grep -c 'diag_bearer_restart' install.sh)" 1
 
 echo "# the installer uses it"
 t "install.sh sources hack/diagnostics-bearer.sh" "$(grep -c '^[[:space:]]*\. hack/diagnostics-bearer.sh' install.sh)" 1

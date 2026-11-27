@@ -96,6 +96,7 @@ Safe to include from several templates. */}}
 {{- range $x := ($d.apiServerCIDRs | default list) }}
 {{- if not (and (kindIs "string" $x) (or (regexMatch "^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$" $x) (regexMatch "^[0-9a-fA-F:]*:[0-9a-fA-F:.]*/([0-9]{1,2}|1[01][0-9]|12[0-8])$" $x))) }}{{ fail (printf "diagnostics.apiServerCIDRs entry %v is not a CIDR (for example 10.0.0.0/24)" $x) }}{{ end }}
 {{- end -}}
+{{- if and (not ($d.apiServerCIDRs | default list)) (not $d.allowAnyApiServerAddress) }}{{ fail "diagnostics.apiServerCIDRs is empty: the egress policy of cluster-read would then allow the API server ports towards ANY address. Set the API server addresses (install.sh does), or set diagnostics.allowAnyApiServerAddress=true to accept that on purpose" }}{{ end -}}
 {{- if not (kindIs "slice" $d.apiServerPorts) }}{{ fail "diagnostics.apiServerPorts must be a list of port numbers" }}{{ end -}}
 {{- range $x := $d.apiServerPorts }}
 {{- if not (and (or (kindIs "float64" $x) (kindIs "int64" $x) (kindIs "int" $x)) (ge (int $x) 1) (le (int $x) 65535)) }}{{ fail (printf "diagnostics.apiServerPorts entry %v is not a port number" $x) }}{{ end }}
@@ -119,6 +120,17 @@ Safe to include from several templates. */}}
 {{- $notifyFixed := list "notify_send" "notify_list_destinations" -}}
 {{- $noPreview := include "oa.diagNoPreviewPaths" . | fromJsonArray -}}
 {{- $clusterTools := include "oa.diagClusterTools" . | fromJsonArray -}}
+{{- /* an agent reaches a diagnostics profile's tools only through its own toolProfile: naming the profile's RemoteMCPServer in tools[].server would go around the rules below (outbound tools, reply paths) */ -}}
+{{- range $p := ($m.profiles | default list) -}}
+{{- if include "oa.diagProfile" (dict "root" $ "profile" $p) -}}
+{{- $dsrv := printf "%s-%s" $.Values.kagent.remoteMCPServer.name $p.name -}}
+{{- range $a := $.Values.agents -}}
+{{- range $t := ($a.tools | default list) -}}
+{{- if and (eq (toString $t.server) $dsrv) (ne (toString $a.toolProfile) $p.name) }}{{ fail (printf "agent %q names the tool server %q of the diagnostics profile %q without being on that profile: set toolProfile: %s (then its tools are checked against the profile), or take the server out of tools[].server" $a.name $dsrv $p.name $p.name) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- range $p := ($m.profiles | default list) -}}
 {{- if include "oa.diagProfile" (dict "root" $ "profile" $p) -}}
 {{- if $p.codeMode }}{{ fail (printf "profile %q lists a diagnostics tool, so codeMode must be false: code mode chains calls without the model's step in between" $p.name) }}{{ end -}}

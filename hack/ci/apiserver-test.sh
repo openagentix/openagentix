@@ -488,7 +488,7 @@ done
 echo "# diagnostics: the three roles, their bindings and the admission policy (a real API server)"
 DGLOG=rca-demo; DGST=rca-status; DGNS=openagentix-diagnostics
 DGSA="system:serviceaccount:$DGNS:cluster-read"; DBSA="system:serviceaccount:$DGNS:db-read"
-helm template openagentix charts/openagentix -n openagentix-system --set diagnostics.enabled=true --set diagnostics.cluster.enabled=true \
+helm template openagentix charts/openagentix -n openagentix-system --set diagnostics.enabled=true --set diagnostics.cluster.enabled=true --set "diagnostics.apiServerCIDRs={172.18.0.0/24}" \
   --set "diagnostics.cluster.logNamespaces={$DGLOG}" --set "diagnostics.cluster.statusNamespaces={$DGST}" | yq -c 'select(.!=null)' > "$TMP/diag.jsonl"
 for n in $DGLOG $DGST $DGNS; do kubectl get namespace "$n" >/dev/null 2>&1 || kubectl create namespace "$n" >/dev/null; done
 jq -c 'select(.kind=="ValidatingAdmissionPolicy" or .kind=="ValidatingAdmissionPolicyBinding") | select(.metadata.name=="openagentix-diagnostics-rbac")' "$TMP/diag.jsonl" > "$TMP/diag-policy.jsonl"

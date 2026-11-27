@@ -457,9 +457,12 @@ adapter's own section (runtime.kagent, tools.toolhive). It holds no secret: name
 {{- $_ := include "oa.profilesCheck" . -}}
 {{- $wl := dict -}}{{- range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}{{ $_ := set $wl $w.name $w }}{{ end -}}
 {{- range $p := (.Values.mcp.profiles | default list) -}}
+{{- /* a diagnostics profile is left out of the catalog, and so of the AgentTemplate guard, unless definitions may use it (ADR 0025) */ -}}
+{{- if or (not (include "oa.diagProfile" (dict "root" $ "profile" $p))) (($.Values.diagnostics | default dict).allowDefinitions) -}}
 {{- $e := dict "name" $p.name "toolServer" (printf "%s-%s" $k.remoteMCPServer.name $p.name) "codeMode" (eq (toString (default false $p.codeMode)) "true") "tools" (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) -}}
 {{- with (get $wl $p.name) }}{{ $_ := set $e "workload" (dict "url" .url "audience" .audience "namespace" $.Values.mcp.namespace "podSelector" (dict "app" "virtualmcpserver" "toolhive-name" .server) "port" (int .port)) }}{{ end -}}
 {{- $profiles = append $profiles $e -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $knOn := and .Values.knowledge.enabled .Values.mcp.enabled -}}

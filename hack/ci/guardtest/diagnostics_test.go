@@ -19,6 +19,7 @@ const (
 var diagSets = []string{
 	"diagnostics.enabled=true",
 	"diagnostics.cluster.enabled=true",
+	"diagnostics.apiServerCIDRs={172.18.0.0/24}",
 	"diagnostics.cluster.logNamespaces={rca-demo}",
 	"diagnostics.cluster.statusNamespaces={openagentix-knowledge,kagent}",
 }
@@ -310,5 +311,39 @@ func TestDiagnosticsPolicyNamesWhatItGuards(t *testing.T) {
 				t.Errorf("the policy text never mentions %q", want)
 			}
 		}
+	}
+}
+
+// Review F2: a diagnostics profile is not offered to the AgentTemplate guard (and the catalog) unless definitions may use it. The guard is
+// the second layer behind the controller's own policy: it must not admit a template that names the server of a diagnostics profile.
+func TestAgentTemplateGuardLeavesDiagnosticsProfilesOutUnlessAllowed(t *testing.T) {
+	prof := []string{"mcp.profiles[1].name=rca", "mcp.profiles[1].codeMode=false", "mcp.profiles[1].tools.cluster-read={pods_get,pods_log}"}
+	guardText := func(r *rendered) string {
+		var b strings.Builder
+		for _, p := range r.Policies {
+			for _, v := range p.Spec.Variables {
+				b.WriteString(v.Expression + "\n")
+			}
+			for _, v := range p.Spec.Validations {
+				b.WriteString(v.Expression + "\n")
+			}
+		}
+		return b.String()
+	}
+	off := render(t, append(append([]string{}, diagSets...), prof...)...)
+	if txt := guardText(off); strings.Contains(txt, "toolhive-vmcp-rca") || strings.Contains(txt, "cluster-read_") {
+		t.Errorf("allowDefinitions is false, but the guard names the diagnostics profile")
+	}
+	if len(off.Catalog.Tools.Toolhive.Profiles) == 0 {
+		t.Fatal("the catalog lists no profile at all: the check would be empty")
+	}
+	for _, p := range off.Catalog.Tools.Toolhive.Profiles {
+		if p.Name == "rca" {
+			t.Errorf("allowDefinitions is false, but the catalog lists the profile rca")
+		}
+	}
+	on := render(t, append(append(append([]string{}, diagSets...), prof...), "diagnostics.allowDefinitions=true")...)
+	if !strings.Contains(guardText(on), "toolhive-vmcp-rca") {
+		t.Errorf("allowDefinitions is true, but the guard does not know the server of rca (the control is empty)")
 	}
 }
