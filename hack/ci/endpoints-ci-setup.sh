@@ -52,7 +52,7 @@ spec:
     metadata: {labels: {app: $name}}
     spec:
       automountServiceAccountToken: false
-      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: echo
           image: python:3.12.7-slim
@@ -81,6 +81,6 @@ spec:
 YAML
 done
 for name in echo other; do
-  $K rollout status "deployment/$name" -n "$NS" --timeout=180s || { echo "endpoints-ci-setup: $name did not become Ready"; $K describe pod -n "$NS" -l "app=$name" | tail -20; exit 1; }
+  $K rollout status "deployment/$name" -n "$NS" --timeout=180s || { echo "endpoints-ci-setup: $name did not become Ready"; $K describe pod -n "$NS" -l "app=$name" | tail -20; $K logs -n "$NS" "deploy/$name" --tail=30 2>&1 | cut -c1-200; exit 1; }
 done
 echo "endpoints-ci-setup: the endpoints echo and other are Ready in $NS"
