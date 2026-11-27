@@ -13,6 +13,7 @@ on:
       - services/**
       - console/**
       - hack/ci/smoke.sh
+      - hack/ci/diagnostics-live.sh
       - hack/ci/phases.sh
       - hack/demo.sh
       - hack/ask.sh
@@ -21,6 +22,11 @@ on:
   schedule:
     - cron: '17 3 * * *'   # nightly
   workflow_dispatch:
+    inputs:
+      diagnostics:
+        description: 'Run the live check of cluster-read (ADR 0025, slice 4) instead of the profiles: the quick start plus components/diagnostics/ci-values.yaml'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +38,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostics }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -150,5 +157,70 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kind-logs
+          path: kind-logs
+          retention-days: 7
+
+  # Opt-in (workflow_dispatch with the input `diagnostics`; DIAGNOSTICS=1 for the script): cluster-read on a real API server. It settles whether the server
+  # becomes Ready (its rights check passes with the default discovery rules of a real ServiceAccount, the open question R2 of the code review of ADR 0025
+  # slice 3) and whether the dedicated profile lists the eight tools while the shared tool server lists none. See components/diagnostics/ci-values.yaml.
+  e2e-diagnostics:
+    name: e2e (diagnostics, cluster-read)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install (PROFILE=quickstart plus the diagnostics values, no key, no token)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: components/diagnostics/ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: live check of cluster-read
+        env:
+          DIAGNOSTICS: "1"
+        run: |
+          set -o pipefail
+          hack/ci/diagnostics-live.sh 2>&1 | tee diagnostics-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## cluster-read on a real API server (ADR 0025, slice 4)"
+            echo '```'
+            cat diagnostics-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+            echo "### install.sh, diagnostics lines"
+            echo '```'
+            grep -iE 'diagnostics|cluster-read|DiscoveredAuthConfig' install.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "--- cluster-read (its log holds no secret)"
+          kubectl describe pod -n openagentix-diagnostics -l app=cluster-read | tail -60 || true
+          kubectl logs -n openagentix-diagnostics deploy/cluster-read --tail=80 || true
+          echo "--- the vMCPs and their conditions"
+          kubectl get virtualmcpserver,mcpserverentry,mcpgroup -n mcp-tools || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}]}' || true
+          kubectl get remotemcpserver -n kagent -o json | jq -c '.items[]|{name:.metadata.name,tools:[.status.discoveredTools[]?.name]}' || true
+          kubectl get validatingadmissionpolicy openagentix-diagnostics-rbac -o json | jq -c '.status' || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs-diagnostics
           path: kind-logs
           retention-days: 7

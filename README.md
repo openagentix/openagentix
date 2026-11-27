@@ -603,6 +603,26 @@ VALUES_FILE="components/channels/demo-values.yaml components/schedules/demo-valu
 
 The demo file ships exactly one profile (the 6 CPU / 8 GB node carries one) and must come last, because it restates the `agents` list. Each profile costs one more vMCP pod: about 30 MB and a few millicores idle, 100m CPU and 128 MiB of requests. Cedar `toolAccess` applies to the shared vMCP only. `bash` stays on. Evidence and findings: ADR 0006, "Round 2 results".
 
+## Read-only cluster tools for diagnostic agents (opt-in)
+
+Off by default, and the default render does not change. With `diagnostics.enabled` and `diagnostics.cluster.enabled`, the chart runs `cluster-read` (`services/diagnostics`), a small MCP server that gives an agent the facts for a root-cause analysis: pods, events, pod logs, workloads and nodes of this cluster. It has eight typed tools and no tool that writes or runs a command. It reads only the namespaces you list (`diagnostics.cluster.logNamespaces` for pods, events, workloads and logs, `statusNamespaces` for everything but logs), through its own ServiceAccount with get and list on a fixed set of resources. It cannot read a Secret or a ConfigMap, run `exec`, or watch. The design and the limits are in [ADR 0025](docs/decisions/0025-read-only-diagnostic-tools.md).
+
+The server lives in the namespace `openagentix-diagnostics` and in a tool group of its own. A tool profile that lists a `cluster-read` tool is rendered on that group; the shared tool server never lists or calls these tools. The tool gateway sends one bearer value (a Secret that `install.sh` creates and never prints), and a NetworkPolicy admits only the profile's gateway pods. The render refuses what ADR 0025 refuses: NetworkPolicy off, content capture on, a platform namespace as a log namespace, code mode or an outbound tool such as `fetch` in the same profile, and a diagnostics profile for definitions or container agents unless `diagnostics.allowDefinitions` is true.
+
+```yaml
+diagnostics:
+  enabled: true
+  cluster: {enabled: true, logNamespaces: [rca-demo], statusNamespaces: [kagent]}
+mcp:
+  profiles:
+    - name: rca
+      codeMode: false
+      tools:
+        cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
+```
+
+What is proven: the chart, the admission policy and the installer steps are tested offline and the policy on a real API server in CI. A live check of the whole chain runs on request (`e2e` workflow, input `diagnostics`). Not proven yet: a root-cause run by an agent (slice 5 of the ADR). More in [the diagnostics page of the diary](docs/diary/features/diagnostics.md).
+
 ## Control plane and agent builder
 
 An agent can also be made from one small resource, `AgentDefinition` (`openagentix.io/v1alpha1`, short name `oad`). A controller (`services/control-plane`) turns it into the runtime agent, a gateway key and a status. A catalog says what exists and a policy says what is allowed. A definition that breaks the policy is refused with one sentence per rule, and nothing is created. An admission guard of 8 policies lets only the controller write the objects it owns. The controller never reads a Secret. It is off by default (`controlPlane.enabled`), and the default render does not change.
@@ -706,6 +726,8 @@ services/control-plane/         Go controller for AgentDefinition (core, kagent,
 services/console/               Go API of the web console, with the built app embedded
 services/a2a-gate/              Go A2A gate: caller authentication, caller rules, audit lines
 services/stub-model/            Go scripted stub model for the keyless quick start
+services/diagnostics/          Go read-only tool servers for diagnostic agents (today: cluster-read; ADR 0025)
+components/diagnostics/         values for the live check of cluster-read (ci-values.yaml)
 console/                        SvelteKit single-page app of the console
 components/control-plane/       demo values and an example AgentDefinition
 components/quickstart/          the quick start profile (values.yaml), its AgentDefinition, model choice (model.sh) and offline tests
