@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
-	"time"
 
 	"github.com/openagentix/openagentix/examples/use-cases/records/internal/core"
 )
@@ -21,7 +20,7 @@ type Domain struct {
 	timers    *core.Timers
 	outbox    *core.Outbox
 	svc       *Service
-	limiter   *core.Limiter
+	guard     *core.RESTGuard
 }
 
 // WriteLimitPerMinute is how many writes one host may make on the REST port each minute. It also bounds token guesses.
@@ -36,8 +35,9 @@ func New(db *sql.DB, log *slog.Logger, clock core.Clock, approvers *core.Approve
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, err
 	}
-	d := &Domain{db: db, log: log, clock: clock, approvers: approvers, limiter: core.NewLimiter(WriteLimitPerMinute, time.Minute, clock)}
+	d := &Domain{db: db, log: log, clock: clock, approvers: approvers}
 	d.audit = core.NewAudit(db, log, clock)
+	d.guard = core.NewRESTGuard(approvers, d.audit, clock, WriteLimitPerMinute)
 	d.timers = core.NewTimers(db, clock)
 	d.outbox = core.NewOutbox(db)
 	d.svc = &Service{db: db, clock: clock, timers: d.timers, outbox: d.outbox}

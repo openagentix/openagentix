@@ -105,6 +105,71 @@ eq "both connection strings are passed as files" "$(grep -cE '^FILE: postgresql:
 eq "no --from-literal is used" "$(grep -c -- '--from-literal' "$D/db-argv")" 0
 eq "up.sh uses the helpers" "$(grep -cE '^kagent_(pg_admin_secret|db_secrets)$' "$HERE/up.sh")" 2
 
+echo "# kagent controller waits for the Substrate API before it starts (issue #178)"
+# kagent 1.0.1 gives the Substrate API 10 s at start-up (substrate.Dial, not configurable) and exits when it does not answer.
+# The helm post-renderer adds an init container that waits for the API Service first. The fixture is the shape of the chart's output.
+cat > "$D/rendered.yaml" <<'EOF'
+---
+# Source: kagent/templates/controller-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kagent-controller
+  namespace: kagent
+data:
+  controller.yaml: "substrate: {}"
+---
+# Source: kagent/templates/ui-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-ui
+  namespace: kagent
+spec:
+  selector: {matchLabels: {app: ui}}
+  template:
+    metadata: {labels: {app: ui}}
+    spec:
+      containers:
+        - name: ui
+          image: ghcr.io/kagent-dev/kagent/ui:1.0.1
+---
+# Source: kagent/templates/controller-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-controller
+  namespace: kagent
+spec:
+  selector: {matchLabels: {app: controller}}
+  template:
+    metadata: {labels: {app: controller}}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: controller
+          image: ghcr.io/kagent-dev/kagent/controller:1.0.1
+          args: ["--config=/etc/kagent/controller.yaml"]
+EOF
+PR="$HERE/kagent-postrender.sh"
+OUT=$(bash "$PR" < "$D/rendered.yaml" 2>"$D/pr-err"); RC=$?
+eq "the post-renderer succeeds" "$RC" 0
+PDOCS=$(yq -c 'select(.!=null)' <<<"$OUT" 2>/dev/null)
+ctl() { jq -c 'select(.kind=="Deployment" and .metadata.name=="kagent-controller")' <<<"$PDOCS"; }
+INIT=$(ctl | jq -c '.spec.template.spec.initContainers[0] // {}')
+eq "every object is still there" "$(jq -r '.kind+"/"+.metadata.name' <<<"$PDOCS" | sort | tr '\n' ' ')" "ConfigMap/kagent-controller Deployment/kagent-controller Deployment/kagent-ui "
+eq "the controller gets one init container, wait-for-ate-api" "$(ctl | jq -r '[.spec.template.spec.initContainers[]?.name]|join(",")')" wait-for-ate-api
+eq "it waits for the Substrate API Service address the controller dials" "$(jq -r '.command|join(" ")' <<<"$INIT" | grep -c 'nc -z -w 2 api.ate-system.svc 443')" 1
+eq "it gives up after a bounded time (the pod then shows Init:Error, not a silent hang)" "$(jq -r '.command|join(" ")' <<<"$INIT" | grep -cE 'exit 1')" 1
+eq "it uses the image the install already pulls (substrate postgres), pinned by digest" "$(jq -r '.image' <<<"$INIT")" "$(grep -m1 -oE 'postgres:18-alpine@sha256:[0-9a-f]{64}' "$HERE/manifests/substrate-postgres/postgres.yaml")"
+eq "it is not root, cannot escalate, has a read-only root and no capabilities" "$(jq -c '.securityContext|[.runAsNonRoot,.runAsUser,.allowPrivilegeEscalation,.readOnlyRootFilesystem,.capabilities.drop]' <<<"$INIT")" '[true,65532,false,true,["ALL"]]'
+eq "it has small resource requests and limits" "$(jq -c '[.resources.requests.cpu,.resources.limits.memory]' <<<"$INIT")" '["5m","32Mi"]'
+eq "the controller container is unchanged" "$(ctl | jq -c '.spec.template.spec.containers')" '[{"args":["--config=/etc/kagent/controller.yaml"],"image":"ghcr.io/kagent-dev/kagent/controller:1.0.1","name":"controller"}]'
+eq "the UI is unchanged" "$(jq -c 'select(.metadata.name=="kagent-ui")|.spec.template.spec|has("initContainers")' <<<"$PDOCS")" false
+grep -v 'kagent-controller' "$D/rendered.yaml" | sed '/^# Source: kagent\/templates\/controller-deployment.yaml/,$d' > "$D/no-ctl.yaml"
+bash "$PR" < "$D/no-ctl.yaml" >/dev/null 2>&1; eq "without the controller Deployment it fails (a renamed object must not drop the wait silently)" "$?" 1
+eq "kagent-helm.sh always passes the post-renderer" "$(grep -c -- '--post-renderer ./kagent-postrender.sh' "$HERE/kagent-helm.sh")" 1
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]
