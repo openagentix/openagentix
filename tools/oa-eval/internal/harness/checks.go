@@ -98,12 +98,15 @@ func toolChecks(e Expect, seen []string, auditErr error) []Check {
 	add := func(name string, pass bool, detail string) {
 		out = append(out, Check{Name: name, Pass: pass, Detail: detail})
 	}
-	need := len(e.ToolsCalled)+len(e.ToolsNot)+len(e.ToolOrder)+len(e.Requires) > 0
+	need := len(e.ToolsCalled)+len(e.ToolsNot)+len(e.ToolOrder)+len(e.Requires) > 0 || e.MaxToolCalls > 0
 	if !need {
 		return nil
 	}
 	if auditErr != nil {
 		add("audit", false, auditErr.Error())
+		if e.MaxToolCalls > 0 {
+			add("max_tool_calls", false, "no audit events to read")
+		}
 		for _, t := range e.ToolsCalled {
 			add("tools_called["+t+"]", false, "no audit events to read")
 		}
@@ -117,6 +120,9 @@ func toolChecks(e Expect, seen []string, auditErr error) []Check {
 			add("requires["+r.Tool+"]", false, "no audit events to read")
 		}
 		return out
+	}
+	if e.MaxToolCalls > 0 {
+		add("max_tool_calls", len(seen) <= e.MaxToolCalls, fmt.Sprintf("%d tool calls, limit %d", len(seen), e.MaxToolCalls))
 	}
 	for _, t := range e.ToolsCalled {
 		add("tools_called["+t+"]", firstIndex(seen, t) >= 0, "")

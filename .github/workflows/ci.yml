@@ -159,6 +159,7 @@ jobs:
           hack/gke/tests/run.sh
           components/runtime/tests/run.sh
           examples/use-cases/bank/tests/install-test.sh
+          examples/use-cases/bank/tests/live-guard-test.sh
       - name: reference docs tests
         run: |
           pip install --quiet pyyaml==6.0.2 jsonschema==4.26.0

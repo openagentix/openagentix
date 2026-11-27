@@ -1,42 +1,63 @@
 #!/usr/bin/env bash
-# Installs the parts of the bank use case that are not chart values: the records service, its tool registration, the desk's
-# ServiceAccount, the knowledge base documents and the graph facts. Run it AFTER the platform install that used values.yaml:
+# Installs the bank use case (Fernvale Bank dispute and fraud-claim case agent) on a LOCAL kind cluster, end to end:
 #
-#   PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh
-#   examples/use-cases/bank/install.sh
-#   examples/use-cases/bank/install.sh --uninstall        # removes what this script made (not the chart values)
+#   CLUSTER=oa-bank-demo examples/use-cases/bank/install.sh                    the quick start plus the use case, offline: the stub model with the scenarios (no key, no token)
+#   VALUES_FILE="<the list you installed the full demo with>" CLUSTER=<its cluster> \
+#     examples/use-cases/bank/install.sh --beside-full-demo                    add the agent to a full demo install (values-full-demo.yaml, composed AFTER your list)
+#   CLUSTER=<name> examples/use-cases/bank/install.sh --skip-platform          only the records service, its Secrets, the desk caller and the documents (the platform install ran already)
+#   CLUSTER=<name> examples/use-cases/bank/install.sh --uninstall              removes what this script made (not the chart values: see the README, "Uninstall")
 #
-# Local kind cluster only: the script refuses any context that is not kind-* (also for --uninstall). It never creates or deletes a
-# cluster. Every step can be run again.
-#   1. builds the records image (tag from a hash of its source) and loads it into the kind nodes;
-#   2. creates the namespace fernvale-records, then (only when absent) two Secrets from a generated token: `records-approvers` holds the
-#      SHA-256 hash of the desk lead's token and is mounted into the pod; `records-approver-token` holds the token itself for
-#      examples/use-cases/bank/ctl.sh. The token is never printed, never put in a file or in an argument list. When only one of the two
-#      exists (an earlier run stopped half way), both are made again with a new token, because the token cannot be read back from a hash;
-#   3. applies manifests/records.yaml and manifests/tool-registration.yaml (an MCPServerEntry, like the chart's knowledge entry);
-#   4. creates the ServiceAccount openagentix-system/disputes-desk, the caller of the dispute agent (the rule is in values.yaml);
-#   5. loads seed/kb into the collection fernvale-disputes and seed/graph into the graph (hack/kb-ingest.sh, hack/kb-graph-load.sh);
-#   6. when the stub model is the model: only CHECKS that it has scenarios. The scenarios are not made here: the platform install ships
-#      eval/scenario.json through the chart (STUB_SCENARIOS, ADR 0026), so a chart upgrade keeps them. A stub without them gets a warning.
-#      A run with them is SCRIPTED by the stub model, not the behaviour of a model: say so wherever you report it.
+# There is NO default cluster: set CLUSTER (the kind cluster name) or KUBE_CONTEXT, so that a script never acts on a cluster by guess (a name like
+# "openagentix" is also the name of a full demo cluster). The script refuses any context that is not kind-* (also for --uninstall). It never deletes a
+# cluster. It makes one, with the repository's kind config, only when no kube context of that name exists and --beside-full-demo is not given.
 #
-# It REFUSES to install when the shared tool server (the vMCP `tools`) has code mode on, or when any agent other than dispute-agent uses
-# it: the records tools join that shared server, and a script run there could call the write tools. Quick start only (README).
+# What it does, in order (ADR 0026: the records service joins the platform through mcp.endpoints, so it and its Secrets come FIRST). Every step can be run again.
+#   0. the guards above; refuses to run the quick start install on a release that has more than the quick start and this use case (the platform installer
+#      replaces the release values on every run: it would drop them). On such a release use --beside-full-demo;
+#   1. composes the values: hack/compose-values.sh merges components/quickstart/values.yaml and values.yaml by entry name and reports what the second adds
+#      (with --beside-full-demo: your files merged the way Helm merges them, then values-full-demo.yaml composed after them, after a check that the merge
+#      renders exactly like your list);
+#   2. builds the records image (tag from a hash of its source) and loads it into the kind nodes;
+#   3. creates the namespace fernvale-records and, only when ALL are absent, four Secrets from generated values, always through stdin, never printed, never an
+#      argument: `records-approvers` (the SHA-256 of the desk lead's token) and `records-approver-token` (the token itself, read by ctl.sh) in fernvale-records;
+#      `records-mcp-expected` (fernvale-records, read by the records service as a file) and `records-mcp-auth` (the tool namespace, read by the tool gateway)
+#      with the SAME header value `Bearer <token>`. When only some exist (an earlier run stopped half way) all are made again with new values;
+#   4. applies manifests/records.yaml (the service, a base policy that admits nothing) and waits for it;
+#   5. removes the objects the first version of this use case made by hand (an MCPServerEntry and an auth config named records, by label), because Helm
+#      refuses to take over an object it did not create;
+#   6. runs the platform installer (./install.sh) with the composed values. Offline it sets PROFILE=quickstart and STUB_SCENARIOS=eval/scenario.json (ADR 0026)
+#      and removes every provider key from the environment of that run, so the stub answers. The chart renders the endpoint, the group, the profile's tool
+#      server and the policies; the platform installer checks that the tool server of the group sees the endpoint as ready;
+#   7. makes the ServiceAccount openagentix-system/disputes-desk (the caller of the dispute agent; the rule is in values.yaml);
+#   8. loads seed/kb into the collection fernvale-disputes and seed/graph into the graph (hack/kb-ingest.sh, hack/kb-graph-load.sh);
+#   9. offline: checks that the stub model has the scenarios. A run with them is SCRIPTED by the stub model, not the behaviour of a model: say so wherever
+#      you report it.
 #
-# Env: CLUSTER (kind cluster name, default openagentix)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  DOCKER  KIND
+# Env: CLUSTER (kind cluster name, REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  HELM  DOCKER  KIND
+#      VALUES_FILE (--beside-full-demo only: the files of the install you have, space separated, relative to the repository root or absolute)
+#      PLATFORM_INSTALL (the platform installer, default ./install.sh in the repository root; a test sets a fake)  COMPOSE (compose-values.sh)
 #      KB_INGEST, KB_GRAPH_LOAD (the two hack scripts)  SKIP_BUILD=1 (use RECORDS_IMAGE as it is)  RECORDS_IMAGE
+#      Any other variable of the platform installer (SKIP_*, AGENT_WAIT, ...) goes through to it.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-CLUSTER=${CLUSTER:-openagentix}
+# No default cluster: a script that changes a cluster must be told which one.
+[ -n "${CLUSTER:-}${KUBE_CONTEXT:-}" ] || { echo "ERROR: set CLUSTER (the kind cluster name) or KUBE_CONTEXT: there is no default cluster. Nothing was changed." >&2; exit 1; }
+CLUSTER=${CLUSTER:-${KUBE_CONTEXT#kind-}}
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
+HELM=${HELM:-helm}
 DOCKER=${DOCKER:-docker}
 KIND=${KIND:-kind}
+RELEASE=${RELEASE:-openagentix}
+RELEASE_NS=${RELEASE_NS:-openagentix-system}
+PLATFORM_INSTALL=${PLATFORM_INSTALL:-$ROOT/install.sh}
+COMPOSE=${COMPOSE:-$ROOT/hack/compose-values.sh}
 KB_INGEST=${KB_INGEST:-$ROOT/hack/kb-ingest.sh}
 KB_GRAPH_LOAD=${KB_GRAPH_LOAD:-$ROOT/hack/kb-graph-load.sh}
 NS=fernvale-records
+MCPNS=mcp-tools
 COLLECTION=fernvale-disputes
 FACTSET=fernvale-bank
 DESK_NS=openagentix-system
@@ -48,44 +69,112 @@ say(){ echo "==> $*"; }
 # The guard comes first, before any option runs: --uninstall deletes things too.
 case "$KUBE_CONTEXT" in
   kind-*) ;;
-  *) die "KUBE_CONTEXT is '$KUBE_CONTEXT': this script is for a local kind cluster (kind-<name>). Set CLUSTER or KUBE_CONTEXT." ;;
+  *) die "KUBE_CONTEXT is '$KUBE_CONTEXT': this script is for a local kind cluster (kind-<name>). Set CLUSTER or KUBE_CONTEXT. Nothing was changed." ;;
 esac
 
-MODE=install
+MODE=install; SKIP_PLATFORM=0; BESIDE=0
 for arg in "$@"; do
   case "$arg" in
     --uninstall) MODE=uninstall ;;
-    -h|--help) sed -n 2,26p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument: $arg (--uninstall; the stub model scenarios are shipped by the platform install, STUB_SCENARIOS)" ;;
+    --skip-platform) SKIP_PLATFORM=1 ;;
+    --beside-full-demo) BESIDE=1 ;;
+    -h|--help) sed -n 2,40p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $arg (--beside-full-demo, --skip-platform, --uninstall, -h; the stub model scenarios are shipped by the platform install, STUB_SCENARIOS)" ;;
   esac
 done
 
 if [ "$MODE" = uninstall ]; then
-  say "removing the bank use case objects from $KUBE_CONTEXT (the chart values stay: install the platform again without values.yaml and without STUB_SCENARIOS to remove the agent and the scenarios)"
+  say "removing the bank use case objects from $KUBE_CONTEXT (the chart values stay: install the platform again without values.yaml and without STUB_SCENARIOS to remove the agent, the profile, the endpoint and the scenarios)"
   "${KC[@]}" delete configmap bank-scenarios -n agentgateway-system --ignore-not-found   # made by the first version of this script (a kubectl patch); the chart now ships the scenarios
-  "${KC[@]}" delete -f "$HERE/manifests/tool-registration.yaml" --ignore-not-found
+  "${KC[@]}" delete mcpserverentry records -n "$MCPNS" -l app.kubernetes.io/part-of=openagentix-use-case-bank --ignore-not-found   # made by the first version of this script
+  "${KC[@]}" delete mcpexternalauthconfig records-noauth -n "$MCPNS" -l app.kubernetes.io/part-of=openagentix-use-case-bank --ignore-not-found
+  "${KC[@]}" delete secret records-mcp-auth -n "$MCPNS" --ignore-not-found
   "${KC[@]}" delete namespace "$NS" --ignore-not-found
   "${KC[@]}" delete serviceaccount disputes-desk -n "$DESK_NS" --ignore-not-found
   say "the knowledge base keeps the collection $COLLECTION and the fact set $FACTSET; remove them with the kb admin API if you want"
   exit 0
 fi
 
-# ---- 0. the platform must be there, with values.yaml --------------------------------------------------------------------
 command -v jq >/dev/null || die "jq is required"
-"${KC[@]}" get namespace mcp-tools >/dev/null 2>&1 || die "the namespace mcp-tools does not exist: install the platform first (PROFILE=quickstart VALUES_FILE=examples/use-cases/bank/values.yaml ./install.sh)"
-"${KC[@]}" get namespace openagentix-knowledge >/dev/null 2>&1 || die "the knowledge base is not installed: the platform install must use examples/use-cases/bank/values.yaml (it turns the knowledge base and the graph on)"
-"${KC[@]}" get agents.api.kagent.dev dispute-agent -n kagent >/dev/null 2>&1 || die "the agent dispute-agent does not exist: the platform install must use examples/use-cases/bank/values.yaml"
+[ -x "$PLATFORM_INSTALL" ] || [ -f "$PLATFORM_INSTALL" ] || die "the platform installer is not at $PLATFORM_INSTALL"
+[ "$BESIDE" = 0 ] || [ "$SKIP_PLATFORM" = 0 ] || die "--beside-full-demo runs the platform installer: do not combine it with --skip-platform. Nothing was changed."
+if [ "$BESIDE" = 1 ] && [ -z "${VALUES_FILE:-}" ]; then
+  die "--beside-full-demo needs VALUES_FILE: the same list of files you installed the full demo with. Helm replaces the release values on every run, so a list that is missing would drop what it set. Nothing was changed."
+fi
 
-# The records tools join the shared tool server. Nothing there limits who may call them, so refuse a cluster where another agent could.
-CODEMODE=$("${KC[@]}" get virtualmcpservers.toolhive.stacklok.dev tools -n mcp-tools -o jsonpath='{.spec.config.codeMode.enabled}' 2>/dev/null) \
-  || die "cannot read the shared tool server (VirtualMCPServer tools in mcp-tools): nothing was changed"
-[ "$CODEMODE" != true ] || die "the shared tool server has code mode on (the full demo does). A script run there could call the records write tools. This use case supports the quick start only (README, 'Quick start only'). Nothing was changed."
-TEMPLATES=$("${KC[@]}" get agenttemplates.api.kagent.dev -n kagent -o json 2>/dev/null) || die "cannot list the agent templates in kagent: nothing was changed"
-OTHERS=$(printf '%s' "$TEMPLATES" | jq -r '[.items[] | select(.metadata.name != "dispute-agent-template") | select(any(.spec.tools[]?; .mcp.server.name == "toolhive-vmcp")) | .metadata.name] | join(", ")') \
-  || die "cannot read the agent templates: nothing was changed"
-[ -z "$OTHERS" ] || die "other agents use the shared tool server ($OTHERS). They could call the records write tools. This use case supports the quick start only (README, 'Quick start only'). Nothing was changed."
+ctx_exists() { local c; c=$("${KC[@]}" config get-contexts -o name 2>/dev/null) || return 1; printf '%s\n' "$c" | grep -qx "$KUBE_CONTEXT"; }
 
-# ---- 1. image ------------------------------------------------------------------------------------------------------------
+# ---- 0b. the release must not lose anything -----------------------------------------------------------------------------------------
+# The platform installer replaces the release values. Without --beside-full-demo this script installs the quick start plus this use case, so a release that has
+# more than that would lose it (and, offline, every provider key is removed, so the model would become the stub). Refuse, and say what would be lost.
+release_extras() { # prints what the existing release has beyond the quick start and this use case, one thing per line; fails when it cannot tell
+  local out
+  ctx_exists || return 0   # no such context yet: the cluster is made below, nothing can be lost
+  if ! out=$("$HELM" get values "$RELEASE" -n "$RELEASE_NS" --kube-context "$KUBE_CONTEXT" -o json 2>&1); then
+    case "$out" in *"not found"*) return 0 ;; esac
+    echo "cannot read the values of the release $RELEASE in $KUBE_CONTEXT: $(printf '%s' "$out" | head -1)" >&2
+    return 1
+  fi
+  printf '%s' "$out" | jq -r '
+    [ (if ((.schedules // []) | map(.name) - ["deadline-sweep"] | length) > 0 then "schedules" else empty end),
+      (if (.bridge.enabled // false) == true then "the Telegram bridge" else empty end),
+      (if ((.channels.kourier.enabled // false) == true) or (((.channels.bindings // []) | length) > 0) then "channels" else empty end),
+      (if (.notify.enabled // false) == true then "notify" else empty end),
+      (if (.memory.enabled // false) == true then "memory" else empty end),
+      (if (.diagnostics.enabled // false) == true then "diagnostics" else empty end),
+      (if (.mcp.virtual.codeMode.enabled // false) == true then "code mode on the shared tool server" else empty end),
+      (((.agents // []) | map(.name) - ["dispute-agent"]) | if length > 0 then "agents: " + join(", ") else empty end),
+      (((.mcp.profiles // []) | map(.name) - ["lookup", "disputes"]) | if length > 0 then "tool profiles: " + join(", ") else empty end),
+      (((.mcp.servers // []) | map(.name) - ["osv"]) | if length > 0 then "tool servers: " + join(", ") else empty end),
+      (((.mcp.endpoints // []) | map(.name) - ["records"]) | if length > 0 then "endpoints: " + join(", ") else empty end),
+      (((.governance.a2a.callers // []) | map(.name) - ["quickstart-ask", "disputes-desk"]) | if length > 0 then "gate callers: " + join(", ") else empty end)
+    ] | .[]'
+}
+if [ "$SKIP_PLATFORM" != 1 ] && [ "$BESIDE" != 1 ]; then
+  EXTRAS=$(release_extras) || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
+  if [ -n "$EXTRAS" ]; then
+    die "the release $RELEASE in $KUBE_CONTEXT has more than the quick start: $(printf '%s' "$EXTRAS" | tr '\n' ';' | sed 's/;/; /g'). The platform installer would replace those values and drop them. Use a cluster of its own, or add the agent to your install with: VALUES_FILE=\"<your files>\" CLUSTER=<its cluster> $0 --beside-full-demo. Nothing was changed."
+  fi
+fi
+
+# ---- 1. compose the values (local work only: nothing in the cluster has changed yet) --------------------------------------------
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+VALUES_COMPOSED="$TMP/bank-values.yaml"
+if [ "$SKIP_PLATFORM" != 1 ]; then
+  if [ "$BESIDE" = 1 ]; then
+    say "composing the values: your list ($VALUES_FILE) first, then examples/use-cases/bank/values-full-demo.yaml (the endpoint, the profile disputes, the agent dispute-agent, the sweep and the caller)"
+    # Your own files are merged first, the way Helm merges them (maps deep, a later file wins, a list is REPLACED by a later file), into one file. That is
+    # exactly your install, so compose-values.sh must not judge it. The merge is checked instead: the chart must render byte for byte the same from your
+    # list and from the merged file. Only then is values-full-demo.yaml composed after it by compose-values.sh, without --later-wins: it joins the lists by
+    # name and never drops an entry of yours, and a name or a security key that clashes is refused, and nothing is installed.
+    cd "$ROOT"
+    VALUES_BASE="$TMP/your-values.yaml"
+    command -v yq >/dev/null || die "yq (the Python wrapper) is required for --beside-full-demo"
+    : > "$TMP/your-values.json"
+    for f in $VALUES_FILE; do
+      [ -r "$f" ] || die "cannot read $f (VALUES_FILE is read from the repository root). Nothing was changed."
+      yq . "$f" >> "$TMP/your-values.json" || die "cannot read $f as YAML. Nothing was changed."
+    done
+    jq -s 'reduce .[] as $x ({}; . * $x)' "$TMP/your-values.json" > "$VALUES_BASE" || die "your VALUES_FILE list did not merge. Nothing was changed."
+    HELM_ARGS=(template check "$ROOT/charts/openagentix" -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1)
+    VF_ARGS=(); for f in $VALUES_FILE; do VF_ARGS+=(-f "$f"); done
+    "$HELM" "${HELM_ARGS[@]}" "${VF_ARGS[@]}" > "$TMP/render.yours" 2>"$TMP/render.err" || { cat "$TMP/render.err" >&2; die "the chart does not render from your VALUES_FILE list as given (the reason is above). Nothing was changed."; }
+    "$HELM" "${HELM_ARGS[@]}" -f "$VALUES_BASE" > "$TMP/render.merged" 2>"$TMP/render.err" || { cat "$TMP/render.err" >&2; die "the chart does not render from your merged values. Nothing was changed."; }
+    cmp -s "$TMP/render.yours" "$TMP/render.merged" || die "your VALUES_FILE list does not merge into one file that renders the same (a later file of yours replaces a list the merge would join). I will not guess: add the agent by hand with your list and values-full-demo.yaml. Nothing was changed."
+    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
+  else
+    say "composing the values (components/quickstart/values.yaml and examples/use-cases/bank/values.yaml)"
+    "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+  fi
+fi
+
+# ---- 2. the cluster, then the image --------------------------------------------------------------------------------------------
+if ! ctx_exists; then
+  [ "$BESIDE" = 0 ] || die "--beside-full-demo needs the cluster of your full demo to exist: no kube context '$KUBE_CONTEXT'. Nothing was changed."
+  [ "$SKIP_PLATFORM" = 0 ] || die "--skip-platform needs the cluster to exist: no kube context '$KUBE_CONTEXT'. Nothing was changed."
+  say "no kube context $KUBE_CONTEXT: making the kind cluster $CLUSTER (the repository's kind config)"
+  "$KIND" create cluster --name "$CLUSTER" --config "$ROOT/hack/kind-config.yaml"
+fi
 if [ "${SKIP_BUILD:-0}" = 1 ]; then
   IMAGE=${RECORDS_IMAGE:?SKIP_BUILD=1 needs RECORDS_IMAGE}
 else
@@ -101,53 +190,89 @@ if [ "${SKIP_BUILD:-0}" != 1 ]; then
   "$KIND" load docker-image "$IMAGE" --name "$CLUSTER" >/dev/null
 fi
 
-# ---- 2. namespace and Secrets --------------------------------------------------------------------------------------------
-say "namespace $NS"
+# ---- 3. namespaces and Secrets -------------------------------------------------------------------------------------------------
+say "namespaces $NS and $MCPNS"
 "${KC[@]}" get namespace "$NS" >/dev/null 2>&1 || "${KC[@]}" create namespace "$NS" >/dev/null   # the labels (restricted pod security) come with the manifest below
-HAVE_A=0; HAVE_T=0; REGENERATED=0
-"${KC[@]}" get secret records-approvers -n "$NS" >/dev/null 2>&1 && HAVE_A=1
-"${KC[@]}" get secret records-approver-token -n "$NS" >/dev/null 2>&1 && HAVE_T=1
-if [ "$HAVE_A" = 1 ] && [ "$HAVE_T" = 1 ]; then
-  say "the approver Secrets exist: not changed"
+"${KC[@]}" get namespace "$MCPNS" >/dev/null 2>&1 || "${KC[@]}" create namespace "$MCPNS" >/dev/null   # the chart's header Secret reference needs the Secret before the chart is applied
+HAVE=0; ALL=1
+for s in "records-approvers:$NS" "records-approver-token:$NS" "records-mcp-expected:$NS" "records-mcp-auth:$MCPNS"; do
+  if "${KC[@]}" get secret "${s%%:*}" -n "${s##*:}" >/dev/null 2>&1; then HAVE=1; else ALL=0; fi
+done
+REGENERATED=0
+if [ "$ALL" = 1 ]; then
+  say "the Secrets exist: not changed"
 else
-  if [ "$HAVE_A$HAVE_T" != 00 ]; then
-    say "only one of the two approver Secrets exists (an earlier run stopped half way): making both again with a new token"
-    "${KC[@]}" delete secret records-approvers records-approver-token -n "$NS" --ignore-not-found >/dev/null
+  if [ "$HAVE" = 1 ]; then
+    say "only some of the four Secrets exist (an earlier run stopped half way): making all again with new values"
+    "${KC[@]}" delete secret records-approvers records-approver-token records-mcp-expected -n "$NS" --ignore-not-found >/dev/null
+    "${KC[@]}" delete secret records-mcp-auth -n "$MCPNS" --ignore-not-found >/dev/null
     REGENERATED=1
   fi
-  command -v openssl >/dev/null || die "openssl is required to generate the approver token"
+  command -v openssl >/dev/null || die "openssl is required to generate the tokens"
   TOKEN=$(openssl rand -hex 24)
-  [ "${#TOKEN}" -ge 32 ] || die "could not generate a token"
+  CRED="Bearer $(openssl rand -hex 24)"
+  [ "${#TOKEN}" -ge 32 ] && [ "${#CRED}" -ge 39 ] || die "could not generate a token"
   SUM=$(printf %s "$TOKEN" | openssl dgst -sha256 | sed 's/^.* //')
   printf '[{"id":"desk:lead-1","role":"desk-lead","token_sha256":"%s"}]\n' "$SUM" \
     | "${KC[@]}" create secret generic records-approvers -n "$NS" --from-file=approvers.json=/dev/stdin >/dev/null
   printf %s "$TOKEN" | "${KC[@]}" create secret generic records-approver-token -n "$NS" --from-file=token=/dev/stdin >/dev/null
-  unset TOKEN SUM
-  say "created the approver Secrets (approver id desk:lead-1, role desk-lead); the token is read by ctl.sh and is not shown"
+  printf %s "$CRED" | "${KC[@]}" create secret generic records-mcp-expected -n "$NS" --from-file=value=/dev/stdin >/dev/null
+  printf %s "$CRED" | "${KC[@]}" create secret generic records-mcp-auth -n "$MCPNS" --from-file=value=/dev/stdin >/dev/null
+  unset TOKEN SUM CRED
+  say "created the Secrets (approver id desk:lead-1, role desk-lead; the MCP header value for the tool gateway and the records service): the values are read by ctl.sh and the services, and are not shown"
 fi
 
-# ---- 3. the service and its registration --------------------------------------------------------------------------------
+# ---- 4. the service ------------------------------------------------------------------------------------------------------------
 say "applying the records service"
 sed "s#IMAGE_PLACEHOLDER#$IMAGE#" "$HERE/manifests/records.yaml" | "${KC[@]}" apply -f - >/dev/null
-# The service reads the approvers file when it starts: a new token needs a new pod.
+# The service reads its files when it starts (the approvers) and per request (the MCP credential): a new token needs a new pod.
 if [ "$REGENERATED" = 1 ]; then "${KC[@]}" rollout restart deployment/records -n "$NS" >/dev/null; fi
 "${KC[@]}" rollout status deployment/records -n "$NS" --timeout=180s >/dev/null || die "the records pod did not become ready: kubectl --context $KUBE_CONTEXT describe pod -n $NS -l app=records"
-say "registering it with the tool gateway (MCPServerEntry records in mcp-tools)"
-"${KC[@]}" apply -f "$HERE/manifests/tool-registration.yaml" >/dev/null || die "could not apply the tool registration (are the ToolHive CRDs installed?)"
 
-# ---- 4. the desk caller --------------------------------------------------------------------------------------------------
+# ---- 5. the objects of the first version of this use case ----------------------------------------------------------------------
+# Helm refuses to take over an object it did not create. The first version registered the service with an MCPServerEntry and an auth config applied by hand
+# (label part-of=openagentix-use-case-bank). The chart makes its own now; delete only objects that carry that label.
+"${KC[@]}" delete mcpserverentry records -n "$MCPNS" -l app.kubernetes.io/part-of=openagentix-use-case-bank --ignore-not-found >/dev/null 2>&1 || true
+"${KC[@]}" delete mcpexternalauthconfig records-noauth -n "$MCPNS" -l app.kubernetes.io/part-of=openagentix-use-case-bank --ignore-not-found >/dev/null 2>&1 || true
+
+# ---- 6. the platform -----------------------------------------------------------------------------------------------------------
+if [ "$SKIP_PLATFORM" != 1 ]; then
+  if [ "$BESIDE" = 1 ]; then
+    say "platform install beside the full demo: your model, your provider keys and your scenarios stay as they are (nothing is unset)"
+    env -u PROFILE -u STUB_SCENARIOS CLUSTER="$CLUSTER" KUBE_CONTEXT="$KUBE_CONTEXT" VALUES_FILE="$VALUES_COMPOSED" "$PLATFORM_INSTALL"
+  else
+    say "platform install, offline: the stub model with the scenarios of eval/scenario.json (a run with them is SCRIPTED, not the behaviour of a model)"
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GOOGLE_API_KEY -u MODEL_BASE_URL -u MODEL_NAME -u MODEL_PROVIDER -u MODEL_API_KEY \
+      CLUSTER="$CLUSTER" KUBE_CONTEXT="$KUBE_CONTEXT" PROFILE=quickstart VALUES_FILE="$VALUES_COMPOSED" STUB_SCENARIOS="$HERE/eval/scenario.json" "$PLATFORM_INSTALL"
+  fi
+fi
+
+# ---- 7. the platform must have what the use case needs ----------------------------------------------------------------------------
+"${KC[@]}" get namespace openagentix-knowledge >/dev/null 2>&1 || die "the knowledge base is not installed: the platform install must use examples/use-cases/bank/values.yaml (it turns the knowledge base and the graph on)"
+"${KC[@]}" get agents.api.kagent.dev dispute-agent -n kagent >/dev/null 2>&1 || die "the agent dispute-agent does not exist: the platform install must use examples/use-cases/bank/values.yaml"
+CODEMODE=$("${KC[@]}" get virtualmcpservers.toolhive.stacklok.dev tools-disputes -n "$MCPNS" -o jsonpath='{.spec.config.codeMode.enabled}' 2>/dev/null) \
+  || die "cannot read the tool server of the profile disputes (VirtualMCPServer tools-disputes in $MCPNS): the platform install must use examples/use-cases/bank/values.yaml"
+[ "$CODEMODE" != true ] || die "the tool server of the profile disputes has code mode on: a script there could chain the records tools without the model. Nothing more was changed."
+# A new header value: the tool server of the group holds the old one as an environment value until it restarts.
+if [ "$REGENERATED" = 1 ]; then
+  say "the header value changed: restarting the tool server of the group disputes"
+  "${KC[@]}" rollout restart deployment/tools-disputes -n "$MCPNS" >/dev/null
+  "${KC[@]}" rollout status deployment/tools-disputes -n "$MCPNS" --timeout=300s >/dev/null || die "the tool server tools-disputes did not become ready after the restart"
+fi
+
+# ---- 8. the desk caller, the knowledge base and the graph -------------------------------------------------------------------------
 "${KC[@]}" create serviceaccount disputes-desk -n "$DESK_NS" --dry-run=client -o yaml | "${KC[@]}" apply -f - >/dev/null
 say "ServiceAccount $DESK_NS/disputes-desk is ready (the caller rule is in values.yaml)"
-
-# ---- 5. knowledge base and graph -----------------------------------------------------------------------------------------
 say "loading the documents into the collection $COLLECTION"
 KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$KB_INGEST" "$HERE/seed/kb" "$COLLECTION"
 say "loading the graph facts into the fact set $FACTSET"
 KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$KB_GRAPH_LOAD" "$COLLECTION" "$FACTSET" "$HERE/seed/graph/dispute-facts.yaml"
 
-# ---- 6. scenarios for the stub model: checked, not made --------------------------------------------------------------------
+# ---- 9. scenarios for the stub model: checked, not made --------------------------------------------------------------------------
 # The chart ships them (STUB_SCENARIOS on the platform install, ADR 0026): the ConfigMap stub-model-scenarios and the mount belong to the release.
-if "${KC[@]}" get deployment stub-model -n agentgateway-system >/dev/null 2>&1; then
+if [ "$BESIDE" = 1 ]; then
+  say "beside the full demo: the agent uses the model of your install (claude-haiku); no scenario was set"
+elif "${KC[@]}" get deployment stub-model -n agentgateway-system >/dev/null 2>&1; then
   if SCN_CM=$("${KC[@]}" get configmap stub-model-scenarios -n agentgateway-system -o json 2>/dev/null); then
     if printf '%s' "$SCN_CM" | jq -e '.data["scenario.json"] != null' >/dev/null 2>&1; then
       say "the stub model has scenarios from the chart (runs with them are scripted by the stub model, not the behaviour of a model)"
@@ -163,7 +288,7 @@ fi
 
 cat <<EOF
 
-The bank use case is installed. Next:
+The bank use case is installed. Next (set CLUSTER=$CLUSTER on every call):
   examples/use-cases/bank/ctl.sh ask "Work case DSP-$(date +%Y)-0001"      # the agent works the case and stops at an approval request
   examples/use-cases/bank/ctl.sh approvals                                  # what waits for the desk lead
   examples/use-cases/bank/ctl.sh approve APR-0001                           # read the exact request, then decide as desk:lead-1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The desk's commands for the bank use case. Local kind cluster, after examples/use-cases/bank/install.sh.
+# The desk's commands for the bank use case. Local kind cluster, after examples/use-cases/bank/install.sh. Set CLUSTER=<kind cluster name> on every call.
 #
 #   ctl.sh ask "Work case DSP-2026-0001"     ask the dispute agent through the A2A gate, as the desk (ServiceAccount disputes-desk)
 #   ctl.sh cases                             open cases (id, claim, status, route)
@@ -14,12 +14,15 @@
 # Secret records-approver-token into a shell variable and given to curl through a file descriptor: never printed, never in an argument list.
 # The port-forward is opened once, in the main shell, before any command reads. A forward opened inside a pipeline or $(...) would be
 # lost when that subshell ends and would stay up after the script. The script refuses a context that is not kind-*.
-# Env: CLUSTER (default openagentix)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  RECORDS_NAMESPACE (default fernvale-records)
+# Env: CLUSTER (REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  RECORDS_NAMESPACE (default fernvale-records)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-CLUSTER=${CLUSTER:-openagentix}
+# No default cluster: a script that acts on a cluster must be told which one, so it never runs on a cluster by guess (a name like "openagentix" is
+# also the name of a full demo cluster).
+[ -n "${CLUSTER:-}${KUBE_CONTEXT:-}" ] || { echo "ERROR: set CLUSTER (the kind cluster name) or KUBE_CONTEXT: there is no default cluster. Nothing was changed." >&2; exit 1; }
+CLUSTER=${CLUSTER:-${KUBE_CONTEXT#kind-}}
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
 NS=${RECORDS_NAMESPACE:-fernvale-records}

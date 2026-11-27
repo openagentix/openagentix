@@ -72,7 +72,7 @@ type env struct {
 	rest   http.Handler
 	mcp    *mcp.ClientSession
 	stub   string
-	tools  []string // names as the agent sees them: records_<tool>, knowledge_<tool>
+	tools  []string // names as the agent sees them: records_<tool>, knowledge-disputes_<tool>
 	called []string
 }
 
@@ -179,7 +179,7 @@ func newEnvWith(t *testing.T, scenarios string) *env {
 		e.tools = append(e.tools, "records_"+tl.Name)
 	}
 	for _, k := range kbTools {
-		e.tools = append(e.tools, "knowledge_"+k)
+		e.tools = append(e.tools, "knowledge-disputes_"+k)
 	}
 	return e
 }
@@ -226,8 +226,8 @@ func (e *env) run(user string) string {
 		name := tc.Function.Name
 		var result string
 		switch {
-		case strings.HasPrefix(name, "knowledge_"):
-			short := strings.TrimPrefix(name, "knowledge_")
+		case strings.HasPrefix(name, "knowledge-disputes_"):
+			short := strings.TrimPrefix(name, "knowledge-disputes_")
 			e.called = append(e.called, name)
 			result = kbAnswer(short, tc.Function.Arguments)
 		case strings.HasPrefix(name, "records_"):
@@ -255,7 +255,10 @@ func (e *env) run(user string) string {
 			e.t.Fatalf("the model asked for a tool that does not exist: %s", name)
 		}
 		tcj, _ := json.Marshal(map[string]any{"id": tc.ID, "type": "function", "function": map[string]any{"name": name, "arguments": tc.Function.Arguments}})
-		rj, _ := json.Marshal(result)
+		// The kagent runtime hands a tool result to the model as {"output":{"text":"<the tool's JSON, as a string>"}}
+		// (seen live in the pod root-cause use case). The scenarios read it that way.
+		wrapped, _ := json.Marshal(map[string]any{"output": map[string]any{"text": result}})
+		rj, _ := json.Marshal(string(wrapped))
 		msgs = append(msgs, `{"role":"assistant","content":null,"tool_calls":[`+string(tcj)+`]}`,
 			`{"role":"tool","tool_call_id":"`+tc.ID+`","content":`+string(rj)+`}`)
 	}
@@ -352,8 +355,8 @@ func (e *env) approve(id string, full map[string]any) {
 func TestDuplicateChargeStopsAtApprovalThenCreditAfterApproval(t *testing.T) {
 	e := newEnv(t)
 	answer := e.run("Work case DSP-2026-0001")
-	requireOrder(t, e.called, "records_get_case", "records_list_transactions", "records_get_merchant_history", "knowledge_kb_search",
-		"knowledge_kb_graph_search", "records_find_linked_cases", "records_attach_evidence", "records_set_route", "records_draft_letter",
+	requireOrder(t, e.called, "records_get_case", "records_list_transactions", "records_get_merchant_history", "knowledge-disputes_kb_search",
+		"knowledge-disputes_kb_graph_search", "records_find_linked_cases", "records_attach_evidence", "records_set_route", "records_draft_letter",
 		"records_draft_chargeback", "records_set_timer", "records_request_approval")
 	if !strings.Contains(answer, "Fernvale Dispute Handling Policy") {
 		t.Errorf("the answer must cite the policy: %s", answer)
@@ -389,7 +392,7 @@ func TestDuplicateChargeStopsAtApprovalThenCreditAfterApproval(t *testing.T) {
 func TestOutOfTimeClaimIsDeclinedNeverCredited(t *testing.T) {
 	e := newEnv(t)
 	answer := e.run("Work case DSP-2026-0005")
-	requireOrder(t, e.called, "records_get_case", "knowledge_kb_search", "records_set_route", "records_draft_letter", "records_request_approval")
+	requireOrder(t, e.called, "records_get_case", "knowledge-disputes_kb_search", "records_set_route", "records_draft_letter", "records_request_approval")
 	e.never("records_draft_chargeback")
 	if !strings.Contains(answer, "Ficticard Scheme Dispute Rules") || !strings.Contains(strings.ToLower(answer), "decline") {
 		t.Errorf("the answer must cite the scheme rules and say decline: %s", answer)

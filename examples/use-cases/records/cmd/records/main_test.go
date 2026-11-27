@@ -16,7 +16,7 @@ func TestRunServesBothPortsAndStops(t *testing.T) {
 	addrs := make(chan [2]string, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, env(map[string]string{"RECORDS_DATA_DIR": t.TempDir(), "RECORDS_MCP_ADDR": "127.0.0.1:0", "RECORDS_REST_ADDR": "127.0.0.1:0"}),
+		done <- run(ctx, env(map[string]string{"RECORDS_DATA_DIR": t.TempDir(), "RECORDS_MCP_ADDR": "127.0.0.1:0", "RECORDS_REST_ADDR": "127.0.0.1:0", "RECORDS_MCP_INSECURE_NO_AUTH": "true"}),
 			slog.New(slog.NewJSONHandler(io.Discard, nil)), func(mcp, rest string) { addrs <- [2]string{mcp, rest} })
 	}()
 	var a [2]string
@@ -56,7 +56,7 @@ func TestRunServesTheEquipmentDomain(t *testing.T) {
 	addrs := make(chan [2]string, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, env(map[string]string{"RECORDS_DOMAIN": "equipment", "RECORDS_DATA_DIR": t.TempDir(), "RECORDS_MCP_ADDR": "127.0.0.1:0", "RECORDS_REST_ADDR": "127.0.0.1:0"}),
+		done <- run(ctx, env(map[string]string{"RECORDS_DOMAIN": "equipment", "RECORDS_DATA_DIR": t.TempDir(), "RECORDS_MCP_ADDR": "127.0.0.1:0", "RECORDS_REST_ADDR": "127.0.0.1:0", "RECORDS_MCP_INSECURE_NO_AUTH": "true"}),
 			slog.New(slog.NewJSONHandler(io.Discard, nil)), func(mcp, rest string) { addrs <- [2]string{mcp, rest} })
 	}()
 	var a [2]string
@@ -89,7 +89,7 @@ func TestRESTPortDefaultsToLoopback(t *testing.T) {
 func TestRunRefusesBadConfig(t *testing.T) {
 	for name, m := range map[string]map[string]string{
 		"unknown domain":    {"RECORDS_DOMAIN": "zoo", "RECORDS_DATA_DIR": t.TempDir()},
-		"missing approvers": {"RECORDS_APPROVERS_FILE": "/nonexistent/approvers.json", "RECORDS_DATA_DIR": t.TempDir()},
+		"missing approvers": {"RECORDS_APPROVERS_FILE": "/nonexistent/approvers.json", "RECORDS_DATA_DIR": t.TempDir(), "RECORDS_MCP_INSECURE_NO_AUTH": "true"},
 	} {
 		if err := run(context.Background(), env(m), slog.New(slog.NewJSONHandler(io.Discard, nil)), nil); err == nil {
 			t.Errorf("%s: want error", name)
