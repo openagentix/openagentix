@@ -643,6 +643,15 @@ kubectl port-forward -n openagentix-system svc/openagentix-console 8080:8080    
 
 Proven on the kind demo cluster: without a token the API answers 401; an agent created through the API became Ready in 25 s; the console's ServiceAccount cannot read Secrets. Not verified: the browser UI against the real cluster (only the API was used there; the UI was exercised in demo mode); the Playground does not exist yet. Details: [Console](docs/diary/features/console.md), `services/console/README.md`, `docs/console/UI-SPEC.md`.
 
+## Availability
+
+Every Deployment and StatefulSet of the chart has a PodDisruptionBudget with `maxUnavailable: 1` (value `availability.podDisruptionBudgets.enabled`, on by default; [ADR 0024](docs/decisions/0024-availability-defaults.md)). On a workload with one replica this blocks no drain: one eviction is allowed while the pod is healthy. It keeps all but one pod up as soon as a count goes up. An unhealthy pod can always be evicted (`unhealthyPodEvictionPolicy: AlwaysAllow`).
+
+- A pod that two budgets select cannot be evicted. If you wrote budgets for OpenAgentix pods, delete them or set `availability.podDisruptionBudgets.enabled=false`. `install.sh` checks this before it changes anything and stops with exit 1, naming the budget and the workload. With Helm only, check `kubectl get pdb -A` yourself.
+- The account that runs Helm needs `create`, `update` and `delete` on `poddisruptionbudgets` in each platform namespace. The chart needs Kubernetes 1.30 or newer for these objects.
+- `availability.priorityClassName` (empty by default) names an existing PriorityClass for the pods of every Deployment and StatefulSet of the chart. The chart does not create the class; if it does not exist, the API server refuses the pods.
+- Limits: everything still runs one replica (two replicas of the gate and console are the next step, #199). A single pod is down while it moves. A node failure is not a voluntary disruption, so budgets do not help there. What was run is in [what-works.md](docs/diary/what-works.md).
+
 ## Security
 
 What is protected, what is not. Checked on kind (kindnet enforces NetworkPolicy) with kagent 1.0.1, Substrate 1.0.1 and ToolHive 0.67.1.

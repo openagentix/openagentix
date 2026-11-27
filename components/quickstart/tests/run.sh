@@ -274,6 +274,10 @@ else
     G="$ROOT/components/quickstart/tests/golden/$ty-quickstart-byo.calls"
     if [ "${OA_UPDATE_GOLDEN:-0}" = 1 ]; then mkdir -p "$(dirname "$G")"; norm > "$G"; fi
     eq "$ty: the recorded commands equal the golden list ($(wc -l < "$G" | tr -d ' ') calls, components/quickstart/tests/golden/)" "$(norm | diff "$G" - >/dev/null && echo same || { norm | diff "$G" - | head -5; })" same
+    # ADR 0024: the installer reads the budgets of the namespaces (get pdb, a read) but never adopts one: a budget that is not the release's is
+    # not hand-applied chart state (no earlier chart had budgets), and adopting it would let Helm overwrite someone else's budget.
+    eq "$ty: no PodDisruptionBudget is labelled, annotated or read by name (adoption skips them)" "$(norm | /usr/bin/grep -ci 'poddisruptionbudget')" 0
+    eq "$ty: the check reads the budgets of every namespace with a workload, with get only" "$(norm | /usr/bin/grep -c '^kubectl --context [a-z0-9-]* get pdb -n [a-z-]* -o json$')" 4
   done
 fi
 eq "install.sh (ADR 0023): no installer value for the Service type, the exposure check runs after a remote install and from die() once the chart is applied, header documents it" "$(/usr/bin/grep -c 'gateway.serviceType=' "$ROOT/install.sh" | awk '{print ($1<=1)?"header-only":"more"}')/$(/usr/bin/grep -c 'gw_exposure_check "\$K" "\$CTX"' "$ROOT/install.sh")/$(/usr/bin/grep -c 'GW_CHECK_ON_DIE=1' "$ROOT/install.sh")/$(sed -n '1,/^set -euo pipefail/p' "$ROOT/install.sh" | /usr/bin/grep -c 'gateway.serviceType')" header-only/2/1/1
