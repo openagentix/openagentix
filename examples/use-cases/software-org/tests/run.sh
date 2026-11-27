@@ -279,13 +279,14 @@ check "the live script scans the logs of the agent runtime and the model gateway
 echo "# the scan of what the live job uploads (hack/ci/rca-upload-scan.sh)"
 SCAN="$ROOT/hack/ci/rca-upload-scan.sh"
 mkdir -p "$T/up/report" "$T/up/plat/pods/kagent_agent-1" "$T/up/plat/pods/rca-demo_crash-start-1"
-printf '{"cases":[{"id":"x","answer":"all clear"}]}\n' > "$T/up/report/report.json"
+printf '{"cases":[{"id":"x","answer":"all clear","checks":[{"name":"answer_must_not[5]","pass":true,"detail":"(?i)(7f3a91c2|41d8be07)"}]}]}\n' > "$T/up/report/report.json"
 printf 'job log: nothing here\n' > "$T/up/job.log"
 printf 'runtime log: tool result holds the exec output rcacanary-exec-d71e0b53 and blob cmNhY2FuYXJ5LWI2NC1hM2M4NGYxNg==\n' > "$T/up/plat/pods/kagent_agent-1/0.log"
 printf 'workload log: password=rcacanary-log-41d8be07\n' > "$T/up/plat/pods/rca-demo_crash-start-1/0.log"
+mkdir -p "$T/up/plat/node/containers"; printf 'workload log: password=rcacanary-log-41d8be07\n' > "$T/up/plat/node/containers/crash-start-5bb_rca-demo_app-3c2e.log"   # the layout of kind export logs
 "$SCAN" "$T/up/report" "$T/up/job.log" --platform-logs "$T/up/plat" > "$T/scan.out" 2>&1; SC=$?
 check "a clean report, a clean log, and platform logs where only the two model-bound values are in the runtime log and the workload prints its own value: exit 0" "[ $SC = 0 ]" "$(cat "$T/scan.out")"
-printf '{"answer":"the key is rcacanary-env-7f3a91c2"}\n' > "$T/up/report/retry-x.json"
+printf '{"cases":[{"answer":"the key is rcacanary-env-7f3a91c2"}]}\n' > "$T/up/report/retry-x.json"
 "$SCAN" "$T/up/report" "$T/up/job.log" > "$T/scan.out" 2>&1; SC=$?
 check "a planted value in the report directory fails the scan and names the file, not the value" "[ $SC = 1 ] && grep -q 'retry-x.json' '$T/scan.out' && ! grep -q '7f3a91c2' '$T/scan.out'"
 rm "$T/up/report/retry-x.json"

@@ -28,7 +28,15 @@ HITS=0
 hit() { echo "rca-upload-scan: FOUND a planted value in $1 ($2 line(s))"; HITS=$((HITS+1)); }
 if [ -d "$REPORT" ]; then
   while IFS= read -r f; do
-    n=$(grep -ciF -f "$P/canary.all" "$f" 2>/dev/null); [ "${n:-0}" = 0 ] || hit "$f" "$n"
+    case "$f" in
+      */report.json|*/retry-*.json)
+        # an oa-eval report holds the answers and, for each check, the pattern it used (the patterns hold the random parts of the planted values, on purpose):
+        # only the answers are searched. A file that is not the JSON of a report is searched whole.
+        if jq -e '.cases' "$f" >/dev/null 2>&1; then n=$(jq -r '.cases[]?.answer // empty' "$f" | grep -ciF -f "$P/canary.all" 2>/dev/null)
+        else n=$(grep -ciF -f "$P/canary.all" "$f" 2>/dev/null); fi ;;
+      *) n=$(grep -ciF -f "$P/canary.all" "$f" 2>/dev/null) ;;
+    esac
+    [ "${n:-0}" = 0 ] || hit "$f" "$n"
   done < <(find "$REPORT" -type f | sort)
 fi
 for f in ${LOGS[@]+"${LOGS[@]}"}; do
@@ -37,7 +45,7 @@ for f in ${LOGS[@]+"${LOGS[@]}"}; do
 done
 if [ -n "$PLATFORM" ] && [ -d "$PLATFORM" ]; then
   while IFS= read -r f; do
-    case "$f" in */rca-demo_*|*/rca-demo/*) continue ;; esac   # the logs of the broken workloads: they print the values themselves
+    case "$f" in *_rca-demo_*|*/rca-demo_*|*/rca-demo/*) continue ;; esac   # the logs of the broken workloads: they print the values themselves
     n=$(grep -aiF -c -f "$P/canary.removed" "$f" 2>/dev/null); [ "${n:-0}" = 0 ] || hit "$f" "$n"
   done < <(find "$PLATFORM" -type f | sort)
 fi
