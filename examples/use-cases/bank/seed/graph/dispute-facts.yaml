@@ -1,18 +1,18 @@
 # Hand-written facts for the Fernvale dispute desk graph. Everything here is invented. Load with hack/kb-graph-load.sh (no model is used):
 #   hack/kb-graph-load.sh fernvale-disputes fernvale-bank examples/use-cases/bank/seed/graph/dispute-facts.yaml
-# The merchants, devices and cases match the synthetic data of examples/use-cases/records (bank domain). Case ids carry no year here.
+# The merchants, devices and cases match the synthetic data of examples/use-cases/records (bank domain): a test (internal/bank/graphseed_test.go) checks every id. Case ids carry the year 2026, as the records seed does for a pod that started in 2026 (change it with the year of your install). Merchant entities carry the id and the name.
 source_uri: https://example.com/fernvale/dispute-graph
 entities:
-  - {name: Quillfeather Gadgets, type: organization, aliases: [M-560], description: "Merchant of five cases that share one device"}
-  - {name: Marrowgate Travel, type: organization, aliases: [M-504], description: "Merchant with an ordinary dispute history"}
+  - {name: M-560 Quillfeather Gadgets, type: organization, aliases: [M-560], description: "Merchant M-560 of five cases that share one device"}
+  - {name: M-504 Marrowgate Travel, type: organization, aliases: [M-504], description: "Merchant with an ordinary dispute history"}
   - {name: Device dev-7f3a91c2, type: system, description: "Hashed device fingerprint seen on five cards"}
   - {name: Card-not-present burst on one device, type: concept, aliases: [shared device pattern], description: "Several cardholders report the same merchant and the same device in a few days"}
-  - {name: Case DSP-0001, type: event, description: "Duplicate charge at Marrowgate Travel"}
-  - {name: Case DSP-0006, type: event}
-  - {name: Case DSP-0007, type: event}
-  - {name: Case DSP-0008, type: event}
-  - {name: Case DSP-0009, type: event}
-  - {name: Case DSP-0010, type: event}
+  - {name: Case DSP-2026-0001, type: event, description: "Duplicate charge at M-504 Marrowgate Travel"}
+  - {name: Case DSP-2026-0006, type: event}
+  - {name: Case DSP-2026-0007, type: event}
+  - {name: Case DSP-2026-0008, type: event}
+  - {name: Case DSP-2026-0009, type: event}
+  - {name: Case DSP-2026-0010, type: event}
   - {name: Duplicate processing, type: concept, aliases: [P20]}
   - {name: Not recognised, type: concept, aliases: [F10]}
   - {name: Goods or services not received, type: concept, aliases: [S30]}
@@ -25,21 +25,21 @@ entities:
   - {name: Cancellation date, type: concept}
   - {name: Disputes desk lead, type: person, description: "Role desk-lead: the only role that approves a credit, a filing or a letter"}
 relations:
-  - {source: Case DSP-0001, predicate: disputes_charge_at, target: Marrowgate Travel}
-  - {source: Case DSP-0001, predicate: has_reason_code, target: Duplicate processing}
-  - {source: Case DSP-0006, predicate: disputes_charge_at, target: Quillfeather Gadgets}
-  - {source: Case DSP-0007, predicate: disputes_charge_at, target: Quillfeather Gadgets}
-  - {source: Case DSP-0008, predicate: disputes_charge_at, target: Quillfeather Gadgets}
-  - {source: Case DSP-0009, predicate: disputes_charge_at, target: Quillfeather Gadgets}
-  - {source: Case DSP-0010, predicate: disputes_charge_at, target: Quillfeather Gadgets}
-  - {source: Case DSP-0006, predicate: seen_on_device, target: Device dev-7f3a91c2}
-  - {source: Case DSP-0007, predicate: seen_on_device, target: Device dev-7f3a91c2}
-  - {source: Case DSP-0008, predicate: seen_on_device, target: Device dev-7f3a91c2}
-  - {source: Case DSP-0009, predicate: seen_on_device, target: Device dev-7f3a91c2}
-  - {source: Case DSP-0010, predicate: seen_on_device, target: Device dev-7f3a91c2}
+  - {source: Case DSP-2026-0001, predicate: disputes_charge_at, target: M-504 Marrowgate Travel}
+  - {source: Case DSP-2026-0001, predicate: has_reason_code, target: Duplicate processing}
+  - {source: Case DSP-2026-0006, predicate: disputes_charge_at, target: M-560 Quillfeather Gadgets}
+  - {source: Case DSP-2026-0007, predicate: disputes_charge_at, target: M-560 Quillfeather Gadgets}
+  - {source: Case DSP-2026-0008, predicate: disputes_charge_at, target: M-560 Quillfeather Gadgets}
+  - {source: Case DSP-2026-0009, predicate: disputes_charge_at, target: M-560 Quillfeather Gadgets}
+  - {source: Case DSP-2026-0010, predicate: disputes_charge_at, target: M-560 Quillfeather Gadgets}
+  - {source: Case DSP-2026-0006, predicate: seen_on_device, target: Device dev-7f3a91c2}
+  - {source: Case DSP-2026-0007, predicate: seen_on_device, target: Device dev-7f3a91c2}
+  - {source: Case DSP-2026-0008, predicate: seen_on_device, target: Device dev-7f3a91c2}
+  - {source: Case DSP-2026-0009, predicate: seen_on_device, target: Device dev-7f3a91c2}
+  - {source: Case DSP-2026-0010, predicate: seen_on_device, target: Device dev-7f3a91c2}
   - {source: Device dev-7f3a91c2, predicate: shows_pattern, target: Card-not-present burst on one device}
-  - {source: Quillfeather Gadgets, predicate: shows_pattern, target: Card-not-present burst on one device}
-  - {source: Case DSP-0006, predicate: has_reason_code, target: Not recognised}
+  - {source: M-560 Quillfeather Gadgets, predicate: shows_pattern, target: Card-not-present burst on one device}
+  - {source: Case DSP-2026-0006, predicate: has_reason_code, target: Not recognised}
   - {source: Duplicate processing, predicate: requires_evidence, target: Transaction evidence}
   - {source: Duplicate processing, predicate: requires_evidence, target: Refund history}
   - {source: Not recognised, predicate: requires_evidence, target: Transaction evidence}
