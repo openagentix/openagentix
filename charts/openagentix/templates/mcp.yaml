@@ -211,7 +211,10 @@ spec:
     authzConfig:
       type: inline
       inline:
-        policies: ["permit(principal, action, resource);"]
+        {{- /* The profile filter covers tools only. The live check of ADR 0026 (slice 2) found that a profile vMCP lists and reads the resources and prompts of a backend of its
+        group that its profile does not list. A profile on an endpoint group offers tools only: a forbid on resource reads and prompt gets (the lists are filtered by the same
+        actions) stands in front of the permit. */}}
+        policies: {{ if and $grp (ne $grp "diagnostics") }}{{ list "forbid(principal, action == Action::\"read_resource\", resource);" "forbid(principal, action == Action::\"get_prompt\", resource);" "permit(principal, action, resource);" | toJson }}{{ else }}["permit(principal, action, resource);"]{{ end }}
     {{- end }}
   outgoingAuth: {source: discovered}
 {{- end }}

@@ -243,8 +243,8 @@ jobs:
   # Opt-in (workflow_dispatch with the input `endpoints`; ENDPOINTS=1 for the scripts): mcp.endpoints on a real cluster (ADR 0026, slice 2). Two tiny MCP endpoints
   # (hack/ci/endpoints-ci/echo-mcp.py) run in their own namespace BEFORE the platform install, as the ADR says; each takes a header value from a Secret. The job
   # settles that a profile vMCP on the group of the endpoints lists exactly its tools through a real tools/list, that the shared vMCP lists none and refuses a call,
-  # that the endpoint refuses a wrong header, that no log has the value, and records what the vMCP does with `overrides`, with resources and prompts of a backend
-  # the profile does not list, and with a redirect. See hack/ci/endpoints-ci-values.yaml.
+  # that the endpoint refuses a wrong header, that no log has the value, that a profile offers tools only (no resource or prompt of a backend it does not list),
+  # and records what the vMCP does with `overrides` and with a redirect. See hack/ci/endpoints-ci-values.yaml.
   e2e-endpoints:
     name: e2e (endpoints, mcp.endpoints)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoints }}

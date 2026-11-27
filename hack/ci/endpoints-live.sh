@@ -11,8 +11,10 @@
 # endpoint refuses a call with no header and with a wrong one; the header value is in no log line and in no object; the shared vMCP pod has no environment value that
 # references the endpoint Secret; the answer of `kubectl auth can-i get secret/<header Secret>` for the shared vMCP's ServiceAccount is recorded (the remaining risk
 # of ADR 0026 A3); a pod in `default` times out against the endpoint; the endpoint's ingress policy and the group's egress policy exist; every backend stays ready.
-# The last part is a SPIKE (ADR 0026, slice 2): what the vMCP does with the field `overrides`, with resources and prompts of a backend that the profile does not
-# list, and with a redirect. Those lines say "observed" and are recorded for the diary; they are not pass or fail.
+# Resources and prompts: the first live run found that a profile vMCP listed and read the resources and prompts of a backend that its profile does not list (the filter
+# covers tools only), so the chart now forbids resource reads and prompt gets on a profile of an endpoint group; here they are checks.
+# The last part is a SPIKE (ADR 0026, slice 2): what the vMCP does with the field `overrides` and with a redirect. Those lines say "observed" and are recorded for the
+# diary; they are not pass or fail.
 # It never prints a header value. Exit 1 when a check fails.
 set -u
 [ "${ENDPOINTS:-0}" = 1 ] || { echo "endpoints-live: set ENDPOINTS=1 to run this against the current cluster (it is opt-in)"; exit 0; }
@@ -160,14 +162,19 @@ case "$CODE" in
   *) bad "a pod in default reached the endpoint (HTTP $CODE)" "the network plugin of this cluster does not enforce ingress policy, or the policy does not select the pod. The header value is then the only check; do not read this as a pass.";;
 esac
 
-echo "# SPIKE (observations, not pass or fail): resources and prompts of a backend that the profile does not list"
+echo "# resources and prompts: the profile filter covers tools only, so the chart forbids resource reads and prompt gets on a profile of an endpoint group"
+# The first live run of this slice found that, without the forbids, a profile vMCP listed and read the resources and prompts of the endpoint `other`, which the
+# profile does not list. Now the profile offers tools only.
 RES=$(mcp_call $GPORT "$TD/group" "$SID_G" 20 resources/list '{}' 2>/dev/null); PRM=$(mcp_call $GPORT "$TD/group" "$SID_G" 21 prompts/list '{}' 2>/dev/null)
 obs "resources/list through tools-$PROFILE: $(printf '%s' "$RES" | jq -c '(.error // [.result.resources[]?.uri])' 2>/dev/null | cut -c1-300)"
 obs "prompts/list through tools-$PROFILE: $(printf '%s' "$PRM" | jq -c '(.error // [.result.prompts[]?.name])' 2>/dev/null | cut -c1-300)"
+check "resources/list through the group's vMCP shows no resource of the endpoint other (nor of echo)" "$(printf '%s' "$RES" | jq -r '[.result.resources[]?.uri]|length' 2>/dev/null)" 0
+check "prompts/list through the group's vMCP shows no prompt of the endpoint other (nor of echo)" "$(printf '%s' "$PRM" | jq -r '[.result.prompts[]?.name]|length' 2>/dev/null)" 0
 RD=$(mcp_call $GPORT "$TD/group" "$SID_G" 22 resources/read '{"uri":"echo://other/note"}' 2>/dev/null)
-obs "resources/read of echo://other/note (a resource of the endpoint other, which the profile does not list): $(printf '%s' "$RD" | jq -c '(.error // .result.contents)' 2>/dev/null | cut -c1-300)"
-PG=$(mcp_call $GPORT "$TD/group" "$SID_G" 23 prompts/get '{"name":"greet-other"}' 2>/dev/null)
-obs "prompts/get greet-other (a prompt of the endpoint other): $(printf '%s' "$PG" | jq -c '(.error // .result.messages)' 2>/dev/null | cut -c1-300)"
+check "resources/read of a resource of the endpoint other is refused (no contents)" "$(printf '%s' "$RD" | jq -r '([.result.contents[]?]|length>0)|not' 2>/dev/null)" true
+PG=$(mcp_call $GPORT "$TD/group" "$SID_G" 23 prompts/get '{"name":"other_greet-other"}' 2>/dev/null)
+check "prompts/get of a prompt of the endpoint other is refused (no messages)" "$(printf '%s' "$PG" | jq -r '([.result.messages[]?]|length>0)|not' 2>/dev/null)" true
+obs "resources/read answered: $(printf '%s' "$RD" | cut -c1-200); prompts/get answered: $(printf '%s' "$PG" | cut -c1-200)"
 kill $PF2 $PF3 2>/dev/null; PF2=""; PF3=""
 
 echo "# SPIKE (observations): the field overrides of the VirtualMCPServer aggregation (a tool's name and description)"
@@ -185,13 +192,16 @@ spec:
           podSelector: {matchLabels: {app: virtualmcpserver, toolhive-name: tools-ovr}}
 YAML
 $K get virtualmcpserver "tools-$PROFILE" -n "$MCPNS" -o json | jq '{apiVersion,kind,metadata:{name:"tools-ovr",namespace:.metadata.namespace},spec:(.spec|.config.aggregation.tools=[{workload:"echo",filter:["echo"],overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}])}' | $K apply -f - >/dev/null 2>&1 \
-  && { $K rollout status deployment/tools-ovr -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || true
+  && { for _ in $(seq 1 40); do $K get deployment tools-ovr -n "$MCPNS" >/dev/null 2>&1 && break; sleep 3; done
+       $K rollout status deployment/tools-ovr -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || true
+       $K wait virtualmcpserver/tools-ovr -n "$MCPNS" --for=condition=Ready --timeout=120s >/dev/null 2>&1 || true
+       obs "tools-ovr status (conditions left out): $($K get virtualmcpserver tools-ovr -n "$MCPNS" -o json 2>/dev/null | jq -c '.status|del(.conditions)|{phase,backendCount,discoveredBackends:[.discoveredBackends[]?|{name,status,message:(.message|tostring|.[0:80])}]}' 2>/dev/null | cut -c1-500)"
        $K port-forward -n "$MCPNS" svc/vmcp-tools-ovr "$XPORT:4483" >/dev/null 2>&1 & PF4=$!
        sleep 4
        SID_O=-
-       for _ in $(seq 1 6); do SID_O=$(mcp_open $XPORT "$TD/group"); [ "$SID_O" != - ] && break; sleep 5; done
+       for _ in $(seq 1 8); do SID_O=$(mcp_open $XPORT "$TD/group"); [ "$SID_O" != - ] && break; sleep 5; done
        OVR=$(mcp_call $XPORT "$TD/group" "$SID_O" 2 tools/list '{}' 2>/dev/null)
-       obs "tools/list with overrides {echo: {name: renamed_echo, description: ...}}: $(printf '%s' "$OVR" | jq -c '[.result.tools[]?|{name,description}]' 2>/dev/null | cut -c1-400)"
+       obs "tools/list with overrides {echo: {name: renamed_echo, description: ...}}: $(printf '%s' "$OVR" | jq -c '[.result.tools[]?|{name,description}]' 2>/dev/null | cut -c1-400) (session $([ "$SID_O" = - ] && echo none || echo open); raw answer: $(printf '%s' "$OVR" | cut -c1-160))"
        kill $PF4 2>/dev/null; PF4=""; } \
   || { obs "the probe vMCP tools-ovr could not be applied"; }
 
@@ -281,7 +291,8 @@ YAML
 $K rollout status deployment/probe-redir -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || true
 sleep 20
 obs "the vMCP probe-redir, backend redir: $($K get virtualmcpserver probe-redir -n "$MCPNS" -o json 2>/dev/null | jq -c '[.status.discoveredBackends[]?|{name,status,message:(.message|tostring|.[0:120])}]' 2>/dev/null)"
-obs "requests that reached the redirect target (sink), by what the Authorization header was: $($K logs -n "$ENS" deploy/sink --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request")|.presented]|group_by(.)|map(.[0]+"="+(length|tostring))|join(", ")' 2>/dev/null)"
+obs "requests that reached the redirecting server (redir), by what its Authorization header was (other = a value this server does not know, none = no header): $($K logs -n "$ENS" deploy/redir --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request")|.presented]|group_by(.)|map(.[0]+"="+(length|tostring))|join(", ")' 2>/dev/null)"
+obs "requests that reached the redirect target (sink), by what the Authorization header was (redir = the value the vMCP sends to redir): $($K logs -n "$ENS" deploy/sink --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request")|.presented]|group_by(.)|map(.[0]+"="+(length|tostring))|join(", ")' 2>/dev/null)"
 obs "a custom header on a redirect: not tested (an entry of mcp.endpoints has one header; the field headerForward is not rendered with more)"
 
 echo
