@@ -581,6 +581,17 @@ the users from the render and fails if one is missing. */ -}}
 {{- if not (kindIs "slice" ($p.reservedNames | default list)) }}{{ fail "controlPlane.policy.reservedNames must be a list of names" }}{{ end }}
 {{- $o := $e.allowedOrigins | default list -}}
 {{- if not (kindIs "slice" $o) }}{{ fail "controlPlane.policy.egress.allowedOrigins must be a list of origins (an empty list allows no egress)" }}{{ end -}}
+{{- /* the controller and the guard refuse the whole namespace of an endpoint of mcp.endpoints, so the render refuses a host in it too (the endpoint's own host forms are refused with their own sentence in oa.agentEgress) */ -}}
+{{- $epNs := include "oa.epNamespaces" . | fromJsonArray -}}
+{{- if $epNs -}}
+{{- range $x := $o }}
+{{- if kindIs "string" $x -}}
+{{- $oh := regexReplaceAll "^https?://([^:/]+).*$" $x "${1}" -}}
+{{- $in := include "oa.epInNs" (dict "host" $oh "nss" $epNs) -}}
+{{- if and $in (not (include "oa.epHostNamed" (dict "host" $oh "forms" (include "oa.epHosts" $ | fromJsonArray)))) }}{{ fail (printf "controlPlane.policy.egress.allowedOrigins entry %s is inside the namespace %q of an entry of mcp.endpoints: the controller and the admission guard refuse every host of that namespace, and the controller would not start. Take it out of the list" $x $in) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $_ := include "oa.agentEgress" (dict "root" . "agent" (dict "name" "controlPlane.policy.egress.allowedOrigins" "egress" (dict "allow" $o))) -}}
 {{- $ic := $e.inClusterDestinations | default list -}}
 {{- if not (kindIs "slice" $ic) }}{{ fail "controlPlane.policy.egress.inClusterDestinations must be a list of host:port (an empty list allows no in-cluster destination)" }}{{ end -}}
@@ -594,6 +605,8 @@ the users from the render and fails if one is missing. */ -}}
 {{- end }}
 {{- if or (eq $h "kubernetes") (eq $h "kubernetes.default") (hasPrefix "kubernetes.default." $h) }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v is the Kubernetes API service and can never be listed" $x) }}{{ end }}
 {{- if include "oa.epHostNamed" (dict "host" $h "forms" (include "oa.epHosts" $ | fromJsonArray)) }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v names the host of an entry of mcp.endpoints (in any form): that would reach the endpoint around its tool profile and can never be listed" $x) }}{{ end }}
+{{- $inEp := include "oa.epInNs" (dict "host" $h "nss" (include "oa.epNamespaces" $ | fromJsonArray)) }}
+{{- if $inEp }}{{ fail (printf "controlPlane.policy.egress.inClusterDestinations entry %v is inside the namespace %q of an entry of mcp.endpoints: the controller and the admission guard refuse every host of that namespace, and the controller would not start. Take it out of the list" $x $inEp) }}{{ end }}
 {{- end }}
 {{- if ne (len $ic) (len (uniq $ic)) }}{{ fail "controlPlane.policy.egress.inClusterDestinations lists an entry twice" }}{{ end -}}
 {{- if and $p.allowNotify (not (and .Values.notify.enabled .Values.mcp.enabled)) }}{{ fail "controlPlane.policy.allowNotify needs notify.enabled=true and mcp.enabled=true: the catalog has no notify tools, so every definition asking for notify would be refused" }}{{ end -}}

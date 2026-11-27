@@ -45,6 +45,16 @@ host, so a check on one form must see the other two (ADR 0026 A2). Tolerant: a U
 {{- $out | uniq | toJson -}}
 {{- end -}}
 
+{{/* The namespace of the list that the host is inside, in any form (.<ns>, .<ns>.svc, .<ns>.svc.cluster.local; a wildcard "*." in front is cut, and the bare <ns>.svc and
+<ns>.svc.cluster.local count too), or "". Argument: dict "host" <host, no scheme, no port> "nss" <list of namespaces>. The control plane refuses such a host for the controller's
+policy lists (the controller and the guard refuse the whole namespace of an endpoint), so the render says so first. */}}
+{{- define "oa.epInNs" -}}
+{{- $h := trimPrefix "*." .host -}}
+{{- range $n := .nss -}}
+{{- if or (hasSuffix (printf ".%s" $n) $h) (hasSuffix (printf ".%s.svc" $n) $h) (hasSuffix (printf ".%s.svc.cluster.local" $n) $h) (eq $h (printf "%s.svc" $n)) (eq $h (printf "%s.svc.cluster.local" $n)) -}}{{ $n }}{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* JSON list of the namespaces of the endpoints with an in-cluster URL, sorted. The catalog carries it, so that the guard and the controller refuse an egress host in any of
 these namespaces in every form, whatever the shape of the namespace name (ADR 0026 review). Tolerant like oa.epHosts. */}}
 {{- define "oa.epNamespaces" -}}
@@ -192,6 +202,11 @@ control plane's lists (oa.epDefsCheck does), so oa.profilesCheck can include it.
 {{- range $x := $cp.apiServerCIDRs }}
 {{- if not (and (kindIs "string" $x) (or (regexMatch "^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$" $x) (regexMatch "^[0-9a-fA-F:]*:[0-9a-fA-F:.]*/([0-9]{1,2}|1[01][0-9]|12[0-8])$" $x))) }}{{ fail (printf "controlPlane.apiServerCIDRs entry %v is not a CIDR (for example 10.0.0.0/24)" $x) }}{{ end }}
 {{- end -}}
+{{- $idp := (($.Values.networkPolicy.substrate | default dict).idp) | default dict -}}
+{{- $idpl := $idp.podLabels | default dict -}}
+{{- if or (not (kindIs "map" $idpl)) (not $idpl) }}{{ fail "networkPolicy.substrate.idp.podLabels must be a non-empty map of string labels (the pods of the Substrate identity provider, app: ate-idp-server in Substrate 1.0.1): an empty selector would admit every pod of the Substrate namespace in the egress policy of the group's vMCPs" }}{{ end -}}
+{{- range $k, $v := $idpl }}{{ if not (kindIs "string" $v) }}{{ fail "networkPolicy.substrate.idp.podLabels must be a non-empty map of string labels (the pods of the Substrate identity provider, app: ate-idp-server in Substrate 1.0.1): an empty selector would admit every pod of the Substrate namespace in the egress policy of the group's vMCPs" }}{{ end }}{{ end -}}
+{{- if not (and (or (kindIs "float64" $idp.port) (kindIs "int64" $idp.port) (kindIs "int" $idp.port)) (ge (int $idp.port) 1) (le (int $idp.port) 65535)) }}{{ fail "networkPolicy.substrate.idp.port must be a port number (the pod port of the Substrate identity provider, 8443 in Substrate 1.0.1): the egress policy of the group's vMCPs admits that port only" }}{{ end -}}
 {{- $plat := include "oa.epPlatformNs" . | fromJsonArray -}}
 {{- $taken := dict -}}
 {{- range $s := ($m.servers | default list) }}{{ $_ := set $taken (toString $s.name) "an entry of mcp.servers" }}{{ end -}}
