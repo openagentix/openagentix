@@ -137,6 +137,24 @@ func TestSendMessage_Short(t *testing.T) {
 	}
 }
 
+func TestSendMessage_LinkPreviewsOff(t *testing.T) {
+	f := newFakeTG(t, func(string) (int, string) { return 200, `{"ok":true,"result":{"message_id":5}}` })
+	long := strings.Repeat("a", 4096) + "b"
+	if err := NewClient(f.srv.URL, "T", f.srv.Client()).SendMessage(context.Background(), 1, long); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("got %d calls, want 2", len(calls))
+	}
+	for i, c := range calls {
+		opts, _ := c.body["link_preview_options"].(map[string]any)
+		if opts["is_disabled"] != true {
+			t.Fatalf("call %d: link_preview_options = %v, want is_disabled true", i, c.body["link_preview_options"])
+		}
+	}
+}
+
 func TestSendMessage_SplitsLongText(t *testing.T) {
 	f := newFakeTG(t, func(string) (int, string) { return 200, `{"ok":true,"result":{"message_id":5}}` })
 	long := strings.Repeat("a", 4096) + strings.Repeat("b", 4096) + "c"
