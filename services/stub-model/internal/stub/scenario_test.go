@@ -218,3 +218,38 @@ func TestLoadFromDirectoryAndValidation(t *testing.T) {
 		t.Error("missing file: expected an error")
 	}
 }
+
+// A ConfigMap volume holds each key as a symlink to ..data/<key>, and ..data is a symlink to a timestamped directory (ADR 0026, B).
+// The stub must load that layout the same as plain files, and ignore the hidden entries.
+func TestLoadScenariosConfigMapLayout(t *testing.T) {
+	dir := t.TempDir()
+	stamp := "..2026_11_27_10_00_00.123456789"
+	if err := os.Mkdir(filepath.Join(dir, stamp), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stamp, "bank.json"), []byte(disputeJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := strings.Replace(disputeJSON, `"name":"dispute"`, `"name":"second"`, 1)
+	if err := os.WriteFile(filepath.Join(dir, stamp, "a-second.json"), []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(stamp, filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"bank.json", "a-second.json"} {
+		if err := os.Symlink(filepath.Join("..data", n), filepath.Join(dir, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := LoadScenarios(dir)
+	if err != nil {
+		t.Fatalf("configmap layout: %v", err)
+	}
+	if got := len(s.list); got != 2 {
+		t.Fatalf("scenarios loaded = %d, want 2", got)
+	}
+	if s.list[0].Name != "second" || s.list[1].Name != "dispute" {
+		t.Errorf("order = %q, %q; want name order of the files (a-second.json, bank.json)", s.list[0].Name, s.list[1].Name)
+	}
+}

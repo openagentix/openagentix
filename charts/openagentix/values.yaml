@@ -234,6 +234,17 @@ gateway:
     resources:
       requests: {cpu: 5m, memory: 8Mi}
       limits: {cpu: 100m, memory: 32Mi}
+    # Scripted answers for tests, demos and evaluation sets (ADR 0026, B). The stub is a test component, not a model: a scenario decides
+    # which tools an agent calls and with which arguments, and its placeholders copy text from the user's message into tool arguments.
+    # So a run with scenarios is a SCRIPTED run: a demo, a diary entry or a what-works row says so and names the scenario file.
+    # Empty (the default): nothing changes. With at least one file the chart renders a ConfigMap `stub-model-scenarios` (one key per
+    # file), mounts it read-only at /etc/stub-model/scenarios, sets STUB_MODEL_SCENARIOS, and a content change rolls the pod.
+    # Refused at render: files while the stub is off; a name that is not lowercase letters, digits and dashes ending in .json (at most 63
+    # characters before the dot); a value that is not a string, not a JSON object or without a `scenarios` list; more than 256 KiB in total.
+    # Use cases keep their scenario files next to their tests and ship them with install.sh STUB_SCENARIOS=<file or directory>, which
+    # passes each file with --set-file (the dot of the name escaped); pass it on every run, because Helm replaces release values.
+    scenarios:
+      files: {}                   # file name (*.json) -> JSON text
   policy:
     name: model-gateway-policy    # the ONE AgentgatewayPolicy (docs warn that several can overwrite each other)
     apiKeyLabel: agentgateway.dev/apikey   # ConfigMaps with this label hold virtual-key hashes (install.sh)
