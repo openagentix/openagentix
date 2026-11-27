@@ -80,3 +80,27 @@ diag_bearer_restart() {
     echo "restarted vMCP $ns/$name (it holds the bearer value as an environment value)"
   done
 }
+
+# diag_bearer_wait_server <kubectl command> <diagnostics namespace> <server> <seconds>
+# After a repair the server reads the new value from the mounted Secret only when the kubelet has refreshed it (about a minute). A vMCP that restarts
+# before that would read the new value from its own Secret and be refused (401) by a server that still holds the old one. So: port-forward to the
+# server and poll /mcp with the new value until it answers 200, bounded. Returns 1 with a fixed WARN when it never does (the caller goes on).
+diag_bearer_wait_server() {
+  local k=$1 ns=$2 srv=$3 bound=$4 port pf val waited=0 code="" init
+  port=$((20000 + RANDOM % 20000))
+  init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"installer","version":"0"}}}'
+  $k port-forward -n "$ns" "svc/$srv" "$port:8080" >/dev/null 2>&1 & pf=$!
+  sleep 2
+  val=$($k get secret -n "$ns" "$srv-bearer" -o jsonpath='{.data.bearer}' 2>/dev/null | base64 -d 2>/dev/null)
+  while :; do
+    # the value goes to curl through a config file made by process substitution, never as an argument
+    code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -K <(printf 'header = "Authorization: Bearer %s"\n' "$val") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$init" "http://127.0.0.1:$port/mcp" 2>/dev/null)
+    [ "$code" = 200 ] && break
+    [ "$waited" -lt "$bound" ] || break
+    sleep 5; waited=$((waited + 5))
+  done
+  kill "$pf" 2>/dev/null; unset val
+  if [ "$code" = 200 ]; then echo "the server $srv takes the new bearer value"; return 0; fi
+  echo "WARN: the server $srv did not accept the bearer value within $bound s (the mounted Secret may not be refreshed yet); the vMCPs are restarted anyway" >&2
+  return 1
+}

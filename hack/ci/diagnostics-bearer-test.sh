@@ -35,6 +35,13 @@ case "\$*" in
 esac
 exit 0
 EOS
+cat > "$D/bin/curl" <<EOS
+#!/usr/bin/env bash
+echo "curl \$*" >> "$D/curlcalls"
+n=\$(cat "$D/curln" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$D/curln"
+if [ "\$n" -gt "\${FAKE_CURL_OK_AFTER:-0}" ]; then printf 200; else printf 401; fi
+EOS
+printf '#!/usr/bin/env bash\necho "sleep $*" >> "%s/sleeps"\n' "$D" > "$D/bin/sleep"
 chmod +x "$D/bin/"*
 run() { : > "$D/calls"; PATH="$D/bin:$PATH" bash -c '. hack/diagnostics-bearer.sh; diag_bearer_ensure kubectl mcp-tools openagentix-diagnostics cluster-read; r=$?; echo "changed=${DIAG_BEARER_CHANGED:-unset}"; exit $r' 2>&1; echo "exit=$?"; }
 SERVER="$D/state/openagentix-diagnostics__cluster-read-bearer/bearer"
@@ -115,6 +122,20 @@ PATH="$D/bin:$PATH" bash -c '. hack/diagnostics-bearer.sh; diag_bearer_restart k
 t "diag_bearer_restart restarts and waits for each vMCP Deployment" "$(grep -c '^kubectl rollout restart deployment/tools-rca -n mcp-tools$' "$D/calls")/$(grep -c '^kubectl rollout status deployment/tools-rca2 -n mcp-tools' "$D/calls")" 1/1
 t "the restart output holds no value" "$(cat "$D/out.txt" "$D/calls" | grep -c "$CANARY")" 0
 t "install.sh restarts the vMCPs of the group when the value changed" "$(grep -c 'diag_bearer_restart' install.sh)" 1
+
+echo "# review F4: after a repair the installer waits until the server takes the new value (the kubelet refreshes the mounted Secret in about a minute)"
+rm -rf "$D/state"; mkdir -p "$D/state"; run >/dev/null
+wait_srv() { : > "$D/curlcalls"; : > "$D/sleeps"; echo 0 > "$D/curln"; : > "$D/calls"; PATH="$D/bin:$PATH" bash -c '. hack/diagnostics-bearer.sh; diag_bearer_wait_server kubectl openagentix-diagnostics cluster-read "$1"; echo "rc=$?"' _ "$1" 2>&1; }
+OUT=$(FAKE_CURL_OK_AFTER=0 wait_srv 60)
+t "the server already takes the value: rc 0 at once, no wait" "$(grep -c '^rc=0$' <<<"$OUT")/$(wc -l < "$D/sleeps" | tr -d ' ')" 1/1
+OUT=$(FAKE_CURL_OK_AFTER=3 wait_srv 60)
+t "the server takes the value on the fourth try: rc 0" "$(grep -c '^rc=0$' <<<"$OUT")" 1
+t "it polled four times" "$(wc -l < "$D/curlcalls" | tr -d ' ')" 4
+OUT=$(FAKE_CURL_OK_AFTER=999 wait_srv 20)
+t "the server never takes it: rc 1 after the bound, with a fixed message" "$(grep -c '^rc=1$' <<<"$OUT")/$(grep -c 'WARN: the server cluster-read did not accept the bearer value within 20 s' <<<"$OUT")" 1/1
+t "the polls are bounded (at most 20 / 5 + 1)" "$([ "$(wc -l < "$D/curlcalls" | tr -d ' ')" -le 6 ] && echo yes || echo no)" yes
+t "the value is in no curl argument, no kubectl argument, no output" "$(cat "$D/curlcalls" "$D/calls" | grep -c "$CANARY")/$(grep -c "$CANARY" <<<"$OUT")" 0/0
+t "install.sh waits for the server before it restarts the vMCPs" "$(grep -c 'diag_bearer_wait_server' install.sh)" 1
 
 echo "# the installer uses it"
 t "install.sh sources hack/diagnostics-bearer.sh" "$(grep -c '^[[:space:]]*\. hack/diagnostics-bearer.sh' install.sh)" 1

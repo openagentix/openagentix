@@ -14,6 +14,7 @@ on:
       - console/**
       - hack/ci/smoke.sh
       - hack/ci/diagnostics-live.sh
+      - hack/ci/diagnostics-ci-values.yaml
       - hack/ci/phases.sh
       - hack/demo.sh
       - hack/ask.sh
@@ -24,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       diagnostics:
-        description: 'Run the live check of cluster-read (ADR 0025, slice 4) instead of the profiles: the quick start plus components/diagnostics/ci-values.yaml'
+        description: 'Run the live check of cluster-read (ADR 0025, slice 4) instead of the profiles: the quick start plus hack/ci/diagnostics-ci-values.yaml'
         type: boolean
         default: false
 
@@ -162,7 +163,7 @@ jobs:
 
   # Opt-in (workflow_dispatch with the input `diagnostics`; DIAGNOSTICS=1 for the script): cluster-read on a real API server. It settles whether the server
   # becomes Ready (its rights check passes with the default discovery rules of a real ServiceAccount, the open question R2 of the code review of ADR 0025
-  # slice 3) and what ToolHive loaded for the dedicated profile (the eight tools) and for the shared vMCP (none). See components/diagnostics/ci-values.yaml.
+  # slice 3) and what ToolHive loaded for the dedicated profile (the eight tools) and for the shared vMCP (none). See hack/ci/diagnostics-ci-values.yaml.
   e2e-diagnostics:
     name: e2e (diagnostics, cluster-read)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics }}
@@ -179,7 +180,7 @@ jobs:
       - name: install (PROFILE=quickstart plus the diagnostics values, no key, no token)
         env:
           PROFILE: quickstart
-          VALUES_FILE: components/diagnostics/ci-values.yaml
+          VALUES_FILE: hack/ci/diagnostics-ci-values.yaml
           AGENT_WAIT: 300s
         run: |
           set -o pipefail

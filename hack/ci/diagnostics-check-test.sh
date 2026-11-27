@@ -66,6 +66,28 @@ rm -f "$D/tools-rca.json"
 OUT=$(run 3 1 mcp-tools/tools-rca)
 t "a vMCP that cannot be read is a warning too (not a failure), and no message is invented" "$(grep -c '^exit=0$' <<<"$OUT")/$(grep -c 'WARN' <<<"$OUT")" 1/1
 
+echo "# the live script refuses a cluster that is not a CI cluster (review N1)"
+cat > "$D/bin/kubectl-ctx" <<EOS
+#!/usr/bin/env bash
+echo "kubectl \$*" >> "$D/live-calls"
+[ "\$1 \$2" = "config current-context" ] && { echo "\$FAKE_CTX"; exit 0; }
+exit 0
+EOS
+chmod +x "$D/bin/kubectl-ctx"
+live() { : > "$D/live-calls"; env -i PATH="$PATH" HOME="$HOME" KUBECTL="$D/bin/kubectl-ctx" "$@" bash hack/ci/diagnostics-live.sh 2>&1; echo "exit=$?"; }
+OUT=$(live DIAGNOSTICS=0 FAKE_CTX=kind-openagentix)
+t "without DIAGNOSTICS=1 it does nothing (exit 0, no call)" "$(grep -c '^exit=0$' <<<"$OUT")/$(wc -l < "$D/live-calls" | tr -d ' ')" 1/0
+OUT=$(live DIAGNOSTICS=1 FAKE_CTX=gke_prod_europe_main GITHUB_ACTIONS=true)
+t "a context that is not kind or k3d is refused, even on Actions" "$(grep -c '^exit=2$' <<<"$OUT")/$(grep -c 'not a kind or k3d context' <<<"$OUT")" 1/1
+OUT=$(live DIAGNOSTICS=1 FAKE_CTX=kind-openagentix)
+t "a kind context outside CI is refused (it could be the owner's cluster)" "$(grep -c '^exit=2$' <<<"$OUT")/$(grep -c 'not a CI run' <<<"$OUT")" 1/1
+t "a refusal changes nothing: the only call was reading the context" "$(grep -vc '^kubectl config current-context$' "$D/live-calls")" 0
+OUT=$(live DIAGNOSTICS=1 FAKE_CTX=kind-openagentix DIAGNOSTICS_CI_CONTEXT=kind-other)
+t "DIAGNOSTICS_CI_CONTEXT must name the current context exactly" "$(grep -c '^exit=2$' <<<"$OUT")" 1
+t "the script deletes what it made on exit (the cluster role binding and the ConfigMap)" "$(grep -c 'delete clusterrolebinding ci-jwks-anonymous' hack/ci/diagnostics-live.sh)/$(grep -c 'delete configmap ci-apiserver-ca' hack/ci/diagnostics-live.sh)" 1/1
+t "the values file of the live job is under hack/ci, and components/diagnostics is gone" "$([ -f hack/ci/diagnostics-ci-values.yaml ] && [ ! -e components/diagnostics ] && echo yes)" yes
+t "that file says it is for CI only" "$(grep -c 'CI ONLY' hack/ci/diagnostics-ci-values.yaml | awk '{print ($1>0)?1:0}')" 1
+
 echo "# the installer uses it"
 t "install.sh sources hack/diagnostics-check.sh" "$(grep -c '^[[:space:]]*\. hack/diagnostics-check.sh' install.sh)" 1
 t "install.sh calls diag_check_vmcps and stops the install on its failure" "$(grep -c 'diag_check_vmcps .* || die' install.sh)" 1

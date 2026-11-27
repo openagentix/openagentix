@@ -95,6 +95,7 @@ R2 was the open question of the review of slice 3: the server's rights check all
 - A diagnostics profile is left out of the control plane catalog, and so out of the AgentTemplate guard, while `diagnostics.allowDefinitions` is false.
 - The render refuses an empty `diagnostics.apiServerCIDRs` unless `diagnostics.allowAnyApiServerAddress` is true (a helm-only install that sets no addresses). `install.sh` finds the addresses.
 - `hack/diagnostics-bearer.sh` treats only "not found" as an absent Secret. Any other error while reading stops the run, so an API error can never make a new value. When an existing Secret was rewritten, `install.sh` restarts the vMCP Deployments of the group, because they hold the value as an environment value.
+- After a repair of the bearer Secrets the server sees the new value only after the kubelet refreshes the mounted Secret (about a minute). `install.sh` therefore polls the server with the new value until it answers 200 (bounded at 150 s, tested with a fake), and only then restarts the vMCPs of the group. On a timeout it warns and restarts anyway.
 - A helm-only install creates the namespace (with the Pod Security labels) and the two bearer Secrets itself. See the comment of the `diagnostics` values.
 
 ## Limits, stated

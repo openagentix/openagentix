@@ -1,5 +1,7 @@
+# CI ONLY. These values make a cluster unfit for agents: the tool gateways trust the API server's own tokens, and the namespaces listed below are ones
+# only a throwaway CI cluster has. hack/ci/diagnostics-live.sh refuses to run anywhere but on GitHub Actions (or a context named by DIAGNOSTICS_CI_CONTEXT).
 # Values of the live check of cluster-read (ADR 0025 slice 4), on top of the quick start:
-#   PROFILE=quickstart VALUES_FILE=components/diagnostics/ci-values.yaml ./install.sh      then      DIAGNOSTICS=1 hack/ci/diagnostics-live.sh
+#   PROFILE=quickstart VALUES_FILE=hack/ci/diagnostics-ci-values.yaml ./install.sh      then      DIAGNOSTICS=1 hack/ci/diagnostics-live.sh
 # The e2e workflow runs it on request (workflow_dispatch, input `diagnostics`). It is NOT a recommended configuration: it lists
 # kube-system and the platform namespace as status namespaces only to show that the rights check passes on a real API server.
 # What it settles: the server becomes Ready (its rights check passes with the default discovery rules of a real ServiceAccount), the

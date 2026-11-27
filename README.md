@@ -625,6 +625,8 @@ mcp:
         cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
 ```
 
+A small edge: after a repair of the bearer Secrets, the server sees the new value only when the kubelet has refreshed the mounted Secret (about a minute). So `install.sh` first waits, bounded, until the server answers 200 to the new value, and only then restarts the vMCPs of the group, which hold the value as an environment value. If the server never takes it within the bound, the installer says so and restarts them anyway.
+
 What is proven: the chart, the admission policy and the installer steps are tested offline and the policy on a real API server in CI. A live check runs on request (`e2e` workflow, input `diagnostics`). Its first result: on kind with Kubernetes 1.37 the server does not become Ready, because its rights check calls a default read of `clustertrustbundles` forbidden (see the diary page). It also makes real calls through the gateways with tokens of the API server (tools/list, a call, a call refused on the shared tool server) and checks that a pod in another namespace times out. Not proven: a root-cause run by an agent (slice 5 of the ADR). More in [the diagnostics page of the diary](docs/diary/features/diagnostics.md).
 
 ## Control plane and agent builder
@@ -731,7 +733,6 @@ services/console/               Go API of the web console, with the built app em
 services/a2a-gate/              Go A2A gate: caller authentication, caller rules, audit lines
 services/stub-model/            Go scripted stub model for the keyless quick start
 services/diagnostics/          Go read-only tool servers for diagnostic agents (today: cluster-read; ADR 0025)
-components/diagnostics/         values for the live check of cluster-read (ci-values.yaml)
 console/                        SvelteKit single-page app of the console
 components/control-plane/       demo values and an example AgentDefinition
 components/quickstart/          the quick start profile (values.yaml), its AgentDefinition, model choice (model.sh) and offline tests

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Live check of cluster-read on a cluster that ./install.sh set up with components/diagnostics/ci-values.yaml (ADR 0025, slice 4).
-#   PROFILE=quickstart VALUES_FILE=components/diagnostics/ci-values.yaml ./install.sh
+# Live check of cluster-read on a cluster that ./install.sh set up with hack/ci/diagnostics-ci-values.yaml (ADR 0025, slice 4).
+#   PROFILE=quickstart VALUES_FILE=hack/ci/diagnostics-ci-values.yaml ./install.sh
 #   DIAGNOSTICS=1 hack/ci/diagnostics-live.sh
 # Opt-in: it does nothing without DIAGNOSTICS=1, so a stray local run never touches the cluster you are on. The e2e workflow runs it on request.
 #
@@ -12,6 +12,28 @@
 set -u
 [ "${DIAGNOSTICS:-0}" = 1 ] || { echo "diagnostics-live: set DIAGNOSTICS=1 to run this against the current cluster (it is opt-in)"; exit 0; }
 K=${KUBECTL:-kubectl}
+# This script changes the cluster it runs on (a ClusterRoleBinding, a ConfigMap, a restart of two vMCPs, a throwaway pod) and the cluster must be a CI
+# cluster: the install used values (hack/ci/diagnostics-ci-values.yaml) that break the agents' tool path. It refuses to run anywhere else: on GitHub
+# Actions (GITHUB_ACTIONS=true), or when DIAGNOSTICS_CI_CONTEXT names the current kube context exactly, and only on a kind or k3d context.
+CTX_NOW=$($K config current-context 2>/dev/null || true)
+case "$CTX_NOW" in
+  kind-*|k3d-*) ;;
+  *) echo "diagnostics-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
+esac
+if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${DIAGNOSTICS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
+  echo "diagnostics-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and DIAGNOSTICS_CI_CONTEXT does not name this context. This script changes the cluster; do not run it on a cluster you use. Nothing was changed." >&2
+  exit 2
+fi
+CHANGED_CRB=0; CHANGED_CM=0; PF=""; PF2=""; PF3=""; TD=""
+# undo what this script changed, on every way out
+cleanup() {
+  kill $PF $PF2 $PF3 2>/dev/null
+  [ -z "$TD" ] || rm -rf "$TD"
+  [ "$CHANGED_CRB" != 1 ] || $K delete clusterrolebinding ci-jwks-anonymous --ignore-not-found >/dev/null 2>&1
+  [ "$CHANGED_CM" != 1 ] || $K delete configmap ci-apiserver-ca -n "${MCPNS:-mcp-tools}" --ignore-not-found >/dev/null 2>&1
+  $K delete pod nettest -n default --ignore-not-found --wait=false >/dev/null 2>&1
+}
+trap cleanup EXIT
 DNS=openagentix-diagnostics; MCPNS=${MCP_NAMESPACE:-mcp-tools}; KNS=${KAGENT_NAMESPACE:-kagent}; PROFILE=${DIAG_PROFILE:-rca}
 LOGNS=${DIAG_LOG_NAMESPACE:-diag-ci}
 PASS=0; FAIL=0
@@ -32,7 +54,6 @@ check "the pod runs the ServiceAccount cluster-read with the default projected t
 echo "# the server refuses a call without the bearer value, and takes the one the gateway sends"
 PORT=$((20000 + RANDOM % 20000))
 $K port-forward -n "$DNS" svc/cluster-read "$PORT:8080" >/dev/null 2>&1 & PF=$!
-trap 'kill $PF 2>/dev/null' EXIT
 sleep 3
 check "/readyz answers 200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/readyz")" 200
 INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"diag-live","version":"0"}}}'
@@ -85,11 +106,12 @@ check "the shared vMCP's configuration has the eight forbid policies (the second
 check "the shared vMCP's configuration was found (the control is not empty)" "$([ -n "$CFG_SH" ] && echo yes || echo no)" yes
 echo "       kagent says: $($K get remotemcpserver -n "$KNS" "toolhive-vmcp-$PROFILE" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)"
 
-echo "# real calls through the gateway (review F5): the vMCPs trust the API server's own tokens in this job (components/diagnostics/ci-values.yaml)"
+echo "# real calls through the gateway (review F5): the vMCPs trust the API server's own tokens in this job (hack/ci/diagnostics-ci-values.yaml)"
 # The values make the vMCPs accept ServiceAccount tokens of the API server (issuer and keys of the cluster) instead of Substrate's actor tokens, so that
 # this script can make a token and call the gateway itself. That breaks the agents' tool path in this cluster, which nothing here uses. The script
 # gives the vMCPs the cluster's CA (the installer put Substrate's into the ConfigMap), lets them read the public keys without a token, and restarts them.
 CA_CM=ci-apiserver-ca
+CHANGED_CM=1; CHANGED_CRB=1   # the cleanup deletes both (the CM exists after the installer anyway; the CRB is ours)
 $K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n "$CA_CM" '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
 $K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
 for v in tools "tools-$PROFILE"; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
@@ -112,7 +134,6 @@ TD=$(mktemp -d)
 RP=$((30000 + RANDOM % 10000)); SP=$((RP + 1))
 $K port-forward -n "$MCPNS" "svc/vmcp-tools-$PROFILE" "$RP:4483" >/dev/null 2>&1 & PF2=$!
 $K port-forward -n "$MCPNS" svc/vmcp-tools "$SP:4483" >/dev/null 2>&1 & PF3=$!
-trap 'kill $PF $PF2 $PF3 2>/dev/null; rm -rf "$TD"' EXIT
 sleep 4
 mcp_token openagentix-vmcp-$PROFILE > "$TD/rca"; mcp_token openagentix-vmcp > "$TD/shared"
 check "a token for the dedicated audience was made" "$([ -s "$TD/rca" ] && echo yes || echo no)" yes

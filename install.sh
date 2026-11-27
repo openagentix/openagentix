@@ -987,6 +987,7 @@ if [ -n "$DIAG_DEP" ]; then
   DIAG_VMCPS=$(jq -r 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name=="diagnostics")|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
   # A repaired or rotated bearer value: the vMCP pods of the group hold the old one as an environment value until they restart (review F4)
   if [ "${DIAG_BEARER_CHANGED:-0}" = 1 ]; then
+    diag_bearer_wait_server "$K" "$DIAG_NS" cluster-read 150 || true
     # shellcheck disable=SC2086   # one word per vMCP
     diag_bearer_restart "$K" $DIAG_VMCPS || die "could not restart the vMCPs of the diagnostics group after the bearer value changed (see above)."
   fi

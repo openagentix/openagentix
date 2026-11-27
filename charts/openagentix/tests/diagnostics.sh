@@ -286,8 +286,8 @@ eq "catalog, allowDefinitions true: rca is listed, with its tools" "$(q "$DCP1" 
 eq "the guard then knows the server of rca" "$(q "$DCP1" "$GUARDTXT" | /usr/bin/grep -c 'toolhive-vmcp-rca')" 1
 eq "the control plane's own policy and the rest of the catalog are the same either way (only the profile list differs)" "$(q "$DCP0" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|del(.tools.toolhive.profiles)|tojson' | shasum -a 256)" "$(q "$DCP1" '.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|del(.tools.toolhive.profiles)|tojson' | shasum -a 256)"
 
-echo "# diagnostics: the values of the live check (components/diagnostics/ci-values.yaml) on the quick start"
-CIV=(-f "$REPO/components/quickstart/values.yaml" -f "$REPO/components/diagnostics/ci-values.yaml" --set diagnostics.allowAnyApiServerAddress=true)   # install.sh sets the addresses itself
+echo "# diagnostics: the values of the live check (hack/ci/diagnostics-ci-values.yaml) on the quick start"
+CIV=(-f "$REPO/components/quickstart/values.yaml" -f "$REPO/hack/ci/diagnostics-ci-values.yaml" --set diagnostics.allowAnyApiServerAddress=true)   # install.sh sets the addresses itself
 eq "they render on the quick start, and with the sample container agent" "$([ -z "$(render_err "${CIV[@]}")" ] && [ -z "$(render_err "${CIV[@]}" -f "$REPO/components/quickstart/byo-values.yaml")" ] && echo rendered || echo failed)" rendered
 DCI=$(docs "${CIV[@]}")
 eq "lookup stays on the shared group, rca is on the diagnostics group" "$(q "$DCI" '[.[]|select(.kind=="VirtualMCPServer")|.metadata.name+"@"+.spec.groupRef.name]|sort|join(" ")')" "tools-lookup@tools tools-rca@diagnostics tools@tools"
