@@ -255,9 +255,9 @@ func (e *env) run(user string) string {
 			e.t.Fatalf("the model asked for a tool that does not exist: %s", name)
 		}
 		tcj, _ := json.Marshal(map[string]any{"id": tc.ID, "type": "function", "function": map[string]any{"name": name, "arguments": tc.Function.Arguments}})
-		// The kagent runtime hands a tool result to the model as {"output":{"text":"<the tool's JSON, as a string>"}}
-		// (seen live in the pod root-cause use case). The scenarios read it that way.
-		wrapped, _ := json.Marshal(map[string]any{"output": map[string]any{"text": result}})
+		// The kagent runtime hands a tool result that has structured content to the model as {"output":<the structured content>} (seen live in the first
+		// run of this use case: {"output":{"case":{...}}}). The scenarios read it that way.
+		wrapped, _ := json.Marshal(map[string]any{"output": json.RawMessage(result)})
 		rj, _ := json.Marshal(string(wrapped))
 		msgs = append(msgs, `{"role":"assistant","content":null,"tool_calls":[`+string(tcj)+`]}`,
 			`{"role":"tool","tool_call_id":"`+tc.ID+`","content":`+string(rj)+`}`)

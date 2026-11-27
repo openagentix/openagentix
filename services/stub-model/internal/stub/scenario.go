@@ -293,38 +293,24 @@ func (r *render) lookup(path string) (any, bool) {
 		}
 		cur := r.results[n]
 		for _, p := range parts[2:] {
-			var ok bool
-			if cur, ok = descend(cur, p); !ok {
+			switch x := cur.(type) {
+			case map[string]any:
+				v, ok := x[p]
+				if !ok {
+					return nil, false
+				}
+				cur = v
+			case []any:
+				i, err := strconv.Atoi(p)
+				if err != nil || i < 0 || i >= len(x) {
+					return nil, false
+				}
+				cur = x[i]
+			default:
 				return nil, false
 			}
 		}
 		return cur, true
-	}
-	return nil, false
-}
-
-// descend reads one path element below a value: a key of an object or an index of an array. A string that holds a JSON object or array is
-// read into too: an agent runtime may hand the tool's JSON over as a string (for example {"output":{"text":"{...}"}}).
-func descend(cur any, p string) (any, bool) {
-	switch x := cur.(type) {
-	case map[string]any:
-		v, ok := x[p]
-		return v, ok
-	case []any:
-		i, err := strconv.Atoi(p)
-		if err != nil || i < 0 || i >= len(x) {
-			return nil, false
-		}
-		return x[i], true
-	case string:
-		var inner any
-		if json.Unmarshal([]byte(strings.TrimSpace(x)), &inner) != nil {
-			return nil, false
-		}
-		switch inner.(type) {
-		case map[string]any, []any:
-			return descend(inner, p)
-		}
 	}
 	return nil, false
 }
