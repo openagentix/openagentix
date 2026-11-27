@@ -22,6 +22,10 @@ import (
 )
 
 // version and defaultDomain are stamped at build time (-ldflags "-X main.version=... -X main.defaultDomain=bank").
+// defaultRESTAddr keeps the REST port on the pod's loopback: only a person using kubectl port-forward reaches it.
+// Agents use the MCP port. Set RECORDS_REST_ADDR=:8081 to listen on every interface.
+const defaultRESTAddr = "127.0.0.1:8081"
+
 var (
 	version       = "dev"
 	defaultDomain = "bank"
@@ -90,7 +94,7 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	if err != nil {
 		return err
 	}
-	rln, err := net.Listen("tcp", or(getenv("RECORDS_REST_ADDR"), ":8081"))
+	rln, err := net.Listen("tcp", or(getenv("RECORDS_REST_ADDR"), defaultRESTAddr))
 	if err != nil {
 		_ = mln.Close()
 		return err

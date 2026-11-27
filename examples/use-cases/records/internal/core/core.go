@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS audit(
   action TEXT NOT NULL, subject TEXT NOT NULL, outcome TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approvals(
   seq INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, kind TEXT NOT NULL, amount_cents INTEGER NOT NULL,
-  payload_hash TEXT NOT NULL, subject_version INTEGER NOT NULL, status TEXT NOT NULL
+  payload_hash TEXT NOT NULL, payload TEXT NOT NULL, subject_version INTEGER NOT NULL, status TEXT NOT NULL
     CHECK (status IN ('pending','approved','rejected','superseded')),
   proposed_by TEXT NOT NULL, proposed_at TEXT NOT NULL, decided_by TEXT NOT NULL DEFAULT '', decided_at TEXT NOT NULL DEFAULT '',
   decision_note TEXT NOT NULL DEFAULT '');

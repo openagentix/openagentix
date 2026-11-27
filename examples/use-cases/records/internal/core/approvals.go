@@ -2,18 +2,29 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"time"
 )
 
+// HashPayload is the hash an approver sends back: SHA-256 of the exact payload text shown to them.
+func HashPayload(payload string) string {
+	h := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(h[:])
+}
+
 // Hooks is what a domain provides to the approval queue.
 type Hooks interface {
-	// Describe validates the proposed act against the subject's current state and returns a hash of everything the
-	// approver is being asked to approve (route, amount, drafts) and the subject's version. It is called when the
-	// act is proposed and again when it is decided: a changed hash means the approver would approve something
-	// they have not seen.
-	Describe(ctx context.Context, tx *sql.Tx, subject, kind string, amountCents int64) (hash string, version int64, err error)
+	// Describe validates the proposed act against the subject's current state and returns the exact payload (a JSON
+	// text) the approver is asked to approve, and the subject's version. The queue hashes the text and stores both.
+	// It is called when the act is proposed and again when it is decided: a changed payload means the approver
+	// would approve something they have not seen.
+	Describe(ctx context.Context, tx *sql.Tx, subject, kind string, amountCents int64) (payload string, version int64, err error)
+	// Proposed runs in the proposal's transaction, after the row is stored (for example marks the subject as
+	// waiting for approval without changing its version).
+	Proposed(ctx context.Context, tx *sql.Tx, a Approval) error
 	// RoleFor returns the role an approver needs for this kind of act.
 	RoleFor(kind string) (role string, ok bool)
 	// Execute performs the act. It runs in the same transaction as the approval, so it all happens or none of it.
@@ -37,6 +48,7 @@ type Approval struct {
 	Kind           string `json:"kind"`
 	AmountCents    int64  `json:"amount_cents"`
 	PayloadHash    string `json:"payload_hash"`
+	Payload        string `json:"payload"` // the frozen text the hash covers: what the approver reads
 	SubjectVersion int64  `json:"subject_version"`
 	Status         string `json:"status"`
 	ProposedBy     string `json:"proposed_by"`
@@ -59,15 +71,17 @@ func NewApprovals(db *sql.DB, hooks Hooks, audit *Audit, clock Clock) *Approvals
 	return &Approvals{db: db, hooks: hooks, audit: audit, clock: clock}
 }
 
-const approvalCols = `seq,subject,kind,amount_cents,payload_hash,subject_version,status,proposed_by,proposed_at,decided_by,decided_at,decision_note`
+const approvalCols = `seq,subject,kind,amount_cents,payload_hash,payload,subject_version,status,proposed_by,proposed_at,decided_by,decided_at,decision_note`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanApproval(r rowScanner) (Approval, error) {
 	var a Approval
 	var seq int64
-	err := r.Scan(&seq, &a.Subject, &a.Kind, &a.AmountCents, &a.PayloadHash, &a.SubjectVersion, &a.Status, &a.ProposedBy, &a.ProposedAt, &a.DecidedBy, &a.DecidedAt, &a.DecisionNote)
+	var payload string
+	err := r.Scan(&seq, &a.Subject, &a.Kind, &a.AmountCents, &a.PayloadHash, &payload, &a.SubjectVersion, &a.Status, &a.ProposedBy, &a.ProposedAt, &a.DecidedBy, &a.DecidedAt, &a.DecisionNote)
 	a.ID = FormatID("APR", seq)
+	a.Payload = payload
 	return a, err
 }
 
@@ -97,18 +111,21 @@ func (q *Approvals) Propose(ctx context.Context, p Proposal) (Approval, error) {
 		if n > 0 {
 			return &Error{Kind: Conflict, Msg: "an approval is already pending for this record"}
 		}
-		hash, version, err := q.hooks.Describe(ctx, tx, p.Subject, p.Kind, p.AmountCents)
+		payload, version, err := q.hooks.Describe(ctx, tx, p.Subject, p.Kind, p.AmountCents)
 		if err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO approvals(subject,kind,amount_cents,payload_hash,subject_version,status,proposed_by,proposed_at)
-			VALUES(?,?,?,?,?,'pending',?,?)`, p.Subject, p.Kind, p.AmountCents, hash, version, p.ProposedBy, FormatTime(q.clock()))
+		res, err := tx.ExecContext(ctx, `INSERT INTO approvals(subject,kind,amount_cents,payload_hash,payload,subject_version,status,proposed_by,proposed_at)
+			VALUES(?,?,?,?,?,?,'pending',?,?)`, p.Subject, p.Kind, p.AmountCents, HashPayload(payload), payload, version, p.ProposedBy, FormatTime(q.clock()))
 		if err != nil {
 			return err
 		}
 		seq, _ := res.LastInsertId()
 		out, err = scanApproval(tx.QueryRowContext(ctx, `SELECT `+approvalCols+` FROM approvals WHERE seq=?`, seq))
-		return err
+		if err != nil {
+			return err
+		}
+		return q.hooks.Proposed(ctx, tx, out)
 	})
 	return out, err
 }
@@ -189,15 +206,18 @@ func (q *Approvals) decide(ctx context.Context, id string, who Approver, payload
 		if role, _ := q.hooks.RoleFor(a.Kind); role == "" || role != who.Role {
 			return &Error{Kind: Forbidden, Msg: "your role may not decide this kind of approval"}
 		}
+		if who.ID == a.ProposedBy {
+			return &Error{Kind: Forbidden, Msg: "you proposed this yourself; another approver must decide it"}
+		}
 		now := FormatTime(q.clock())
 		status := "rejected"
 		if approve {
 			status = "approved"
-			hash, _, err := q.hooks.Describe(ctx, tx, a.Subject, a.Kind, a.AmountCents)
+			payload, version, err := q.hooks.Describe(ctx, tx, a.Subject, a.Kind, a.AmountCents)
 			if err != nil {
 				return err
 			}
-			if hash != a.PayloadHash {
+			if version != a.SubjectVersion || HashPayload(payload) != a.PayloadHash {
 				return &Error{Kind: Conflict, Msg: "the record changed after this was proposed; ask for a new proposal"}
 			}
 			if payloadHash != a.PayloadHash {

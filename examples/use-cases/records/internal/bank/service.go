@@ -4,9 +4,8 @@ package bank
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -408,22 +407,36 @@ func (s *Service) SetTimer(ctx context.Context, id, name string, due time.Time) 
 
 // RequestApproval queues the act for a named approver. It moves no money and sends nothing.
 func (s *Service) RequestApproval(ctx context.Context, id, kind string, amountCents int64) (core.Approval, error) {
+	return s.RequestApprovalBy(ctx, id, kind, amountCents, "agent")
+}
+
+// RequestApprovalBy is RequestApproval with the proposer's name. An approver cannot decide their own proposal.
+// The case is marked pending_approval in the same transaction as the proposal.
+func (s *Service) RequestApprovalBy(ctx context.Context, id, kind string, amountCents int64, by string) (core.Approval, error) {
 	if err := validCaseID(id); err != nil {
 		return core.Approval{}, err
 	}
-	a, err := s.approvals.Propose(ctx, core.Proposal{Subject: id, Kind: kind, AmountCents: amountCents, ProposedBy: "agent"})
-	if err != nil {
-		return a, err
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE cases SET status='pending_approval' WHERE id=? AND status<>'resolved'`, id); err != nil {
-		return a, err
-	}
-	return a, nil
+	return s.approvals.Propose(ctx, core.Proposal{Subject: id, Kind: kind, AmountCents: amountCents, ProposedBy: by})
+}
+
+// proposalPayload is exactly what the approver reads and what the hash covers.
+type proposalPayload struct {
+	CaseID           string `json:"case_id"`
+	AccountID        string `json:"account_id"`
+	TransactionID    string `json:"transaction_id"`
+	Kind             string `json:"kind"`
+	AmountCents      int64  `json:"amount_cents"`
+	DisputedCents    int64  `json:"disputed_cents"`
+	PriorCreditCents int64  `json:"prior_credit_cents"` // credits already posted on this transaction by earlier cases
+	RouteReason      string `json:"route_reason"`
+	Letter           string `json:"letter"`
+	Filing           string `json:"filing,omitempty"` // present only for the chargeback routes
+	CaseVersion      int64  `json:"case_version"`
 }
 
 // Hooks for the approval queue.
 
-// Describe validates a proposed act and hashes everything the approver is asked to approve.
+// Describe validates a proposed act and returns the payload the approver is asked to approve.
 func (s *Service) Describe(ctx context.Context, tx *sql.Tx, subject, kind string, amount int64) (string, int64, error) {
 	c, err := loadCase(ctx, tx, subject)
 	if err != nil {
@@ -460,9 +473,35 @@ func (s *Service) Describe(ctx context.Context, tx *sql.Tx, subject, kind string
 	} else if amount <= 0 || amount > c.AmountCents {
 		return "", 0, &core.Error{Kind: core.Invalid, Msg: "amount_cents must be above 0 and at most the disputed amount"}
 	}
-	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%d\x00%s\x00%s\x00%s", subject, kind, amount, c.RouteReason, letter.Body, filing.Body)
-	return hex.EncodeToString(h.Sum(nil)), c.Version, nil
+	var prior int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM ledger WHERE transaction_id=?`, c.TransactionID).Scan(&prior); err != nil {
+		return "", 0, err
+	}
+	if kind == RouteCreditThenChargeback {
+		if prior > 0 {
+			return "", 0, &core.Error{Kind: core.Conflict, Msg: "this transaction was already credited by an earlier case"}
+		}
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM accounts WHERE id=?`, c.AccountID).Scan(&status); err != nil {
+			return "", 0, err
+		}
+		if status != "active" {
+			return "", 0, &core.Error{Kind: core.Conflict, Msg: "the account is not active, so it cannot be credited"}
+		}
+	}
+	p := proposalPayload{CaseID: c.ID, AccountID: c.AccountID, TransactionID: c.TransactionID, Kind: kind, AmountCents: amount,
+		DisputedCents: c.AmountCents, PriorCreditCents: prior, RouteReason: c.RouteReason, Letter: letter.Body, Filing: filing.Body, CaseVersion: c.Version}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return "", 0, err
+	}
+	return string(b), c.Version, nil
+}
+
+// Proposed marks the case as waiting for approval. It does not change the version.
+func (s *Service) Proposed(ctx context.Context, tx *sql.Tx, a core.Approval) error {
+	_, err := tx.ExecContext(ctx, `UPDATE cases SET status='pending_approval' WHERE id=? AND status<>'resolved'`, a.Subject)
+	return err
 }
 
 // RoleFor says which role decides each approvable kind.
@@ -475,6 +514,7 @@ func (s *Service) RoleFor(kind string) (string, bool) {
 }
 
 // Execute runs inside the approval's transaction. It is the only code that posts a credit or queues a letter.
+// It releases only the drafts the approver was shown for this route.
 func (s *Service) Execute(ctx context.Context, tx *sql.Tx, a core.Approval) error {
 	c, err := loadCase(ctx, tx, a.Subject)
 	if err != nil {
@@ -482,15 +522,26 @@ func (s *Service) Execute(ctx context.Context, tx *sql.Tx, a core.Approval) erro
 	}
 	now := s.clock()
 	if a.Kind == RouteCreditThenChargeback {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO ledger(case_id,account_id,kind,amount_cents,approval_id,posted_at) VALUES(?,?,?,?,?,?)`,
-			c.ID, c.AccountID, "provisional_credit", a.AmountCents, a.ID, core.FormatTime(now)); err != nil {
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM accounts WHERE id=?`, c.AccountID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "active" {
+			return &core.Error{Kind: core.Conflict, Msg: "the account is not active, so it cannot be credited"}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ledger(case_id,transaction_id,account_id,kind,amount_cents,approval_id,posted_at) VALUES(?,?,?,?,?,?,?)`,
+			c.ID, c.TransactionID, c.AccountID, "provisional_credit", a.AmountCents, a.ID, core.FormatTime(now)); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET balance_cents=balance_cents+? WHERE id=?`, a.AmountCents, c.AccountID); err != nil {
 			return err
 		}
 	}
-	if _, err := s.outbox.QueueDrafts(ctx, tx, c.ID, a.ID, now); err != nil {
+	kinds := []string{"letter"}
+	if a.Kind != RouteDecline {
+		kinds = append(kinds, "chargeback_filing")
+	}
+	if _, err := s.outbox.QueueKinds(ctx, tx, c.ID, a.ID, kinds, now); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE cases SET status='resolved', version=version+1 WHERE id=?`, c.ID)

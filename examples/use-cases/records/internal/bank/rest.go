@@ -175,7 +175,11 @@ func (d *Domain) Handler() http.Handler {
 		if err := core.ReadJSON(w, r, &in); err != nil {
 			return "", nil, err
 		}
-		v, err := s.RequestApproval(r.Context(), in.CaseID, in.Kind, in.AmountCents)
+		by := "rest"
+		if who, ok := d.approvers.Authenticate(r); ok {
+			by = who.ID // a proposal made with an approver token carries that name, so they cannot decide it
+		}
+		v, err := s.RequestApprovalBy(r.Context(), in.CaseID, in.Kind, in.AmountCents, by)
 		return in.CaseID, v, err
 	}))
 	mux.HandleFunc("GET /approvals/{id}", d.route("get_approval", 200, func(w http.ResponseWriter, r *http.Request) (string, any, error) {
@@ -276,5 +280,17 @@ func (d *Domain) Handler() http.Handler {
 		}
 		core.WriteJSON(w, 200, map[string]any{"audit": v})
 	})
-	return mux
+	return d.guard(mux)
+}
+
+// guard refuses cross-origin browser writes and rate limits writes per host.
+func (d *Domain) guard(next http.Handler) http.Handler {
+	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !d.limiter.Allow(core.Host(r)) {
+			core.WriteJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many writes from this host; try again in a minute"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+	return http.NewCrossOriginProtection().Handler(limited)
 }

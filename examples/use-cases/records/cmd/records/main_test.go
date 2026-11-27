@@ -51,6 +51,12 @@ func TestRunServesBothPortsAndStops(t *testing.T) {
 	}
 }
 
+func TestRESTPortDefaultsToLoopback(t *testing.T) {
+	if defaultRESTAddr != "127.0.0.1:8081" {
+		t.Fatalf("the REST port must default to loopback, is %q", defaultRESTAddr)
+	}
+}
+
 func TestRunRefusesBadConfig(t *testing.T) {
 	for name, m := range map[string]map[string]string{
 		"unknown domain":    {"RECORDS_DOMAIN": "zoo", "RECORDS_DATA_DIR": t.TempDir()},

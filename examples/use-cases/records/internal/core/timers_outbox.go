@@ -29,6 +29,12 @@ type Timers struct {
 // NewTimers returns the timer store.
 func NewTimers(db *sql.DB, clock Clock) *Timers { return &Timers{db: db, clock: clock} }
 
+// MaxTimersPerSubject bounds the timers one record can hold.
+const MaxTimersPerSubject = 20
+
+// MaxKeptDiscarded is how many discarded drafts one record keeps.
+const MaxKeptDiscarded = 5
+
 var timerName = regexp.MustCompile(`^[a-z][a-z_]{0,39}$`)
 
 const timerCols = `seq,subject,name,due_at,status,created_at,fired_at`
@@ -49,6 +55,13 @@ func (t *Timers) Set(ctx context.Context, subject, name string, due time.Time) (
 	}
 	if !due.After(now) || due.After(now.Add(400*24*time.Hour)) {
 		return Timer{}, &Error{Kind: Invalid, Msg: "due time must be in the future and within 400 days"}
+	}
+	var n int
+	if err := t.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM timers WHERE subject=?`, subject).Scan(&n); err != nil {
+		return Timer{}, err
+	}
+	if n >= MaxTimersPerSubject {
+		return Timer{}, &Error{Kind: Conflict, Msg: "this record holds the most timers it may"}
 	}
 	res, err := t.db.ExecContext(ctx, `INSERT INTO timers(subject,name,due_at,status,created_at) VALUES(?,?,?,'pending',?)`,
 		subject, name, FormatTime(due), FormatTime(now))
@@ -163,18 +176,28 @@ func (o *Outbox) Draft(ctx context.Context, tx *sql.Tx, subject, kind, body stri
 		return OutboxItem{}, err
 	}
 	seq, _ := res.LastInsertId()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM outbox WHERE subject=? AND status='discarded' AND seq NOT IN
+		(SELECT seq FROM outbox WHERE subject=? AND status='discarded' ORDER BY seq DESC LIMIT ?)`, subject, subject, MaxKeptDiscarded); err != nil {
+		return OutboxItem{}, err
+	}
 	return scanOutbox(tx.QueryRowContext(ctx, `SELECT `+outboxCols+` FROM outbox WHERE seq=?`, seq))
 }
 
-// QueueDrafts releases every draft of the subject. Only an approval's Execute hook calls it.
-func (o *Outbox) QueueDrafts(ctx context.Context, tx *sql.Tx, subject, approvalID string, now time.Time) (int, error) {
-	res, err := tx.ExecContext(ctx, `UPDATE outbox SET status='queued', approval_id=?, queued_at=? WHERE subject=? AND status='draft'`,
-		approvalID, FormatTime(now), subject)
-	if err != nil {
-		return 0, err
+// QueueKinds releases the drafts of the named kinds and discards every other draft of the subject. Only an
+// approval's Execute hook calls it, with the kinds the approver was shown. It returns how many it queued.
+func (o *Outbox) QueueKinds(ctx context.Context, tx *sql.Tx, subject, approvalID string, kinds []string, now time.Time) (int, error) {
+	queued := 0
+	for _, k := range kinds {
+		res, err := tx.ExecContext(ctx, `UPDATE outbox SET status='queued', approval_id=?, queued_at=? WHERE subject=? AND kind=? AND status='draft'`,
+			approvalID, FormatTime(now), subject, k)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		queued += int(n)
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	_, err := tx.ExecContext(ctx, `UPDATE outbox SET status='discarded' WHERE subject=? AND status='draft'`, subject)
+	return queued, err
 }
 
 // DiscardDrafts drops every draft of the subject (after a rejection).

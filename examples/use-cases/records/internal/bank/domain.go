@@ -3,7 +3,9 @@ package bank
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/openagentix/openagentix/examples/use-cases/records/internal/core"
 )
@@ -19,7 +21,11 @@ type Domain struct {
 	timers    *core.Timers
 	outbox    *core.Outbox
 	svc       *Service
+	limiter   *core.Limiter
 }
+
+// WriteLimitPerMinute is how many writes one host may make on the REST port each minute. It also bounds token guesses.
+const WriteLimitPerMinute = 120
 
 // New migrates the schema and wires the module. It does not seed.
 func New(db *sql.DB, log *slog.Logger, clock core.Clock, approvers *core.Approvers) (*Domain, error) {
@@ -30,7 +36,7 @@ func New(db *sql.DB, log *slog.Logger, clock core.Clock, approvers *core.Approve
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, err
 	}
-	d := &Domain{db: db, log: log, clock: clock, approvers: approvers}
+	d := &Domain{db: db, log: log, clock: clock, approvers: approvers, limiter: core.NewLimiter(WriteLimitPerMinute, time.Minute, clock)}
 	d.audit = core.NewAudit(db, log, clock)
 	d.timers = core.NewTimers(db, clock)
 	d.outbox = core.NewOutbox(db)
@@ -55,5 +61,11 @@ func (d *Domain) FireDue(ctx context.Context) (int, error) {
 // Ready reports whether the store answers and the data is loaded.
 func (d *Domain) Ready(ctx context.Context) error {
 	var n int
-	return d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM meta WHERE k='bank_seeded'`).Scan(&n)
+	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM meta WHERE k='bank_seeded'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return errors.New("the store is not seeded")
+	}
+	return nil
 }

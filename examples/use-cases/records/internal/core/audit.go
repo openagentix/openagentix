@@ -23,11 +23,16 @@ type Audit struct {
 	db    *sql.DB
 	log   *slog.Logger
 	clock Clock
+	// MaxRows bounds the audit table: older rows are deleted (the stdout log keeps every line).
+	MaxRows int64
 }
+
+// DefaultAuditRows is the default bound of the audit table.
+const DefaultAuditRows = 50000
 
 // NewAudit returns an Audit.
 func NewAudit(db *sql.DB, log *slog.Logger, clock Clock) *Audit {
-	return &Audit{db: db, log: log, clock: clock}
+	return &Audit{db: db, log: log, clock: clock, MaxRows: DefaultAuditRows}
 }
 
 // auditClean keeps a field to a safe alphabet and 64 characters, so a hostile value cannot forge a log line.
@@ -53,9 +58,16 @@ func (a *Audit) Record(ctx context.Context, e AuditEntry) {
 	e.Actor, e.Channel, e.Action = auditClean(e.Actor), auditClean(e.Channel), auditClean(e.Action)
 	e.Subject, e.Outcome = auditClean(e.Subject), auditClean(e.Outcome)
 	a.log.Info("AUDIT", "at", e.At, "actor", e.Actor, "channel", e.Channel, "action", e.Action, "subject", e.Subject, "outcome", e.Outcome)
-	if _, err := a.db.ExecContext(ctx, `INSERT INTO audit(at,actor,channel,action,subject,outcome) VALUES(?,?,?,?,?,?)`,
-		e.At, e.Actor, e.Channel, e.Action, e.Subject, e.Outcome); err != nil {
+	res, err := a.db.ExecContext(ctx, `INSERT INTO audit(at,actor,channel,action,subject,outcome) VALUES(?,?,?,?,?,?)`,
+		e.At, e.Actor, e.Channel, e.Action, e.Subject, e.Outcome)
+	if err != nil {
 		a.log.Error("audit table write failed", "err", err)
+		return
+	}
+	if last, err := res.LastInsertId(); err == nil && a.MaxRows > 0 && last > a.MaxRows {
+		if _, err := a.db.ExecContext(ctx, `DELETE FROM audit WHERE seq<=?`, last-a.MaxRows); err != nil {
+			a.log.Error("audit table trim failed", "err", err)
+		}
 	}
 }
 

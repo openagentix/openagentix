@@ -27,13 +27,19 @@ not yet used by an agent, and not yet run on a cluster. See "What is not proven"
 3. It attaches evidence, sets a route with a reason (`provisional_credit_then_chargeback`, `chargeback`, `decline`
    or `inconclusive_needs_analyst`), drafts the letter and the chargeback filing, and sets timers.
 4. It calls `request_approval`. The kind must equal the route. The letter draft (and the filing draft for a
-   chargeback) must exist. The amount cannot exceed the disputed amount.
-5. A named approver with the role `desk-lead` calls `POST /approvals/{id}/approve` with a token and the
-   `payload_hash` they read. In one transaction the service posts the provisional credit (only for the credit route),
-   queues the drafts in the outbox, and resolves the case. A rejection sends the case back to an analyst and drops the drafts.
+   chargeback) must exist. The amount cannot exceed the disputed amount. The case becomes `pending_approval` in the
+   same transaction as the proposal. A credit is refused when an earlier case already credited the transaction
+   or when the account is not active.
+5. A named approver with the role `desk-lead` reads `GET /approvals/{id}`. The reply holds the frozen `payload`
+   (route, amount, reason, the letter text, the filing text, the case version, earlier credits) and
+   `payload_hash`, which is the SHA-256 of that payload text. The approver calls `POST /approvals/{id}/approve`
+   with a token and that `payload_hash`. In one transaction the service posts the provisional credit (only for the
+   credit route), queues the letter (and the filing for the two chargeback routes only), discards any other draft,
+   and resolves the case. A rejection sends the case back to an analyst and drops the drafts.
 
-If the agent changes the route or a draft after it asked for approval, the request is marked `superseded` and the
-approver is refused. A changed record also refuses the approval (the hash no longer matches).
+Any write to the case after the proposal (evidence, status, route, a draft) marks the approval `superseded` and
+raises the case version. Approval is refused when the payload or the version no longer matches. An approver who
+made the proposal (with their own token) cannot decide it.
 
 ## Safety design
 
@@ -41,20 +47,28 @@ approver is refused. A changed record also refuses the approval (the hash no lon
 |---|---|
 | No tool moves money or sends a letter | The MCP tools are listed in `internal/bank/tools.go`. A test fails if a tool name contains approve, post, credit, send, execute, release or ledger |
 | Deciding needs a named person | `POST /approvals/{id}/approve` and `/reject` need `Authorization: Bearer <token>`. Tokens are checked in constant time against SHA-256 hashes in a file. With no file, nobody can decide |
-| The approver approves what they saw | The request carries `payload_hash`. It must equal the hash of route, amount, reason and both drafts now |
+| The approver approves what they saw | `GET /approvals/{id}` returns the exact payload the hash covers, frozen at proposal. The approve call must send that hash, and the payload computed from the record now must still hash the same, with the same case version |
+| Only approved drafts leave | Execute queues the kinds in the payload (letter; filing only on the chargeback routes) and discards the rest |
+| No double credit | A credit is refused when the transaction already has a credit, so credits per transaction never exceed one case's disputed amount. A closed or blocked account gets no credit |
+| No self-approval | A proposal made with an approver token carries that name, and that approver cannot decide it |
 | Role per kind | The bank kinds need the role `desk-lead` |
 | One decision, one execution | The status change is a conditional update in the same transaction as the act. A second approve gets 409 |
 | No SQL from input | Every statement uses bound parameters. Ids are checked against a strict pattern first |
-| Input limits | Bodies up to 64 KiB, unknown JSON fields refused, text length and control characters checked, enums closed, lists capped |
-| No personal data to the agent | MCP views drop the replay answer and label the customer's words `untrusted_customer_text`. Customer names are never in a case view |
+| Input limits | Bodies up to 64 KiB, `Content-Type: application/json` required, unknown JSON fields refused, cross-origin browser writes refused, text length and control characters checked, enums closed, lists capped |
+| Bounded growth | At most 20 timers and 100 evidence items per case, 5 discarded drafts kept per case, 50,000 audit rows kept (older rows go; the stdout log keeps every line), 120 writes per minute per host (this also slows token guessing) |
+| No personal data to the agent | MCP views drop the replay answer and label the customer's words `untrusted_customer_text`. Customer names are never in a case view. Route reasons and evidence notes can be written through REST, so the agent sees them as `untrusted_route_reason` and `untrusted_note` |
 | Audit has no text | The audit entry has no field for text. Values are cut to a safe alphabet and 64 characters |
 | Least privilege | No outbound network, no secret read, no Kubernetes API, non-root, read-only root file system apart from `/data` |
 
 The MCP endpoint has no login of its own, like the notify service. The tool gateway in front of it authenticates
-agents, and a network policy (a later slice) must keep everyone else out. The REST reads and the agent's own steps
-(`/cases`, drafts, `POST /approvals`) have no login either, so whoever can reach port 8081 can act as the agent.
-Only the decision routes and `/audit` need an approver token. Keep port 8081 off the network except for a person
-using `kubectl port-forward`.
+agents, and a network policy (a later slice) must keep everyone else out.
+
+The REST port listens on `127.0.0.1:8081` by default, so only a person using `kubectl port-forward` reaches it.
+Agents never need it: their steps go through the MCP port, which is the one ToolHive proxies. This is the choice
+that still works when the MCP path runs behind ToolHive (an agent token on REST would have to be passed through
+the proxy, which `mcp.servers` cannot do today). The REST reads and the agent's own steps (`/cases`, drafts,
+`POST /approvals`) have no login, so anyone who sets `RECORDS_REST_ADDR=:8081` and can reach the pod acts as the
+agent. Only the decision routes and `/audit` need an approver token.
 
 ## Run it
 
@@ -70,7 +84,7 @@ Settings (environment):
 | `RECORDS_DOMAIN` | the build default, `bank` | The domain to serve. This build has only `bank` |
 | `RECORDS_DATA_DIR` | `/data` | Where `records.db` lives |
 | `RECORDS_MCP_ADDR` | `:8080` | MCP and health |
-| `RECORDS_REST_ADDR` | `:8081` | REST and health |
+| `RECORDS_REST_ADDR` | `127.0.0.1:8081` | REST and health. Set `:8081` only if you also add a network policy |
 | `RECORDS_APPROVERS_FILE` | none | JSON array of `{id, role, token_sha256}`. Without it nobody can approve |
 
 Make an approvers file (the file holds hashes, never tokens):
@@ -83,9 +97,11 @@ printf '[{"id":"desk:lead-1","role":"desk-lead","token_sha256":"%s"}]\n' "$(prin
 Approve:
 
 ```sh
-curl -s localhost:8081/approvals/APR-0001
+# Read once: the payload is what you approve. payload_hash is the SHA-256 of the payload text.
+curl -s localhost:8081/approvals/APR-0001 | tee /tmp/approval.json | jq -r .payload
+HASH=$(jq -r .payload_hash /tmp/approval.json)
 curl -s -X POST localhost:8081/approvals/APR-0001/approve -H "Authorization: Bearer $TOKEN" \
-  -d '{"payload_hash":"<the payload_hash from the line above>","note":"checked"}'
+  -H "Content-Type: application/json" -d "{\"payload_hash\":\"$HASH\",\"note\":\"checked\"}"
 ```
 
 ## Storage
@@ -111,7 +127,9 @@ the agent. A test checks that the seed holds no e-mail address, link or long dig
   The Docker build is checked by CI only.
 - Memory and CPU are not measured. The target is 10m and 32Mi requests, limits 100m and 96Mi.
 - The AML alert queue and `aml-triage` agent are not built.
-- There is no rate limit and no lockout on approver tokens. Use long random tokens.
+- There is a per-host write limit but no lockout on approver tokens, and tokens are unsalted SHA-256, which is fine only for long random tokens.
+- The decision's audit row is written after the commit and is best effort (the stdout line is the record of truth).
+- The REST agent-step routes have no login; the loopback default is the only guard until the chart adds a network policy.
 - Working days skip weekends only. Public holidays are not modelled.
 - The service has run only under `go test`, with the Go MCP SDK client over HTTP.
 

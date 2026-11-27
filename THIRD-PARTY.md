@@ -52,7 +52,7 @@ Status of the licences:
 
 | Module | Version | Used by | Licence | How verified |
 |---|---|---|---|---|
-| github.com/modelcontextprotocol/go-sdk | v1.8.0 | kb, notify | MIT for older contributions, Apache-2.0 for newer ones (the `LICENSE` file says the project is moving from MIT to Apache-2.0; both are permissive) | `LICENSE` at tag `v1.8.0` |
+| github.com/modelcontextprotocol/go-sdk | v1.8.0 | kb, notify, examples/use-cases/records | MIT for older contributions, Apache-2.0 for newer ones (the `LICENSE` file says the project is moving from MIT to Apache-2.0; both are permissive) | `LICENSE` at tag `v1.8.0` |
 | github.com/jackc/pgx/v5 | v5.13.0 | kb | MIT | licence metadata at tag |
 | github.com/jackc/puddle/v2 | v2.2.3 | kb | MIT | licence metadata at tag |
 | gopkg.in/yaml.v3 (github.com/go-yaml/yaml) | v3.0.1 | notify | MIT and Apache-2.0 (two licences, see its `LICENSE` and `NOTICE`) | `LICENSE` and `NOTICE` at tag |

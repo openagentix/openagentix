@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,15 @@ func hash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToS
 
 func newDomain(t *testing.T) (*Domain, *bytes.Buffer) {
 	t.Helper()
+	d, logs := newUnseeded(t)
+	if err := d.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return d, logs
+}
+
+func newUnseeded(t *testing.T) (*Domain, *bytes.Buffer) {
+	t.Helper()
 	db, err := core.Open(filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -46,9 +56,6 @@ func newDomain(t *testing.T) (*Domain, *bytes.Buffer) {
 	logs := &bytes.Buffer{}
 	d, err := New(db, slog.New(slog.NewJSONHandler(logs, nil)), func() time.Time { return now }, ap)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Seed(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	return d, logs
@@ -362,6 +369,9 @@ func TestTimersAndSweepView(t *testing.T) {
 func rest(t *testing.T, d *Domain, method, path, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	if method == "POST" {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -564,5 +574,348 @@ func TestMCPViewsDropCustomerNameAndMarkUntrustedText(t *testing.T) {
 	}
 	if !strings.Contains(out, "untrusted_customer_text") || strings.Contains(out, "human_decision") {
 		t.Errorf("claim text must be labelled, and the replay answer hidden: %s", out)
+	}
+}
+
+// Review fixes (findings 1 to 8).
+
+var leadApprover = core.Approver{ID: "desk:lead-1", Role: "desk-lead"}
+
+func approvalPayload(t *testing.T, a core.Approval) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(a.Payload), &m); err != nil {
+		t.Fatalf("payload is not JSON: %v", err)
+	}
+	return m
+}
+
+func TestDeclineNeverQueuesAFiling(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := firstOpenCase(t, d)
+	_, _ = d.svc.SetRoute(ctx, c.ID, RouteDecline, "outside the rules")
+	_, _ = d.svc.DraftLetter(ctx, c.ID, "Decline letter.")
+	_, _ = d.svc.DraftChargeback(ctx, c.ID, "filing nobody approved")
+	a, err := d.svc.RequestApproval(ctx, c.ID, RouteDecline, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := approvalPayload(t, a)["filing"]; has {
+		t.Error("a decline payload must not carry a filing")
+	}
+	if _, err := d.approvals.Approve(ctx, a.ID, leadApprover, a.PayloadHash, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, d, `SELECT COUNT(*) FROM outbox WHERE kind='chargeback_filing' AND status='queued'`); n != 0 {
+		t.Fatalf("an approved decline queued %d filings", n)
+	}
+	if n := count(t, d, `SELECT COUNT(*) FROM outbox WHERE kind='letter' AND status='queued'`); n != 1 {
+		t.Fatalf("the letter must be queued, got %d", n)
+	}
+}
+
+func TestApprovalViewCarriesWhatTheHashCovers(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteCreditThenChargeback)
+	a, _ := d.svc.RequestApproval(ctx, c.ID, RouteCreditThenChargeback, c.AmountCents)
+	w := rest(t, d, "GET", "/approvals/"+a.ID, "", "")
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	var got core.Approval
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	m := approvalPayload(t, got)
+	for _, k := range []string{"case_id", "account_id", "transaction_id", "kind", "amount_cents", "route_reason", "letter", "filing", "case_version", "prior_credit_cents"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("payload lacks %s", k)
+		}
+	}
+	if m["letter"] != "Dear customer, your dispute was reviewed." || m["filing"] != "Filing: reason code 4001, evidence attached." {
+		t.Errorf("payload text: %v", m)
+	}
+	if got.PayloadHash != core.HashPayload(string(got.Payload)) {
+		t.Error("the hash must be the hash of the payload shown")
+	}
+	// The record changes afterwards: the approval view keeps showing what was proposed.
+	if _, err := d.svc.DraftLetter(ctx, c.ID, "A new letter."); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := d.approvals.Get(ctx, a.ID)
+	if again.Status != "superseded" || approvalPayload(t, again)["letter"] != "Dear customer, your dispute was reviewed." {
+		t.Errorf("frozen payload lost: %s %v", again.Status, approvalPayload(t, again)["letter"])
+	}
+}
+
+func TestSecondCreditOnACreditedTransactionIsRefused(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteCreditThenChargeback)
+	a, _ := d.svc.RequestApproval(ctx, c.ID, RouteCreditThenChargeback, c.AmountCents)
+	if _, err := d.approvals.Approve(ctx, a.ID, leadApprover, a.PayloadHash, ""); err != nil {
+		t.Fatal(err)
+	}
+	b, err := d.svc.CreateCase(ctx, NewCase{AccountID: c.AccountID, TransactionID: c.TransactionID, ClaimType: "duplicate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = d.svc.SetRoute(ctx, b.ID, RouteCreditThenChargeback, "again")
+	_, _ = d.svc.DraftLetter(ctx, b.ID, "letter")
+	_, _ = d.svc.DraftChargeback(ctx, b.ID, "filing")
+	if _, err := d.svc.RequestApproval(ctx, b.ID, RouteCreditThenChargeback, b.AmountCents); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("a second credit on one transaction must be refused, got %v", err)
+	}
+	// A chargeback without credit is still possible, and the approver sees the earlier credit.
+	_, _ = d.svc.SetRoute(ctx, b.ID, RouteChargeback, "no second credit")
+	a2, err := d.svc.RequestApproval(ctx, b.ID, RouteChargeback, b.AmountCents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := approvalPayload(t, a2)["prior_credit_cents"]; got != float64(c.AmountCents) {
+		t.Errorf("prior_credit_cents = %v, want %d", got, c.AmountCents)
+	}
+	if n := count(t, d, `SELECT COUNT(*) FROM ledger`); n != 1 {
+		t.Fatalf("ledger rows %d", n)
+	}
+}
+
+func TestClosedAccountGetsNoCredit(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteCreditThenChargeback)
+	if _, err := d.db.Exec(`UPDATE accounts SET status='closed' WHERE id=?`, c.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.RequestApproval(ctx, c.ID, RouteCreditThenChargeback, c.AmountCents); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("credit to a closed account: %v", err)
+	}
+}
+
+func TestAnyChangeAfterProposalSupersedesIt(t *testing.T) {
+	changes := map[string]func(d *Domain, id string) error{
+		"evidence": func(d *Domain, id string) error {
+			_, err := d.svc.AttachEvidence(context.Background(), id, "gap", "", "a late note")
+			return err
+		},
+		"status": func(d *Domain, id string) error {
+			_, err := d.svc.SetStatus(context.Background(), id, "in_review")
+			return err
+		},
+		"letter": func(d *Domain, id string) error {
+			_, err := d.svc.DraftLetter(context.Background(), id, "changed letter")
+			return err
+		},
+		"filing": func(d *Domain, id string) error {
+			_, err := d.svc.DraftChargeback(context.Background(), id, "changed filing")
+			return err
+		},
+		"route": func(d *Domain, id string) error {
+			_, err := d.svc.SetRoute(context.Background(), id, RouteDecline, "changed my mind")
+			return err
+		},
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			d, _ := newDomain(t)
+			ctx := context.Background()
+			c := prepare(t, d, RouteChargeback)
+			a, _ := d.svc.RequestApproval(ctx, c.ID, RouteChargeback, c.AmountCents)
+			if err := change(d, c.ID); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := d.approvals.Get(ctx, a.ID)
+			if got.Status != "superseded" {
+				t.Fatalf("status %s", got.Status)
+			}
+			if _, err := d.approvals.Approve(ctx, a.ID, leadApprover, a.PayloadHash, ""); !core.IsKind(err, core.Conflict) {
+				t.Fatalf("approving a superseded approval: %v", err)
+			}
+			if count(t, d, `SELECT COUNT(*) FROM outbox WHERE status='queued'`) != 0 || count(t, d, `SELECT COUNT(*) FROM ledger`) != 0 {
+				t.Fatal("a superseded approval released something")
+			}
+		})
+	}
+}
+
+func TestProposalIsOneStep(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteChargeback)
+	a, _ := d.svc.RequestApproval(ctx, c.ID, RouteChargeback, c.AmountCents)
+	got, _ := d.svc.GetCase(ctx, c.ID)
+	if got.Status != "pending_approval" || got.Version != int64(approvalPayload(t, a)["case_version"].(float64)) {
+		t.Fatalf("the proposal must set the status without bumping the version: %s v%d", got.Status, got.Version)
+	}
+}
+
+func TestTwoApprovalsAtOnceExecuteOnce(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteCreditThenChargeback)
+	a, _ := d.svc.RequestApproval(ctx, c.ID, RouteCreditThenChargeback, c.AmountCents)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := d.approvals.Approve(ctx, a.ID, leadApprover, a.PayloadHash, "")
+			errs <- err
+		}()
+	}
+	ok := 0
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err == nil {
+			ok++
+		} else if !core.IsKind(err, core.Conflict) {
+			t.Errorf("the loser must get a conflict: %v", err)
+		}
+	}
+	if ok != 1 || count(t, d, `SELECT COUNT(*) FROM ledger`) != 1 {
+		t.Fatalf("approved %d times, ledger rows %d", ok, count(t, d, `SELECT COUNT(*) FROM ledger`))
+	}
+}
+
+func TestOldHashAfterReproposalFails(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteChargeback)
+	old, _ := d.svc.RequestApproval(ctx, c.ID, RouteChargeback, c.AmountCents)
+	_, _ = d.svc.DraftLetter(ctx, c.ID, "second letter")
+	fresh, err := d.svc.RequestApproval(ctx, c.ID, RouteChargeback, c.AmountCents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.approvals.Approve(ctx, fresh.ID, leadApprover, old.PayloadHash, ""); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("the old hash on the new approval: %v", err)
+	}
+	if _, err := d.approvals.Approve(ctx, old.ID, leadApprover, old.PayloadHash, ""); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("the old approval: %v", err)
+	}
+}
+
+func TestRESTRejectNeedsTokenAndRole(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c := prepare(t, d, RouteChargeback)
+	a, _ := d.svc.RequestApproval(ctx, c.ID, RouteChargeback, c.AmountCents)
+	path := "/approvals/" + a.ID + "/reject"
+	if w := rest(t, d, "POST", path, "", `{"note":"x"}`); w.Code != 401 {
+		t.Errorf("no token: %d", w.Code)
+	}
+	if w := rest(t, d, "POST", path, clerkToken, `{"note":"x"}`); w.Code != 403 {
+		t.Errorf("wrong role: %d", w.Code)
+	}
+	got, _ := d.approvals.Get(ctx, a.ID)
+	if got.Status != "pending" {
+		t.Fatalf("a refused reject changed the approval: %s", got.Status)
+	}
+	if w := rest(t, d, "POST", path, leadToken, `{"note":"x"}`); w.Code != 200 {
+		t.Errorf("lead: %d", w.Code)
+	}
+}
+
+func TestApproverCannotApproveTheirOwnProposal(t *testing.T) {
+	d, _ := newDomain(t)
+	c := prepare(t, d, RouteChargeback)
+	w := rest(t, d, "POST", "/approvals", leadToken, `{"case_id":"`+c.ID+`","kind":"chargeback","amount_cents":`+strconv.FormatInt(c.AmountCents, 10)+`}`)
+	if w.Code != 201 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	var a core.Approval
+	_ = json.Unmarshal(w.Body.Bytes(), &a)
+	if a.ProposedBy != "desk:lead-1" {
+		t.Fatalf("proposed_by %q: a proposal made with an approver token carries that name", a.ProposedBy)
+	}
+	body := `{"payload_hash":"` + a.PayloadHash + `"}`
+	if w := rest(t, d, "POST", "/approvals/"+a.ID+"/approve", leadToken, body); w.Code != 403 {
+		t.Fatalf("own proposal: %d", w.Code)
+	}
+	if count(t, d, `SELECT COUNT(*) FROM outbox WHERE status='queued'`) != 0 {
+		t.Fatal("released")
+	}
+}
+
+func TestReadyFailsOnAnUnseededStore(t *testing.T) {
+	d, _ := newUnseeded(t)
+	if w := rest(t, d, "GET", "/readyz", "", ""); w.Code != 503 {
+		t.Fatalf("readyz on an empty store: %d", w.Code)
+	}
+	if err := d.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w := rest(t, d, "GET", "/readyz", "", ""); w.Code != 200 {
+		t.Fatalf("readyz after seed: %d", w.Code)
+	}
+}
+
+func TestRESTWritesNeedJSONAndRefuseCrossOrigin(t *testing.T) {
+	d, _ := newDomain(t)
+	r := httptest.NewRequest("POST", "/cases", strings.NewReader(`{}`))
+	r.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Errorf("text/plain: %d", w.Code)
+	}
+	r = httptest.NewRequest("POST", "/cases", strings.NewReader(`{}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Origin", "http://evil.example")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	w = httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, r)
+	if w.Code != 403 {
+		t.Errorf("cross-origin write: %d", w.Code)
+	}
+	if count(t, d, `SELECT COUNT(*) FROM cases`) != 60 {
+		t.Error("a refused write changed data")
+	}
+}
+
+func TestRESTWritesAreRateLimitedPerHost(t *testing.T) {
+	d, _ := newDomain(t)
+	got429 := false
+	for i := 0; i < WriteLimitPerMinute+20; i++ {
+		if w := rest(t, d, "POST", "/approvals/APR-0001/approve", "wrong", `{}`); w.Code == 429 {
+			got429 = true
+			break
+		}
+	}
+	if !got429 {
+		t.Fatal("token guessing must be rate limited")
+	}
+}
+
+func TestTimersPerCaseAreCapped(t *testing.T) {
+	d, _ := newDomain(t)
+	c := firstOpenCase(t, d)
+	var err error
+	for i := 0; i < core.MaxTimersPerSubject+1; i++ {
+		_, err = d.svc.SetTimer(context.Background(), c.ID, "x_timer", now.Add(time.Hour))
+	}
+	if !core.IsKind(err, core.Conflict) {
+		t.Fatalf("timer cap: %v", err)
+	}
+}
+
+func TestAgentViewLabelsEverythingWrittenThroughREST(t *testing.T) {
+	d, _ := newDomain(t)
+	s := mcpSession(t, d)
+	c := firstOpenCase(t, d)
+	if _, err := d.svc.AttachEvidence(context.Background(), c.ID, "other", "", "EVIDENCE-NOTE-9917"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.SetRoute(context.Background(), c.ID, RouteChargeback, "REASON-TEXT-4402"); err != nil {
+		t.Fatal(err)
+	}
+	out, isErr := call(t, s, "get_case", map[string]any{"case_id": c.ID})
+	if isErr {
+		t.Fatal(out)
+	}
+	if strings.Contains(out, `"route_reason"`) || strings.Contains(out, `"note"`) && !strings.Contains(out, "untrusted_note") {
+		t.Errorf("free text must sit under untrusted_ field names: %s", out)
+	}
+	for _, want := range []string{"untrusted_route_reason", "untrusted_note", "REASON-TEXT-4402", "EVIDENCE-NOTE-9917"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s in %s", want, out)
+		}
 	}
 }
