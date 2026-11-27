@@ -123,7 +123,7 @@ release_values() { # prints the user-supplied values of the release as JSON, or 
   ctx_exists || return 0   # no such context yet: the cluster is made below, nothing can be lost
   if ! out=$("$HELM" get values "$RELEASE" -n "$RELEASE_NS" --kube-context "$KUBE_CONTEXT" -o json 2>"$err"); then
     # only helm's own, exact line means "no such release"; any other failure (a missing command, a wrong storage driver, an unreachable cluster) stops the install
-    if [ "$(head -n 1 "$err" 2>/dev/null)" = "Error: release: not found" ]; then return 0; fi
+    if grep -qxF "Error: release: not found" "$err" 2>/dev/null; then return 0; fi
     echo "cannot read the values of the release $RELEASE in $KUBE_CONTEXT: $(head -n 1 "$err" 2>/dev/null | cut -c1-300)" >&2
     return 1
   fi
@@ -132,19 +132,35 @@ release_values() { # prints the user-supplied values of the release as JSON, or 
 release_extras() { # release_extras <json file of the values this script will hand over>: prints the paths the release has and those values lack, one per line
   local rel; rel=$(release_values) || return 1
   [ -n "$rel" ] || return 0
-  printf '%s' "$rel" | jq -r --slurpfile exp "$1" '
+  printf '%s' "$rel" | jq -r --argjson comp "${COMPANION:-0}" --slurpfile exp "$1" '
     def flat($pre):
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
       elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
       else $pre end;
-    ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
-    | map(select(test("[.]image[.](tag|digest|repository)$|[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs|^[.]gateway[.]stubModel[.]scenarios[.]|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary|^[.]notify[.]requireReady$") | not))
+    # the one scenario file this script ships is named scenario.json; it is replaced without complaint only when the release holds an earlier copy of it (it names
+    # the dispute desk agent). A scenario.json of another use case, and any other file, stay in the list.
+    (if ((.gateway.stubModel.scenarios.files["scenario.json"] // "") | test("fernvale dispute desk agent"; "i")) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]scenario[.]json$" else "^$" end) as $mine
+    # the equipment use case ships equipment.json; when it is installed beside this one (COMPANION=1) this script passes it again, so it is not a loss
+    | (if ($comp == 1 and ((.gateway.stubModel.scenarios.files["equipment.json"] // "") | test("kestrel valley service desk agent"; "i"))) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]equipment[.]json$" else "^$" end) as $companion
+    | ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
+    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine) or test($companion)) | not))
     | .[]'
 }
 
 # ---- 1. compose the values (local work only: nothing in the cluster has changed yet) --------------------------------------------
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 VALUES_COMPOSED="$TMP/bank-values.yaml"; VALUES_BASE="$TMP/your-values.yaml"
+SCENARIOS="$HERE/eval/scenario.json"
+# The equipment use case (examples/use-cases/equipment) can run on the same platform install. When the release already holds its endpoint (dealer-records), this
+# script composes its values and its scenario file too, instead of refusing or dropping them: the platform installer replaces the release values on every run.
+COMPANION=0
+if [ "$SKIP_PLATFORM" != 1 ] && [ "$BESIDE" != 1 ]; then
+  REL_NOW=$(release_values) || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
+  if [ -n "$REL_NOW" ] && printf '%s' "$REL_NOW" | jq -e '[.mcp.endpoints[]?.name] | index("dealer-records")' >/dev/null 2>&1; then
+    "${KC[@]}" get namespace kestrel-records >/dev/null 2>&1 || die "the release holds the equipment use case (endpoint dealer-records) but the namespace kestrel-records is missing in $KUBE_CONTEXT. Install it again with examples/use-cases/equipment/install.sh first. Nothing was changed."
+    COMPANION=1
+  fi
+fi
 if [ "$SKIP_PLATFORM" != 1 ]; then
   if [ "$BESIDE" = 1 ]; then
     say "composing the values: your list ($VALUES_FILE) first, then examples/use-cases/bank/values-full-demo.yaml (the endpoint, the profile disputes, the agent dispute-agent, the sweep and the caller)"
@@ -167,14 +183,25 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     cmp -s "$TMP/render.yours" "$TMP/render.merged" || die "your VALUES_FILE list does not merge into one file that renders the same (a later file of yours replaces a list the merge would join). I will not guess: add the agent by hand with your list and values-full-demo.yaml. Nothing was changed."
     "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
   else
-    say "composing the values (components/quickstart/values.yaml and examples/use-cases/bank/values.yaml)"
-    "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+    if [ "$COMPANION" = 1 ]; then
+      say "the equipment use case is installed beside this one: composing the values of the quick start, this use case and the equipment use case, and passing both scenario files (scenario.json and equipment.json)"
+      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" "$ROOT/examples/use-cases/equipment/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+      mkdir "$TMP/scenarios"
+      cp "$HERE/eval/scenario.json" "$TMP/scenarios/scenario.json"
+      cp "$ROOT/examples/use-cases/equipment/eval/scenario.json" "$TMP/scenarios/equipment.json"
+      SCENARIOS="$TMP/scenarios"
+    else
+      say "composing the values (components/quickstart/values.yaml and examples/use-cases/bank/values.yaml)"
+      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+    fi
   fi
 fi
 
 # ---- 1b. the release (read only; nothing in the cluster has changed yet) ------------------------------------------------------------------
 if [ "$SKIP_PLATFORM" != 1 ]; then
-  if [ "$BESIDE" = 1 ]; then EXP_FILE="$VALUES_BASE"; else yq . "$VALUES_COMPOSED" > "$TMP/expected.json" || die "cannot read the composed values. Nothing was changed."; EXP_FILE="$TMP/expected.json"; fi
+  # Compare with what this script will hand over: the composed values. With --beside-full-demo that is your list plus values-full-demo.yaml, so a second run
+  # (whose release already holds the bank's own entries) is not refused, and a file left out of your list still is.
+  yq . "$VALUES_COMPOSED" > "$TMP/expected.json" || die "cannot read the composed values. Nothing was changed."; EXP_FILE="$TMP/expected.json"
   EXTRAS=$(release_extras "$EXP_FILE") || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
   if [ -n "$EXTRAS" ]; then
     if [ "$BESIDE" = 1 ]; then
@@ -264,7 +291,7 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
   else
     say "platform install, offline: the stub model with the scenarios of eval/scenario.json (a run with them is SCRIPTED, not the behaviour of a model)"
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GOOGLE_API_KEY -u MODEL_BASE_URL -u MODEL_NAME -u MODEL_PROVIDER -u MODEL_API_KEY \
-      CLUSTER="$CLUSTER" KUBE_CONTEXT="$KUBE_CONTEXT" PROFILE=quickstart VALUES_FILE="$VALUES_COMPOSED" STUB_SCENARIOS="$HERE/eval/scenario.json" "$PLATFORM_INSTALL"
+      CLUSTER="$CLUSTER" KUBE_CONTEXT="$KUBE_CONTEXT" PROFILE=quickstart VALUES_FILE="$VALUES_COMPOSED" STUB_SCENARIOS="$SCENARIOS" "$PLATFORM_INSTALL"
   fi
 fi
 

@@ -22,7 +22,7 @@ The invented Kestrel Valley Machinery has a combine that reports a fault, or a d
 
 ## One records deployment each, beside the bank
 
-The bank and this use case each run their own records deployment, in `fernvale-records` and `kestrel-records`, with their own endpoint, tool group, profile, header Secret, agent and caller. The records service runs one domain per process, and a profile may list only the endpoints of one group, so this needs no new chart value. The two agents cannot call each other's tools: each profile lists the tools of its own group, and the shared tool server offers neither set. `install.sh --with-bank` adds the equipment agent to a cluster that has the bank (the quick start, the bank values and these values are composed, both scenario files are passed, the bank's own objects are only read).
+The bank and this use case each run their own records deployment, in `fernvale-records` and `kestrel-records`, with their own endpoint, tool group, profile, header Secret, agent and caller. The records service runs one domain per process, and a profile may list only the endpoints of one group, so this needs no new chart value. The two agents cannot call each other's tools: each profile lists the tools of its own group, and the shared tool server offers neither set. Each `install.sh` reads the release and, when it finds the endpoint of the other use case, composes the other use case's values and passes both scenario files (`scenario.json` for the bank, `equipment.json` here), so either can be installed after the other, with no flag, and neither is refused or dropped. The other use case's own objects are only read.
 
 ## Offline
 

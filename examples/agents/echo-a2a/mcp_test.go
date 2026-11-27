@@ -19,6 +19,7 @@ type fakeMCP struct {
 	mu     sync.Mutex
 	tokens []string
 	calls  []string
+	called []string
 	status int
 }
 
@@ -57,6 +58,26 @@ func newFakeMCP(t *testing.T) *fakeMCP {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":`+string(req.ID)+`,"result":{"tools":[{"name":"osv_query_vulnerability"},{"name":"osv_get_vulnerability"}]}}`)
+		case "tools/call":
+			if r.Header.Get("Mcp-Session-Id") != "s-1" {
+				w.WriteHeader(400)
+				return
+			}
+			var cp struct {
+				Params struct {
+					Name string `json:"name"`
+				} `json:"params"`
+			}
+			_ = json.Unmarshal(b, &cp)
+			f.mu.Lock()
+			f.called = append(f.called, cp.Params.Name)
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if cp.Params.Name == "osv_get_vulnerability" { // a tool the profile does not list: the policy refuses it
+				_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":`+string(req.ID)+`,"error":{"code":403,"message":"call denied by authorization policy"}}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":`+string(req.ID)+`,"result":{"content":[{"type":"text","text":"secret text that must not be echoed"}],"isError":true}}`)
 		default:
 			w.WriteHeader(400)
 		}
@@ -140,4 +161,28 @@ func replyText(m map[string]any) string {
 	p, _ := parts[0].(map[string]any)
 	s, _ := p["text"].(string)
 	return s
+}
+
+func TestCallReportsReachedOrRefusedAndNeverEchoesContent(t *testing.T) {
+	mcp := newFakeMCP(t)
+	env := map[string]string{"OPENAGENTIX_MCP_URL": mcp.srv.URL + "/mcp", "OPENAGENTIX_MCP_TOKEN_FILE": tokenFile(t, "tok-1")}
+	h := newServer(envOf(env), nil, io.Discard).Handler()
+	_, m, raw := rpc(t, h, sendBody("/call osv_query_vulnerability"))
+	if got := replyText(m); got != "call osv_query_vulnerability: reached the tool (isError=true)" {
+		t.Fatalf("%q (%s)", got, raw)
+	}
+	if strings.Contains(raw, "secret text") {
+		t.Fatalf("the content of the tool result was echoed: %s", raw)
+	}
+	_, m, _ = rpc(t, h, sendBody("/call osv_get_vulnerability"))
+	if got := replyText(m); got != "call osv_get_vulnerability: refused: tool server error: call denied by authorization policy" {
+		t.Fatalf("%q", got)
+	}
+	if strings.Join(mcp.called, ",") != "osv_query_vulnerability,osv_get_vulnerability" {
+		t.Fatalf("tools called: %v", mcp.called)
+	}
+	_, m, _ = rpc(t, h, sendBody("/call"))
+	if got := replyText(m); got != "usage: /call <tool name>" {
+		t.Fatalf("%q", got)
+	}
 }

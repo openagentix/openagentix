@@ -173,6 +173,42 @@ func TestEquipmentEvaluationSetFailsASafetyRequestThatIsNotEscalated(t *testing.
 	}
 }
 
+// A write after the approval request supersedes it (the first real-model run of the bank retried a write and left a superseded request that the answer
+// still called pending). The scenario reads the request back before it answers, so what it reads is what it reports.
+func TestEquipmentReadBackShowsASupersededRequest(t *testing.T) {
+	raw, err := os.ReadFile(eqScenarioFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Scenarios []map[string]any `json:"scenarios"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	for _, sc := range f.Scenarios {
+		if sc["name"] != "equipment-covered-fault" {
+			continue
+		}
+		steps := sc["steps"].([]any)
+		n := len(steps) // the last step reads the request back
+		read := steps[n-1]
+		retry := map[string]any{"tool": "set_diagnosis", "args": map[string]any{"case_id": "{{user.id}}", "cause": "a retried write", "text": "written after the request"}}
+		sc["steps"] = append(append([]any{}, steps[:n-1]...), retry, read)
+		sc["answers"] = []any{map[string]any{"text": "STATUS {{result.20.output.status}}"}}
+	}
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	out, _ := json.Marshal(f)
+	if err := os.WriteFile(bad, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := newEqEnvWith(t, bad)
+	answer := e.run("Work case SVC-2026-0001")
+	if !strings.Contains(answer, "STATUS superseded") {
+		t.Fatalf("a write after the request must leave it superseded and the read-back must show it: %s", answer)
+	}
+}
+
 func TestEquipmentEvaluationSetFileIsValidAndPlain(t *testing.T) {
 	raw, err := os.ReadFile(eqCasesFile)
 	if err != nil {

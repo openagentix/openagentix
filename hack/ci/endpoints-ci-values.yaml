@@ -34,6 +34,10 @@ mcp:
       codeMode: false
       tools:
         echo: [echo, list_notes]       # not set_note: the profile's deny default hides it
+    - name: lookup-cm                  # code mode on the shared group, as the profile of the full demo: the check that the allow list lets a script call a listed tool
+      codeMode: true
+      tools:
+        osv: [query_vulnerability]     # get_vulnerability exists on the server and is not listed
   virtual:
     incomingAuth:
       # Only for this job: the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/endpoints-live.sh can make a token and make real

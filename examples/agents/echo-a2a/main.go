@@ -151,6 +151,10 @@ func (s *server) sendMessage(w http.ResponseWriter, ctx context.Context, req rpc
 		s.tools(w, ctx, req)
 		return
 	}
+	if line := strings.TrimSpace(strings.Join(texts, "\n")); line == "/call" || strings.HasPrefix(line, "/call ") {
+		s.callTool(w, ctx, req, strings.TrimSpace(strings.TrimPrefix(line, "/call")))
+		return
+	}
 	for _, name := range []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAGENTIX_MODEL"} {
 		if s.env(name) == "" {
 			writeRPC(w, http.StatusOK, req.ID, nil, &rpcError{-32000, "missing environment variable " + name})

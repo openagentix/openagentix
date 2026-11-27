@@ -93,8 +93,8 @@ kill $PF 2>/dev/null; PF=""
 echo "# real calls through the gateways: the vMCPs trust the API server's own tokens in this job (hack/ci/endpoints-ci-values.yaml)"
 $K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-ca '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
 $K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
-for v in tools "tools-$PROFILE"; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-for v in tools "tools-$PROFILE"; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP $v: restart not confirmed)"; done
+for v in tools "tools-$PROFILE" tools-lookup-cm; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in tools "tools-$PROFILE" tools-lookup-cm; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP $v: restart not confirmed)"; done
 mcp_token() { $K create token default -n "$MCPNS" --audience "$1" --duration 10m 2>/dev/null; }
 mcp_post() {  # mcp_post <port> <token file> <session id or -> <json>: prints the JSON-RPC answer (the data line of an event stream, or the body)
   local port=$1 tf=$2 sid=$3 body=$4 out hdr=()
@@ -161,6 +161,28 @@ case "$CODE" in
   000|"") ok "a pod in default timed out against the endpoint (the ingress policy is enforced here)";;
   *) bad "a pod in default reached the endpoint (HTTP $CODE)" "the network plugin of this cluster does not enforce ingress policy, or the policy does not select the pod. The header value is then the only check; do not read this as a pass.";;
 esac
+
+echo "# code mode under the allow list: a profile with codeMode true (as the profile lookup of the full demo)"
+# The policy of every profile server is an allow list (call_tool on the profile's tools and execute_tool_script, list_tools). A script calls the tools of its profile
+# only. "Works" means that the call reached the tool: the answer is no authorization refusal and no "undefined" (the tool's own argument or network error still counts).
+CMPORT=$((GPORT + 7))
+$K port-forward -n "$MCPNS" svc/vmcp-tools-lookup-cm "$CMPORT:4483" >/dev/null 2>&1 & PF4=$!
+sleep 4
+mcp_token openagentix-vmcp-lookup-cm > "$TD/cm"
+SID_C=-
+for _ in $(seq 1 10); do SID_C=$(mcp_open $CMPORT "$TD/cm"); [ "$SID_C" != - ] && break; sleep 5; done
+LIST_C=$(mcp_call $CMPORT "$TD/cm" "$SID_C" 2 tools/list '{}' | jq -r '[.result.tools[]?.name]|sort|join(" ")' 2>/dev/null)
+obs "tools/list on the code mode profile: $LIST_C"
+check "the code mode profile lists execute_tool_script (the allow list permits it)" "$(grep -c 'execute_tool_script' <<<"$LIST_C")" 1
+SCRIPT_OK='return osv_query_vulnerability(package_name="lodash", ecosystem="npm", version="4.17.15")'
+SCRIPT_NO='return osv_get_vulnerability(id="GHSA-35jh-r3h4-6jhm")'
+CM1=$(mcp_call $CMPORT "$TD/cm" "$SID_C" 3 tools/call "$(jq -cn --arg s "$SCRIPT_OK" '{name:"execute_tool_script",arguments:{script:$s}}')" 2>/dev/null)
+CM2=$(mcp_call $CMPORT "$TD/cm" "$SID_C" 4 tools/call "$(jq -cn --arg s "$SCRIPT_NO" '{name:"execute_tool_script",arguments:{script:$s}}')" 2>/dev/null)
+obs "script calling the listed tool answered: $(printf '%s' "$CM1" | cut -c1-300)"
+obs "script calling the unlisted tool answered: $(printf '%s' "$CM2" | cut -c1-300)"
+check "a script that calls a tool of the profile reached the tool (no authorization refusal, nothing undefined)" "$(printf '%s' "$CM1" | grep -ciE 'denied by authorization|undefined|not defined|unknown tool|no such' | awk '{print ($1==0)?"reached":"not reached"}')" reached
+check "a script that calls a tool the profile does not list fails" "$(printf '%s' "$CM2" | grep -ciE 'denied|undefined|not defined|unknown|not found|no such|"error"|"isError": ?true' | awk '{print ($1>0)?"failed":"worked"}')" failed
+kill $PF4 2>/dev/null; PF4=""
 
 echo "# resources and prompts: the profile filter covers tools only, so the chart forbids resource reads and prompt gets on a profile of an endpoint group"
 # The first live run of this slice found that, without the forbids, a profile vMCP listed and read the resources and prompts of the endpoint `other`, which the

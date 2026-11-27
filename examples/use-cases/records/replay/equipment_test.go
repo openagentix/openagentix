@@ -501,7 +501,7 @@ func TestEquipmentScenarioFileHasNoCredentialsOrPersonalData(t *testing.T) {
 	}
 }
 
-// With --with-bank the stub model loads the scenario files of both use cases from one directory, and it refuses a scenario name that is used twice. The
+// When the two use cases are installed side by side the stub model loads the scenario files of both use cases from one directory, and it refuses a scenario name that is used twice. The
 // first live run of that install crash-looped the stub model on a shared name, so the real loader is run here on both files.
 func TestEquipmentAndBankScenarioFilesLoadTogether(t *testing.T) {
 	dir := t.TempDir()

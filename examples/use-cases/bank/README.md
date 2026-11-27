@@ -57,6 +57,8 @@ Every step can be run again. A second run keeps the Secrets and changes nothing.
 
 **The platform installer replaces the release values on every run**, so the script **refuses to run on a release that has more than the quick start and this use case** (any key path or named list entry that the composed values do not have: for example schedules, a bridge, channels, notify, memory, other agents, profiles or callers, or a setting of the console or the gateway): it would drop them, and it would remove your provider key from the run. It names what would be lost.
 
+**Beside the equipment use case.** `examples/use-cases/equipment` runs its own records deployment, endpoint, tool group and profile, and can share the platform install with this one. When the release already holds its endpoint (`dealer-records`), this script composes its values and passes its scenario file (`equipment.json`, next to this use case's `scenario.json`) instead of refusing or dropping it; the equipment install does the same for this one. See that README, "How this sits beside the bank use case". Not run live from this side: the live job of the equipment use case installs the bank first.
+
 **Beside a full demo.** To add the agent to a full demo install, give the script the same list of files you installed with, and the name of that cluster:
 
 ```sh

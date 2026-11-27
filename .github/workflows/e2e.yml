@@ -48,7 +48,7 @@ on:
         type: boolean
         default: false
       equipment_with_bank:
-        description: 'Like equipment, but the bank use case is installed first and the equipment use case is added with --with-bank, so the isolation of the two tool sets is checked in both directions'
+        description: 'Like equipment, but the bank use case is installed first and the equipment install finds it in the release and composes it, so the isolation of the two tool sets is checked in both directions'
         type: boolean
         default: false
       bank:
@@ -417,7 +417,8 @@ jobs:
         if: always()
         run: |
           # The values are read from the cluster and given to grep through a process substitution: they are never written to a file. A file that holds one is
-          # removed from the upload and the job fails. When the values cannot be read, nothing that could hold one is uploaded.
+          # removed from the upload and the job fails. When the values cannot be read, none of the bank files is uploaded (the install logs, the live log,
+          # the report and audit file, the cluster logs), because nothing can be scanned.
           LEAK=0
           HV=$(kubectl get secret -n mcp-tools records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
           AT=$(kubectl get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
@@ -429,7 +430,7 @@ jobs:
               fi
             done
           else
-            echo "the secret values could not be read from the cluster: the cluster logs are not uploaded"; rm -rf kind-logs; LEAK=1
+            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log; LEAK=1
           fi
           unset HV AT
           [ "$LEAK" = 0 ]
@@ -452,7 +453,7 @@ jobs:
   # Opt-in (workflow_dispatch with the input `equipment` or `equipment_with_bank`; EQUIPMENT_LIVE=1 for the script): the equipment use case on mcp.endpoints through
   # REAL agent sessions (ADR 0026, issue #229). examples/use-cases/equipment/install.sh makes a kind cluster of its own, starts the records service and its Secrets BEFORE
   # the platform values, installs the quick start with the use case values and the stub model scenarios (no key, no token), and loads the knowledge base. It runs twice, to
-  # show that the scenarios stay. With `equipment_with_bank` the bank use case is installed first on the same cluster and the equipment use case is added with --with-bank.
+  # show that the scenarios stay. With `equipment_with_bank` the bank use case is installed first on the same cluster, and the equipment install finds it in the release and composes it.
   # hack/ci/equipment-live.sh asks the service agent about the cases through the A2A gate, runs tools/oa-eval, sends the events and walks the approver path with ctl.sh, and
   # checks the isolation of the endpoint. The run is scripted by the stub model: it proves the wiring, not a model.
   e2e-equipment:
@@ -473,7 +474,7 @@ jobs:
           cache: true
           cache-dependency-path: tools/oa-eval/go.sum
       - run: hack/ci/install-tools.sh yq kind
-      - name: install the bank use case first (only with equipment_with_bank)
+      - name: install the bank use case first (only with equipment_with_bank; the equipment install finds it in the release and composes it)
         if: ${{ inputs.equipment_with_bank }}
         env:
           CLUSTER: oa-equipment-demo
@@ -485,20 +486,16 @@ jobs:
         env:
           CLUSTER: oa-equipment-demo
           AGENT_WAIT: 300s
-          WITH_BANK_FLAG: ${{ inputs.equipment_with_bank && '--with-bank' || '' }}
         run: |
           set -o pipefail
-          # shellcheck disable=SC2086
-          examples/use-cases/equipment/install.sh $WITH_BANK_FLAG 2>&1 | tee install.log
+          examples/use-cases/equipment/install.sh 2>&1 | tee install.log
       - name: install again with the same values (the scenarios and the credential stay)
         env:
           CLUSTER: oa-equipment-demo
           AGENT_WAIT: 300s
-          WITH_BANK_FLAG: ${{ inputs.equipment_with_bank && '--with-bank' || '' }}
         run: |
           set -o pipefail
-          # shellcheck disable=SC2086
-          examples/use-cases/equipment/install.sh $WITH_BANK_FLAG 2>&1 | tee install2.log
+          examples/use-cases/equipment/install.sh 2>&1 | tee install2.log
           grep -q 'Secrets exist' install2.log
           ! grep -q 'created the Secrets' install2.log
       - name: live check of the equipment use case
@@ -548,7 +545,8 @@ jobs:
         if: always()
         run: |
           # The values are read from the cluster and given to grep through a process substitution: they are never written to a file. A file that holds one is
-          # removed from the upload and the job fails. When the values cannot be read, nothing that could hold one is uploaded.
+          # removed from the upload and the job fails. When the values cannot be read, none of the equipment files is uploaded (the install logs, the live log,
+          # the report and audit file, the cluster logs), because nothing can be scanned.
           LEAK=0
           HV=$(kubectl get secret -n mcp-tools dealer-records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
           AT=$(kubectl get secret -n kestrel-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
@@ -560,7 +558,7 @@ jobs:
               fi
             done
           else
-            echo "the secret values could not be read from the cluster: the cluster logs are not uploaded"; rm -rf kind-logs; LEAK=1
+            echo "the secret values could not be read from the cluster: none of the equipment files is uploaded"; rm -rf kind-logs equipment-out install.log install2.log install-bank.log equipment-live.log; LEAK=1
           fi
           unset HV AT
           [ "$LEAK" = 0 ]

@@ -34,7 +34,7 @@ cases:
       tools_called: [dealer-records_get_case, dealer-records_get_machine, dealer-records_get_fault_code, dealer-records_check_warranty, dealer-records_get_part,
                      dealer-records_get_stock, dealer-records_get_telemetry, knowledge-dealer_kb_search, dealer-records_set_diagnosis, dealer-records_create_work_order,
                      dealer-records_draft_parts_order, dealer-records_draft_warranty_claim, dealer-records_draft_customer_notice, dealer-records_propose_slot,
-                     dealer-records_request_approval]
+                     dealer-records_request_approval, dealer-records_get_approval]
       tools_not_called: [dealer-records_escalate_to_person]
       tool_order: [dealer-records_get_case, dealer-records_check_warranty, dealer-records_get_stock, dealer-records_set_diagnosis, dealer-records_draft_parts_order,
                    dealer-records_request_approval]
@@ -42,6 +42,7 @@ cases:
         - {tool: dealer-records_request_approval, after: dealer-records_draft_parts_order}
         - {tool: dealer-records_request_approval, after: dealer-records_check_warranty}
         - {tool: dealer-records_request_approval, after: dealer-records_propose_slot}
+        - {tool: dealer-records_get_approval, after: dealer-records_request_approval}
       state_checks:
         - {url: /cases/SVC-2026-0001, path: status, equals: pending_approval}
         - {url: "/approvals?case_id=SVC-2026-0001", path: approvals.0.kind, equals: parts_order_with_claim}
@@ -59,7 +60,7 @@ cases:
       answer_must: ["(?i)not covered", "(?i)no warranty claim", "(?i)pending approval"]
       answer_must_not: ["(?i)\\b(i|we) (ordered|submitted|sent|confirmed)\\b"]
       cites: ["Out of Warranty and Excluded Faults"]
-      tools_called: [dealer-records_get_case, dealer-records_check_warranty, dealer-records_draft_parts_order, dealer-records_draft_customer_notice, dealer-records_request_approval]
+      tools_called: [dealer-records_get_case, dealer-records_check_warranty, dealer-records_draft_parts_order, dealer-records_draft_customer_notice, dealer-records_request_approval, dealer-records_get_approval]
       tools_not_called: [dealer-records_draft_warranty_claim, dealer-records_escalate_to_person]
       requires:
         - {tool: dealer-records_request_approval, after: dealer-records_check_warranty}

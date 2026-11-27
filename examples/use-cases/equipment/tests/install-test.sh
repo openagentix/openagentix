@@ -106,7 +106,7 @@ check "the Secrets are created from stdin, never from a literal or an argument" 
 check "no secret value is in any argument list, in the output, or in an applied manifest (the credential, the token, the hash)" "! grep -qF -e '${EXP#Bearer }' -e '$TOKEN' -e '$HASH' '$LOG/calls' '$LOG/out' '$LOG/applied.yaml'"
 check "the namespace of the tool gateway is made when absent, before its Secret" "[ \"\$(line_of 'create namespace mcp-tools')\" -lt \"\$(line_of 'create secret generic dealer-records-mcp-auth')\" ]"
 check "the records service and its Secrets come BEFORE the platform install (the chart renders a policy into the records namespace and needs the header Secret)" "[ \"\$(line_of 'create secret generic dealer-records-mcp-auth')\" -lt \"\$(line_of 'platform-install')\" ] && [ \"\$(line_of 'rollout status deployment/records')\" -lt \"\$(line_of 'platform-install')\" ]"
-check "the platform installer gets the cluster, the quick start profile and the scenario file" "grep -q 'platform-install CLUSTER=oa-equipment KUBE_CONTEXT=kind-oa-equipment PROFILE=quickstart STUB_SCENARIOS=.*/examples/use-cases/equipment/eval/scenario.json' '$LOG/calls'"
+check "the platform installer gets the cluster, the quick start profile and the scenario file" "grep -q 'platform-install CLUSTER=oa-equipment KUBE_CONTEXT=kind-oa-equipment PROFILE=quickstart STUB_SCENARIOS=.*/scenarios' '$LOG/calls'"
 check "no provider key reaches the platform installer (the stub answers: a scripted run, no paid call)" "grep -q 'ANTHROPIC= ' '$LOG/calls'"
 check "the composed values have the endpoint, the profile, the agent and the quick start's profile" "yq -e '.mcp.endpoints[0].name == \"dealer-records\" and ([.mcp.profiles[].name] | sort == [\"dealer\",\"lookup\"]) and .agents[0].name == \"service-agent\"' '$LOG/platform-values.yaml' >/dev/null"
 check "the knowledge base documents and the graph facts are loaded AFTER the platform install" "[ \"\$(line_of 'platform-install')\" -lt \"\$(line_of 'kb-ingest')\" ] && grep -q 'kb-ingest .*/seed/kb kestrel-service' '$LOG/calls' && grep -q 'kb-graph-load kestrel-service kestrel-fleet .*/seed/graph/service-facts.yaml' '$LOG/calls'"
@@ -187,15 +187,10 @@ run; rc=$?
 check "a small custom release (a key the quick start does not set) is refused too" "[ $rc = 1 ] && grep -q '.console.theme' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 # a release that is exactly the composed values plus what the platform installer sets itself
 bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" 2>/dev/null | yq . > "$TMP/expected.json"
-jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"knowledge":{"kb":{"sourceHash":"def","image":{"tag":"dev-1","digest":"sha256:1","repository":"r"}}},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"{}"}}}},"notify":{"requireReady":false}}' "$TMP/expected.json" > "$TMP/release-ok.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"knowledge":{"kb":{"sourceHash":"def","image":{"tag":"dev-1"}}},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"equipment.json":"Kestrel Valley service desk agent"}}}},"notify":{"requireReady":false}}' "$TMP/expected.json" > "$TMP/release-ok.json"
 reset; cp "$TMP/release-ok.json" "$LOG/release.json"; : > "$LOG/calls"
 run; rc=$?
 check "a release that holds exactly the composed values plus what the platform installer sets itself is updated" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
-reset
-bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$ROOT/examples/use-cases/bank/values.yaml" "$HERE/values.yaml" 2>/dev/null | yq . > "$TMP/expected-both.json"
-jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"gateway":{"stubModel":{"sourceHash":"x"}}}' "$TMP/expected-both.json" > "$LOG/release.json"
-run; rc=$?
-check "a release that holds the bank use case too is refused without --with-bank (it would be replaced), the message names --with-bank and the bank's agent, and nothing is changed" "[ $rc = 1 ] && grep -q 'more than the quick start' '$LOG/out' && grep -q -- '--with-bank' '$LOG/out' && grep -q 'dispute-agent' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 reset
 echo '{}' > "$LOG/release.json"
 run --skip-platform; rc=$?
@@ -213,22 +208,28 @@ FAKE_SECRET_ERR=records-mcp-expected run; rc=$?
 check "an API error on one of the four Secrets stops the install: nothing is deleted, made again or restarted, and the platform is not touched" "[ $rc = 1 ] && grep -q 'cannot read the Secret records-mcp-expected' '$LOG/out' && ! grep -qE 'delete secret|create secret|rollout restart|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 check "the four Secrets are still there" "[ -f '$LOG/secret_a' ] && [ -f '$LOG/secret_t' ] && [ -f '$LOG/secret_e' ] && [ -f '$LOG/secret_m' ]"
 
-echo "# beside the bank use case (--with-bank): one records deployment each, both agents on one platform install"
+echo "# the bank use case is installed beside this one (it is composed, not refused or dropped): one records deployment each, both agents on one platform install"
 reset
-bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$ROOT/examples/use-cases/bank/values.yaml" 2>/dev/null | yq . > "$LOG/release.json"
-FAKE_BANK=1 FAKE_STUB=1 ANTHROPIC_API_KEY=should-not-reach-the-installer run --with-bank; rc=$?
-check "exits 0 on a release that holds the quick start and the bank use case" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$ROOT/examples/use-cases/bank/values.yaml" 2>/dev/null | yq . > "$TMP/bank-only.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"fernvale dispute desk agent"}}}}}' "$TMP/bank-only.json" > "$LOG/release.json"
+FAKE_BANK=1 FAKE_STUB=1 ANTHROPIC_API_KEY=should-not-reach-the-installer run; rc=$?
+check "exits 0 on a release that holds the quick start and the bank use case (no flag: the bank is found in the release)" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
 check "the values given to the platform installer have both agents, both endpoints, both profiles, and the quick start's profile once" "yq -e '([.agents[].name] | sort == [\"dispute-agent\",\"service-agent\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"]) and ([.mcp.profiles[].name] | sort == [\"dealer\",\"disputes\",\"lookup\"])' '$LOG/platform-values.yaml' >/dev/null" "$(head -3 "$LOG/platform-values.yaml")"
-check "the stub model gets the scenario files of both use cases, in one directory, under two names" "grep -q 'PROFILE=quickstart STUB_SCENARIOS=.*/' '$LOG/calls' && [ \"\$(tr '\n' ' ' < '$LOG/scenario-files')\" = 'bank.json equipment.json ' ]" "$(cat "$LOG/scenario-files" 2>&1)"
+check "the stub model gets the scenario files of both use cases, in one directory, under two names (the bank's own name scenario.json, and equipment.json)" "grep -q 'PROFILE=quickstart STUB_SCENARIOS=.*/' '$LOG/calls' && [ \"\$(tr '\n' ' ' < '$LOG/scenario-files')\" = 'equipment.json scenario.json ' ]" "$(cat "$LOG/scenario-files" 2>&1)"
 check "no provider key reaches the platform installer (a scripted run)" "grep -q 'ANTHROPIC= ' '$LOG/calls'"
-check "the bank's records service and Secrets are only read: no namespace, Secret or deployment of the bank is created, changed or deleted" "! grep -E '(create|delete|apply|patch|rollout).*(fernvale-records|records-mcp-auth)' '$LOG/calls' | grep -v dealer | grep -q ."
+check "the bank's records service and Secrets are not touched: no namespace, Secret or deployment of the bank is created, changed or deleted" "! grep -E '(create|delete|apply|patch|rollout).*(fernvale-records|records-mcp-auth)' '$LOG/calls' | grep -v dealer | grep -q ."
 check "the equipment service is still installed before the platform" "[ \"\$(line_of 'rollout status deployment/records -n kestrel-records')\" -lt \"\$(line_of 'platform-install')\" ]"
 reset
-FAKE_STUB=1 run --with-bank; rc=$?
-check "--with-bank without the bank installed (no namespace fernvale-records) is refused before any change" "[ $rc = 1 ] && grep -q 'bank use case is not installed' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"}}' "$TMP/bank-only.json" > "$LOG/release.json"
+FAKE_STUB=1 run; rc=$?
+check "the bank endpoint in the release but no namespace fernvale-records: refused before any change, with a pointer to the bank install" "[ $rc = 1 ] && grep -q 'fernvale-records' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 reset
-FAKE_BANK=1 run --with-bank --beside-full-demo; rc=$?
-check "--with-bank and --beside-full-demo together are refused" "[ $rc = 1 ] && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
+FAKE_STUB=1 run; rc=$?
+check "without the bank in the release the stub model gets one directory with the single file equipment.json" "[ $rc = 0 ] && [ \"\$(cat '$LOG/scenario-files')\" = 'equipment.json' ]" "exit $rc: $(tail -3 "$LOG/out")"
+reset
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" 2>/dev/null | yq . | jq '. * {"gateway":{"stubModel":{"scenarios":{"files":{"equipment.json":"Kestrel Valley service desk agent","scenario.json":"another use case"}}}}}' > "$LOG/release.json"
+run; rc=$?
+check "a scenario.json of another use case in the release is not ignored: it is refused and named (only the bank's own file, in the presence of the bank, is a companion)" "[ $rc = 1 ] && grep -q 'scenarios.files.scenario.json' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 
 echo "# beside a full demo"
 reset
@@ -275,7 +276,7 @@ FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
 check "a stub model with the chart scenarios: no warning, one line that says runs are scripted" "[ $rc = 0 ] && ! grep -q WARN '$LOG/out' && grep -q 'scripted by the stub model' '$LOG/out'" "exit $rc: $(cat "$LOG/out")"
 reset
 FAKE_STUB=1 FAKE_SCENARIOS=wrongkey run; rc=$?
-check "a chart ConfigMap that does not hold scenario.json: a warning that names the key, exit 0" "[ $rc = 0 ] && grep -q 'WARN: the ConfigMap stub-model-scenarios has no scenario.json' '$LOG/out'" "exit $rc: $(cat "$LOG/out")"
+check "a chart ConfigMap that does not hold equipment.json: a warning that names the key, exit 0" "[ $rc = 0 ] && grep -q 'WARN: the ConfigMap stub-model-scenarios has no equipment.json' '$LOG/out'" "exit $rc: $(cat "$LOG/out")"
 reset
 run; rc=$?
 check "without a stub model nothing is patched and no warning is given" "[ $rc = 0 ] && ! grep -q 'patch' '$LOG/calls' && ! grep -q WARN '$LOG/out' && grep -q 'no stub model in this cluster' '$LOG/out'" "exit $rc"

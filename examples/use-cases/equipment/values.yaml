@@ -9,8 +9,7 @@
 #   CLUSTER=oa-equipment-demo examples/use-cases/equipment/install.sh          # its own kind cluster: the quick start plus this use case, stub model
 #   VALUES_FILE="<the list you installed with>" CLUSTER=<its cluster> examples/use-cases/equipment/install.sh --beside-full-demo
 #                                                                               # adds the agent to a full demo install (values-full-demo.yaml)
-#   CLUSTER=<the bank cluster> examples/use-cases/equipment/install.sh --with-bank
-#                                                                               # adds the agent to a cluster that has the quick start and the bank use case
+#   CLUSTER=<the bank cluster> examples/use-cases/equipment/install.sh        # on a cluster that has the bank use case: it is found in the release and composed too
 #
 # By hand (VALUES_FILE comes after the profile, so maps below merge into the quick start values and the lists below REPLACE the quick start
 # lists (Helm replaces lists), which is why `mcp.profiles` restates `lookup` and `callers` restates `quickstart-ask`; the records service and
@@ -25,7 +24,7 @@
 #   - one schedule, the fleet sweep, suspended;
 #   - one caller rule for the service desk.
 # Names differ from the bank use case on purpose (the endpoint, the group, the profile, the Secret, the namespace, the agent), so that the two can
-# run on one platform install (`--with-bank`) without sharing a tool, a group or a credential.
+# run on one platform install without sharing a tool, a group or a credential.
 # The records tools are not on the shared tool server, so another agent (the full demo's `assistant`, which has code mode) cannot call them:
 # the group `dealer` is referenced by the profile's tool server only. Every tool server (vMCP) can still read Secrets in the tools namespace
 # through the API (ADR 0026, A3): the header Secret is as safe as that namespace.
@@ -94,7 +93,9 @@ agents:
          Draft the customer notice (dealer-records_draft_customer_notice). List the free slots and hold one (dealer-records_propose_slot). Set the response
          timer (dealer-records_set_timer).
       9. Ask for approval with dealer-records_request_approval: the kind parts_order_with_claim when the machine is covered, otherwise parts_order. The
-         dealer manager decides.
+         dealer manager decides. The approval request is your LAST write: write nothing after it. If you must write again (a retry after an error, a
+         correction), ask for approval again after that write. Before you report, always read the request with dealer-records_get_approval. Say
+         "pending approval" only when its status is pending. If it is superseded or rejected, say so, say "needs human review", and do not call it pending.
 
       Rules you never break:
       - You cannot order a part, submit a claim, send a notice or confirm a slot. A named dealer manager approves first.
