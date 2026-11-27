@@ -123,7 +123,7 @@ release_values() { # prints the user-supplied values of the release as JSON, or 
   ctx_exists || return 0   # no such context yet: the cluster is made below, nothing can be lost
   if ! out=$("$HELM" get values "$RELEASE" -n "$RELEASE_NS" --kube-context "$KUBE_CONTEXT" -o json 2>"$err"); then
     # only helm's own, exact line means "no such release"; any other failure (a missing command, a wrong storage driver, an unreachable cluster) stops the install
-    if [ "$(head -n 1 "$err" 2>/dev/null)" = "Error: release: not found" ]; then return 0; fi
+    if grep -qxF "Error: release: not found" "$err" 2>/dev/null; then return 0; fi
     echo "cannot read the values of the release $RELEASE in $KUBE_CONTEXT: $(head -n 1 "$err" 2>/dev/null | cut -c1-300)" >&2
     return 1
   fi
@@ -137,8 +137,11 @@ release_extras() { # release_extras <json file of the values this script will ha
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
       elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
       else $pre end;
-    ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
-    | map(select(test("[.]image[.](tag|digest|repository)$|[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs|^[.]gateway[.]stubModel[.]scenarios[.]|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary|^[.]notify[.]requireReady$") | not))
+    # the one scenario file this script ships is named scenario.json; it is replaced without complaint only when the release holds an earlier copy of it (it names
+    # the dispute desk agent). A scenario.json of another use case, and any other file, stay in the list.
+    (if ((.gateway.stubModel.scenarios.files["scenario.json"] // "") | test("fernvale dispute desk agent"; "i")) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]scenario[.]json$" else "^$" end) as $mine
+    | ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
+    | map(select((test("^[.](bridge|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine)) | not))
     | .[]'
 }
 
@@ -174,7 +177,9 @@ fi
 
 # ---- 1b. the release (read only; nothing in the cluster has changed yet) ------------------------------------------------------------------
 if [ "$SKIP_PLATFORM" != 1 ]; then
-  if [ "$BESIDE" = 1 ]; then EXP_FILE="$VALUES_BASE"; else yq . "$VALUES_COMPOSED" > "$TMP/expected.json" || die "cannot read the composed values. Nothing was changed."; EXP_FILE="$TMP/expected.json"; fi
+  # Compare with what this script will hand over: the composed values. With --beside-full-demo that is your list plus values-full-demo.yaml, so a second run
+  # (whose release already holds the bank's own entries) is not refused, and a file left out of your list still is.
+  yq . "$VALUES_COMPOSED" > "$TMP/expected.json" || die "cannot read the composed values. Nothing was changed."; EXP_FILE="$TMP/expected.json"
   EXTRAS=$(release_extras "$EXP_FILE") || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
   if [ -n "$EXTRAS" ]; then
     if [ "$BESIDE" = 1 ]; then

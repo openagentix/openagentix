@@ -52,7 +52,8 @@ cat > "$BIN/helm" <<'EOF'
 #!/usr/bin/env bash
 echo "helm $*" >> "$FAKE_LOG/calls"
 case "$1" in
-  get) if [ -n "${FAKE_HELM_ERR:-}" ]; then echo "Error: query: failed to query with labels: secrets is forbidden: the secret list was not found in this namespace" >&2; exit 1; fi
+  get) if [ -n "${FAKE_HELM_MULTI:-}" ]; then printf 'WARNING: Kubernetes configuration file is group-readable\nError: release: not found\n' >&2; exit 1; fi
+       if [ -n "${FAKE_HELM_ERR:-}" ]; then echo "Error: query: failed to query with labels: secrets is forbidden: the secret list was not found in this namespace" >&2; exit 1; fi
        if [ -f "$FAKE_LOG/release.json" ]; then cat "$FAKE_LOG/release.json"; exit 0; fi; echo "Error: release: not found" >&2; exit 1 ;;
   template) if [ -n "${FAKE_RENDER_DIFF:-}" ] && printf '%s' "$*" | grep -q 'your-values.yaml'; then echo "merged: different"; else echo "render: same"; fi; exit 0 ;;
 esac
@@ -173,7 +174,7 @@ run; rc=$?
 check "a small custom release (a key the quick start does not set) is refused too: the old list of full demo keys did not see it" "[ $rc = 1 ] && grep -q '.console.theme' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 # a release that is exactly the composed values plus what the platform installer sets itself
 bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" 2>/dev/null | yq . > "$TMP/expected.json"
-jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"knowledge":{"kb":{"sourceHash":"def","image":{"tag":"dev-1","digest":"sha256:1","repository":"r"}}},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"{}"}}}},"notify":{"requireReady":false}}' "$TMP/expected.json" > "$TMP/release-ok.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"knowledge":{"kb":{"sourceHash":"def","image":{"tag":"dev-1"}}},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"{\"scenarios\":[{\"match\":{\"system\":\"(?i)fernvale dispute desk agent\"}}]}"}}}},"notify":{"requireReady":false}}' "$TMP/expected.json" > "$TMP/release-ok.json"
 reset; cp "$TMP/release-ok.json" "$LOG/release.json"; : > "$LOG/calls"
 run; rc=$?
 check "a release that holds exactly the composed values plus what the platform installer sets itself is updated" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
@@ -194,6 +195,31 @@ FAKE_SECRET_ERR=records-mcp-expected run; rc=$?
 check "an API error on one of the four Secrets stops the install: nothing is deleted, made again or restarted, and the platform is not touched" "[ $rc = 1 ] && grep -q 'cannot read the Secret records-mcp-expected' '$LOG/out' && ! grep -qE 'delete secret|create secret|rollout restart|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 check "the four Secrets are still there" "[ -f '$LOG/secret_a' ] && [ -f '$LOG/secret_t' ] && [ -f '$LOG/secret_e' ] && [ -f '$LOG/secret_m' ]"
 
+echo "# the guard: what the installer sets is ignored, nothing else (a narrow list)"
+reset
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"a"},"knowledge":{"kb":{"image":{"tag":"dev-1"}}},"notify":{"image":{"tag":"dev-2"}}}' "$TMP/expected.json" > "$LOG/release.json"
+run; rc=$?
+check "the image tag of a platform component and the API server addresses (anchored paths) are ignored: the release is updated" "[ $rc = 0 ]" "exit $rc: $(cat "$LOG/out" | head -5)"
+reset
+jq '. * {"mycomponent":{"image":{"repository":"example/x"}},"knowledge":{"kb":{"image":{"repository":"example/y"}}},"controlPlane":{"apiServerCIDRsExtra":["1.2.3.4/32"]}}' "$TMP/expected.json" > "$LOG/release.json"
+run; rc=$?
+check "an image repository, and a key that only starts like an ignored one, are not ignored: refused and named" "[ $rc = 1 ] && grep -q '.mycomponent.image.repository' '$LOG/out' && grep -q '.knowledge.kb.image.repository' '$LOG/out' && grep -q 'apiServerCIDRsExtra' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out" | head -8)"
+reset
+jq '. * {"skills":{"openagentix-canary":{"oci":"r/x@sha256:1","extra":true}}}' "$TMP/expected.json" > "$LOG/release.json"
+run; rc=$?
+check "only the skill reference the installer sets is ignored, not the rest of that block" "[ $rc = 1 ] && grep -q 'skills.openagentix-canary.extra' '$LOG/out' && ! grep -q 'skills.openagentix-canary.oci' '$LOG/out'" "exit $rc: $(cat "$LOG/out" | head -8)"
+reset
+jq '. * {"gateway":{"stubModel":{"scenarios":{"files":{"scenario.json":"{\"scenarios\":[{\"match\":{\"system\":\"Brambleworks pod agent\"}}]}","other-case.json":"{}"}}}}}' "$TMP/expected.json" > "$LOG/release.json"
+run; rc=$?
+check "scenario files of another use case are not replaced silently: a scenario.json that is not this one, and any other file, are refused and named" "[ $rc = 1 ] && grep -q 'scenarios.files.scenario.json' '$LOG/out' && grep -q 'scenarios.files.other-case.json' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out" | head -8)"
+reset
+jq '. * {"gateway":{"stubModel":{"scenarios":{"files":{"scenario.json":"{\"scenarios\":[{\"match\":{\"system\":\"(?i)fernvale dispute desk agent\"}}]}"}}}}}' "$TMP/expected.json" > "$LOG/release.json"
+run; rc=$?
+check "the scenario file of this use case (an earlier run of this script) is replaced without complaint" "[ $rc = 0 ]" "exit $rc: $(cat "$LOG/out" | head -5)"
+reset; echo '{"customThing":{"enabled":true}}' > "$LOG/release.json"
+FAKE_HELM_MULTI=1 run; rc=$?
+check "helm's exact line 'Error: release: not found' counts as no release when it is not the first line of stderr" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out" | head -5)"
+
 echo "# beside a full demo"
 reset
 mkdir -p "$TMP/vf"; printf 'agents:\n  - name: assistant\n    model: claude-haiku\nmcp:\n  virtual: {codeMode: {enabled: true}}\n' > "$TMP/vf/one.yaml"; printf 'schedules:\n  - name: nightly\n    agent: assistant\n    schedule: "0 1 * * *"\n    prompt: hi\n' > "$TMP/vf/two.yaml"
@@ -208,6 +234,16 @@ reset
 echo '{"agents":[{"name":"assistant"}],"schedules":[{"name":"nightly"}],"memory":{"enabled":true}}' > "$LOG/release.json"
 VALUES_FILE="$TMP/vf/one.yaml $TMP/vf/two.yaml" run --beside-full-demo; rc=$?
 check "beside a full demo: a key of the release that your VALUES_FILE list lacks (a file left out) is refused and named, before any change" "[ $rc = 1 ] && grep -q '.memory.enabled' '$LOG/out' && grep -q 'same list of files' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+# a second --beside-full-demo run: the release is the composed values (your list plus values-full-demo.yaml) and what the installer sets
+jq -s 'reduce .[] as $x ({}; . * $x)' <(yq . "$TMP/vf/one.yaml") <(yq . "$TMP/vf/two.yaml") > "$TMP/yours.json"
+bash "$ROOT/hack/compose-values.sh" "$TMP/yours.json" "$HERE/values-full-demo.yaml" 2>/dev/null | yq . > "$TMP/beside-composed.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"notify":{"image":{"tag":"dev-2"}}}' "$TMP/beside-composed.json" > "$TMP/beside-release.json"
+reset; cp "$TMP/beside-release.json" "$LOG/release.json"
+VALUES_FILE="$TMP/vf/one.yaml $TMP/vf/two.yaml" run --beside-full-demo; rc=$?
+check "a SECOND --beside-full-demo run is not refused: the bank's own entries from the first run are in the composed values it compares with" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out" | head -6)"
+reset; jq '. * {"memory":{"enabled":true}}' "$TMP/beside-release.json" > "$LOG/release.json"
+VALUES_FILE="$TMP/vf/one.yaml $TMP/vf/two.yaml" run --beside-full-demo; rc=$?
+check "and a file left out of VALUES_FILE is still refused and named on the second run" "[ $rc = 1 ] && grep -q '.memory.enabled' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out" | head -6)"
 reset
 run --beside-full-demo; rc=$?
 check "--beside-full-demo without VALUES_FILE is refused: Helm replaces the release values, so the list is needed" "[ $rc = 1 ] && grep -q 'needs VALUES_FILE' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"

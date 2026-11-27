@@ -406,7 +406,8 @@ jobs:
         if: always()
         run: |
           # The values are read from the cluster and given to grep through a process substitution: they are never written to a file. A file that holds one is
-          # removed from the upload and the job fails. When the values cannot be read, nothing that could hold one is uploaded.
+          # removed from the upload and the job fails. When the values cannot be read, none of the bank files is uploaded (the install logs, the live log,
+          # the report and audit file, the cluster logs), because nothing can be scanned.
           LEAK=0
           HV=$(kubectl get secret -n mcp-tools records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
           AT=$(kubectl get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
@@ -418,7 +419,7 @@ jobs:
               fi
             done
           else
-            echo "the secret values could not be read from the cluster: the cluster logs are not uploaded"; rm -rf kind-logs; LEAK=1
+            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log; LEAK=1
           fi
           unset HV AT
           [ "$LEAK" = 0 ]
