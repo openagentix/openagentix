@@ -15,6 +15,8 @@ on:
       - hack/ci/smoke.sh
       - hack/ci/diagnostics-live.sh
       - hack/ci/diagnostics-ci-values.yaml
+      - hack/ci/rca-live.sh
+      - examples/use-cases/software-org/**
       - hack/ci/phases.sh
       - hack/demo.sh
       - hack/ask.sh
@@ -28,6 +30,10 @@ on:
         description: 'Run the live check of cluster-read (ADR 0025, slice 4) instead of the profiles: the quick start plus hack/ci/diagnostics-ci-values.yaml'
         type: boolean
         default: false
+      rca:
+        description: 'Run the live proof of the pod root-cause agent (examples/use-cases/software-org, issue #229) instead of the profiles: the quick start plus the use case, the stub model with its scenarios, a real agent session through the A2A gate, tools/oa-eval'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,7 +45,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostics }}
+    if: ${{ github.event_name != 'workflow_dispatch' || !(inputs.diagnostics || inputs.rca) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -166,7 +172,7 @@ jobs:
   # slice 3) and what ToolHive loaded for the dedicated profile (the eight tools) and for the shared vMCP (none). See hack/ci/diagnostics-ci-values.yaml.
   e2e-diagnostics:
     name: e2e (diagnostics, cluster-read)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics && !inputs.rca }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -231,3 +237,88 @@ jobs:
           name: kind-logs-diagnostics
           path: kind-logs
           retention-days: 7
+# Opt-in (workflow_dispatch with the input `rca`; RCA_LIVE=1 for the script): the pod root-cause agent of the software organisation use case through a REAL
+  # agent session (issue #229). examples/use-cases/software-org/install.sh installs the quick start with the use case values and the stub model scenarios (no
+  # key, no token), applies the six broken workloads, and hack/ci/rca-live.sh asks the agent about each case through the A2A gate, runs tools/oa-eval, and
+  # checks the audit lines and the logs for the planted canaries. It also settles what happens when a chart agent on a diagnostics profile calls a tool (the
+  # stub model scenarios decide the calls; the agent runtime, the tool server of the profile, ToolHive and cluster-read do the rest).
+  e2e-rca:
+    name: e2e (software-org, pod RCA)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.rca }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: tools/oa-eval/go.mod
+          cache: true
+          cache-dependency-path: tools/oa-eval/go.sum
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install (the quick start plus the software-org values, the stub model with the scenarios, no key, no token)
+        env:
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          examples/use-cases/software-org/install.sh 2>&1 | tee install.log
+      - name: live check of the pod root-cause agent
+        env:
+          RCA_LIVE: "1"
+          RCA_OUT: rca-out
+        run: |
+          set -o pipefail
+          hack/ci/rca-live.sh 2>&1 | tee rca-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Pod root-cause agent, a real agent session (software-org use case, issue #229)"
+            echo "The stub model played examples/use-cases/software-org/eval/scenario.json: the run is SCRIPTED, not the behaviour of a model."
+            echo '```'
+            cat rca-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          echo "--- rca-demo: pods and events"
+          kubectl get pods -n rca-demo -o wide || true
+          kubectl get events -n rca-demo --sort-by=.lastTimestamp | tail -40 || true
+          echo "--- the agent and what kagent says about its tool server"
+          kubectl get agents.api.kagent.dev pod-rca -n kagent -o json | jq -c '.status' || true
+          kubectl get remotemcpserver -n kagent -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason,message}],tools:[.status.discoveredTools[]?.name]}' || true
+          echo "--- the vMCPs and their conditions"
+          kubectl get virtualmcpserver,mcpserverentry,mcpgroup -n mcp-tools || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}]}' || true
+          echo "--- vMCP tools-rca log (audit data is off: tool names and outcomes only)"
+          kubectl logs -n mcp-tools -l app=virtualmcpserver,toolhive-name=tools-rca --all-containers --tail=150 | cut -c1-500 || true
+          echo "--- cluster-read log (it holds no secret)"
+          kubectl logs -n openagentix-diagnostics deploy/cluster-read --tail=120 | cut -c1-400 || true
+          echo "--- kagent: the controller and every other pod of the namespace"
+          kubectl logs -n kagent deploy/kagent-controller --tail=150 | cut -c1-500 || true
+          for p in $(kubectl get pods -n kagent -o name 2>/dev/null | grep -v kagent-controller); do echo "--- $p"; kubectl logs -n kagent "$p" --all-containers --tail=60 | cut -c1-500 || true; done
+          echo "--- the stub model and the gate"
+          kubectl logs -n agentgateway-system deploy/stub-model --tail=60 | cut -c1-300 || true
+          kubectl logs -n openagentix-gateway -l app=a2a-gate --tail=60 | cut -c1-300 || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload the report, the audit file and the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rca-live
+          path: |
+            rca-out/report.json
+            rca-out/retry-*.json
+            rca-out/audit.jsonl
+            rca-out/eval.out
+            rca-live.log
+            install.log
+            kind-logs
+          retention-days: 14
+          if-no-files-found: ignore
