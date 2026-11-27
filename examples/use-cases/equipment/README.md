@@ -203,7 +203,7 @@ Replay of the 40 closed cases (the technician's final diagnosis is kept in the r
 
 Offline (the tests above, no cluster, no model): the scripted chains, the tool arguments, the stop at the approval request, the order, the claim and the notice queued only after a named manager decides (once, with the stock taken once), the out of warranty path with no claim, the escalation of the safety request and of the injected note, and the evaluation set's checks: with the real stub model binary, the real records service and the real `oa-eval`. The values render and the objects they add; the shared tool server never names the records service; `install.sh` and `ctl.sh` against fakes.
 
-Live, on a kind cluster in CI (the opt-in job `e2e (equipment, mcp.endpoints)`: `gh workflow run e2e.yml -f equipment=true --ref <branch>`; `hack/ci/equipment-live.sh`): **The stub model played `eval/scenario.json`, so every run was scripted by the stub model and shows the platform, not a model.** The first run on the final scripts (run 46066469406) passed 92 checks, none failed. Through real agent sessions (the question goes through the A2A gate, kagent runs the agent, the agent calls the tools through the tool server of its profile) it showed:
+Live, on a kind cluster in CI (the opt-in job `e2e (equipment, mcp.endpoints)`: `gh workflow run e2e.yml -f equipment=true --ref <branch>`; `hack/ci/equipment-live.sh`): **The stub model played `eval/scenario.json`, so every run was scripted by the stub model and shows the platform, not a model.** The run on the final scripts (run 46077437400, the head that the pull request names) passed 92 checks, none failed. Through real agent sessions (the question goes through the A2A gate, kagent runs the agent, the agent calls the tools through the tool server of its profile) it showed:
 
 - the tool server `tools-dealer` lists `dealer-records` and `knowledge-dealer` as ready and lists exactly the 20 `dealer-records_*` and 6 `knowledge-dealer_*` tools; a service tool that the profile leaves out (`open_proactive_case`) is refused and opens no case; the shared tool server and the profile `lookup` of the quick start agent list none and refuse a call;
 - `oa-eval` passed all seven cases through the gate (audit lines as the audit source, the records REST state as the state source); every audited call was a tool of the profile and none was a tool of the bank use case;
@@ -231,7 +231,7 @@ The knowledge base ranked the intended document first for the five queries of th
 - Every tool server in the tool namespace can read every Secret there through the API (the ToolHive operator gives each one that right, and the chart cannot narrow a Role it does not own: ADR 0026 A3). The header Secret is as safe as that namespace. The live job records the answer of `kubectl auth can-i`.
 - Network policy: the ingress policy on the records pod and the egress policy on the tool server of the group limit who can connect only on a network plugin that enforces NetworkPolicy. kindnet (the kind default) is not known to enforce egress to the internet; the live job records what the policies do on its cluster. The header credential is the second check on the records port.
 - The header value is one shared value: the records service cannot tell which agent called, and does not learn it (the tool server does not forward the caller). What an agent may do is what its profile lists.
-- Two use cases on one cluster: shown live with the bank installed first and this use case second (run 46071631350, 95 checks: each tool server refuses the other's tools, and the bank's still answers its own). The other order (this use case first, then the bank's `install.sh`) is tested offline with fakes only.
+- Two use cases on one cluster: shown live with the bank installed first and this use case second (run 46078350141, 95 checks: each tool server refuses the other's tools, and the bank's still answers its own). The other order (this use case first, then the bank's `install.sh`) is tested offline with fakes only.
 
 ## The first real-model run
 
@@ -240,7 +240,7 @@ The agent is meant for a real model, and none has run it. The evaluation set's p
 ### Live proof checklist
 
 - [ ] `install.sh` on its own cluster, then `hack/ci/equipment-live.sh` (CI only), all checks pass
-- [x] `install.sh` of this use case on a cluster that has the bank (the bank is found and composed), then `hack/ci/equipment-live.sh` (it finds the bank by its tool server): done in CI, run RUN_BANK
+- [x] `install.sh` of this use case on a cluster that has the bank (the bank is found and composed), then `hack/ci/equipment-live.sh` (it finds the bank by its tool server): done in CI, run 46078350141
 - [ ] The bank's `install.sh` on a cluster that has this use case (the other order)
 - [ ] Both use cases beside a full demo with `ALSO_COMPOSE`
 - [ ] `install.sh --beside-full-demo` on a full demo cluster (the agent Ready, the tool server of the profile Ready, memory before and after)
