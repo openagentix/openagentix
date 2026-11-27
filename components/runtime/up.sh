@@ -19,6 +19,8 @@ SUB_OCI=oci://ghcr.io/kagent-dev/substrate/helm
 cluster_check_type || exit 1
 # shellcheck source=auth-config.sh
 . ./auth-config.sh        # ate_issuer, ate_auth_config (issue #164)
+# shellcheck source=kagent-db.sh
+. ./kagent-db.sh          # kagent_pg_admin_secret, kagent_db_secrets (no password in a process argument)
 # rtk (user's shell hook) rewrites some kubectl invocations; use the real binary when run interactively.
 K=${KUBECTL:-kubectl}
 t0=$(date +%s)
@@ -102,20 +104,11 @@ helm upgrade --install substrate $SUB_OCI/substrate --version $VER -n ate-system
 # --- 8. kagent's own PostgreSQL (pgvector image, password auth; spike-only) -------------------
 log "kagent postgres"
 $K create ns kagent --dry-run=client -o yaml | $K apply -f - >/dev/null
-if ! $K -n kagent get secret kagent-pg-admin >/dev/null 2>&1; then
-  $K -n kagent create secret generic kagent-pg-admin --from-literal=password="$(openssl rand -hex 12)"
-fi
+kagent_pg_admin_secret
 $K apply -f manifests/kagent-postgres.yaml
 $K -n kagent rollout status sts/kagent-pg --timeout=3m
 for _ in $(seq 30); do $K -n kagent exec kagent-pg-0 -- psql --no-psqlrc -U postgres -d kagent -tAc 'select 1' >/dev/null 2>&1 && break; sleep 2; done   # belt and braces after the TCP readiness probe
-if ! $K -n kagent get secret kagent-postgres-owner >/dev/null 2>&1; then
-  OW=$(openssl rand -hex 12); RW=$(openssl rand -hex 12)
-  $K -n kagent exec -i kagent-pg-0 -- psql --no-psqlrc -U postgres -d kagent --set=ON_ERROR_STOP=1 --single-transaction \
-    --set=kagent_schema=kagent --set=kagent_owner_role=kagent_owner --set=kagent_owner_user=kagent_owner_user --set=kagent_owner_password="$OW" \
-    --set=kagent_readwrite_role=kagent_readwrite --set=kagent_readwrite_user=kagent_readwrite_user --set=kagent_readwrite_password="$RW" < dl/kagent-setup.sql
-  $K -n kagent create secret generic kagent-postgres-owner --from-literal=ownerConnectionString="postgresql://kagent_owner_user:$OW@kagent-pg.kagent.svc:5432/kagent?sslmode=disable"
-  $K -n kagent create secret generic kagent-postgres-readwrite --from-literal=readWriteConnectionString="postgresql://kagent_readwrite_user:$RW@kagent-pg.kagent.svc:5432/kagent?sslmode=disable"
-fi
+kagent_db_secrets
 
 # --- 9. kagent --------------------------------------------------------------------------------
 log "kagent"
