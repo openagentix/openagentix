@@ -37,7 +37,7 @@ PF=""; PF2=""; PF3=""; PF4=""; TD=""
 cleanup() {
   kill $PF $PF2 $PF3 $PF4 2>/dev/null
   [ -z "$TD" ] || rm -rf "$TD"
-  $K delete virtualmcpserver tools-ovr probe-redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
+  $K delete virtualmcpserver tools-ovr tools-ovr2 probe-redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpserverentry redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpexternalauthconfig redir-noauth -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpgroup probe -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
@@ -178,32 +178,38 @@ obs "resources/read answered: $(printf '%s' "$RD" | cut -c1-200); prompts/get an
 kill $PF2 $PF3 2>/dev/null; PF2=""; PF3=""
 
 echo "# SPIKE (observations): the field overrides of the VirtualMCPServer aggregation (a tool's name and description)"
+# Two throwaway vMCPs on the group, copies of tools-$PROFILE: A keeps the profile's filter and renames the tool echo; B has no filter and no deny default, only the rename.
+# They need a policy of their own: the endpoint's policy admits the chart's vMCPs only.
 $K apply -f - >/dev/null 2>&1 <<YAML
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: ci-probe-ingress, namespace: $ENS}
 spec:
-  podSelector: {matchLabels: {app: echo}}
+  podSelector: {matchExpressions: [{key: app, operator: In, values: [echo, other]}]}
   policyTypes: [Ingress]
   ingress:
     - ports: [{protocol: TCP, port: 8080}]
       from:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: $MCPNS}}
-          podSelector: {matchLabels: {app: virtualmcpserver, toolhive-name: tools-ovr}}
+          podSelector: {matchLabels: {app: virtualmcpserver}, matchExpressions: [{key: toolhive-name, operator: In, values: [tools-ovr, tools-ovr2]}]}
 YAML
-$K get virtualmcpserver "tools-$PROFILE" -n "$MCPNS" -o json | jq '{apiVersion,kind,metadata:{name:"tools-ovr",namespace:.metadata.namespace},spec:(.spec|.config.aggregation.tools=[{workload:"echo",filter:["echo"],overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}])}' | $K apply -f - >/dev/null 2>&1 \
-  && { for _ in $(seq 1 40); do $K get deployment tools-ovr -n "$MCPNS" >/dev/null 2>&1 && break; sleep 3; done
-       $K rollout status deployment/tools-ovr -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || true
-       $K wait virtualmcpserver/tools-ovr -n "$MCPNS" --for=condition=Ready --timeout=120s >/dev/null 2>&1 || true
-       obs "tools-ovr status (conditions left out): $($K get virtualmcpserver tools-ovr -n "$MCPNS" -o json 2>/dev/null | jq -c '.status|del(.conditions)|{phase,backendCount,discoveredBackends:[.discoveredBackends[]?|{name,status,message:(.message|tostring|.[0:80])}]}' 2>/dev/null | cut -c1-500)"
-       $K port-forward -n "$MCPNS" svc/vmcp-tools-ovr "$XPORT:4483" >/dev/null 2>&1 & PF4=$!
-       sleep 4
-       SID_O=-
-       for _ in $(seq 1 8); do SID_O=$(mcp_open $XPORT "$TD/group"); [ "$SID_O" != - ] && break; sleep 5; done
-       OVR=$(mcp_call $XPORT "$TD/group" "$SID_O" 2 tools/list '{}' 2>/dev/null)
-       obs "tools/list with overrides {echo: {name: renamed_echo, description: ...}}: $(printf '%s' "$OVR" | jq -c '[.result.tools[]?|{name,description}]' 2>/dev/null | cut -c1-400) (session $([ "$SID_O" = - ] && echo none || echo open); raw answer: $(printf '%s' "$OVR" | cut -c1-160))"
-       kill $PF4 2>/dev/null; PF4=""; } \
-  || { obs "the probe vMCP tools-ovr could not be applied"; }
+ovr_probe() {  # ovr_probe <vMCP name> <label> <jq filter that edits the copy's spec>
+  local n=$1 label=$2 edit=$3 port=$4 sid raw
+  $K get virtualmcpserver "tools-$PROFILE" -n "$MCPNS" -o json | jq --arg n "$n" "{apiVersion,kind,metadata:{name:\$n,namespace:.metadata.namespace},spec:(.spec|$edit)}" | $K apply -f - >/dev/null 2>&1 \
+    || { obs "$label: the probe vMCP $n could not be applied"; return 0; }
+  for _ in $(seq 1 40); do $K get deployment "$n" -n "$MCPNS" >/dev/null 2>&1 && break; sleep 3; done
+  $K rollout status "deployment/$n" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || true
+  $K wait "virtualmcpserver/$n" -n "$MCPNS" --for=condition=Ready --timeout=120s >/dev/null 2>&1 || true
+  $K port-forward -n "$MCPNS" "svc/vmcp-$n" "$port:4483" >/dev/null 2>&1 & PF4=$!
+  sleep 4
+  sid=-
+  for _ in $(seq 1 8); do sid=$(mcp_open "$port" "$TD/group"); [ "$sid" != - ] && break; sleep 5; done
+  raw=$(mcp_call "$port" "$TD/group" "$sid" 2 tools/list '{}' 2>/dev/null)
+  obs "$label: tools/list: $(printf '%s' "$raw" | jq -c '[.result.tools[]?|{name,description}]' 2>/dev/null | cut -c1-500) (backends: $($K get virtualmcpserver "$n" -n "$MCPNS" -o json 2>/dev/null | jq -c '[.status.discoveredBackends[]?|(.name+"="+.status)]' 2>/dev/null); session $([ "$sid" = - ] && echo none || echo open); raw: $(printf '%s' "$raw" | cut -c1-140))"
+  kill $PF4 2>/dev/null; PF4=""
+}
+ovr_probe tools-ovr "A (the profile's filter [echo] and overrides echo -> renamed_echo)" '.config.aggregation.tools=[{workload:"echo",filter:["echo"],overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}]' "$XPORT"
+ovr_probe tools-ovr2 "B (no filter, no deny default, overrides echo -> renamed_echo)" '.config.aggregation|=(del(.defaultToolVisibility)|.tools=[{workload:"echo",overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}])' "$((XPORT + 1))"
 
 echo "# SPIKE (observations): a redirect from a backend (the header is the Authorization header of the entry)"
 RV="Bearer $(openssl rand -hex 24)"
