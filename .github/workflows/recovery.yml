@@ -23,8 +23,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: recovery-${{ github.ref }}
-  cancel-in-progress: true
+  # Only a pull request run is replaced by a newer push. Runs started by hand are kept apart (one per run id), so several can run to get a pass rate.
+  group: recovery-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'x' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   recovery:
