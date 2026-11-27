@@ -36,7 +36,7 @@
 #   IMAGE_PLATFORM=linux/amd64  CLUSTER_TYPE=remote only (the default there), or linux/arm64; one platform. On Apple silicon an amd64 build runs the
 #                        Go compiler under emulation and is slow; BUILDX_BUILDER (read by buildx) can name a remote amd64 builder.
 #   (PodDisruptionBudget check) Before helm upgrade, on every cluster type, hack/pdb-check.sh reads the budgets of the platform namespaces and stops with
-#                        exit 1 when a budget that this release does not own selects a pod of the chart (ADR 0024). SKIP_PREFLIGHT=1 does not skip it;
+#                        exit 1 when a budget that this release does not own selects a pod of the chart (ADR 0024). The remote preflight switch does not skip it;;
 #                        availability.podDisruptionBudgets.enabled=false in your values does (no budgets of ours, nothing to clash with).
 #   SKIP_PREFLIGHT=1     with CLUSTER_TYPE=remote, do not run hack/preflight.sh first. It reads the cluster (Kubernetes 1.37 or newer, the certificates and
 #                        admission policy APIs, Gateway API CRD bundle, default StorageClass, nodes, Pod Security labels), prints PASS/WARN/FAIL with a fix
@@ -221,7 +221,7 @@ if [ ${#problems[@]} -gt 0 ]; then
   printf 'Nothing was changed.\n' >&2; exit 1
 fi
 # PodDisruptionBudgets (ADR 0024): a budget that this release does not own and that selects one of our pods would make that pod impossible to
-# evict. Read-only, on every cluster type, not skipped by SKIP_PREFLIGHT=1; it is not run when availability.podDisruptionBudgets.enabled is false.
+# evict. Read-only, on every cluster type, not skipped by the remote preflight switch; it is not run when availability.podDisruptionBudgets.enabled is false.
 # The cluster may not exist yet (a fresh kind or k3d install): then there is nothing to find.
 if [ "$CLUSTER_UP" = 1 ]; then
   printf '%s\n' "$RENDERED" | KUBECTL=$K KUBE_CONTEXT=$CTX RELEASE=$RELEASE bash hack/pdb-check.sh || exit 1
