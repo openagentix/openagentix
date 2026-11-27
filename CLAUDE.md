@@ -97,6 +97,7 @@ The full demo needs `ANTHROPIC_API_KEY` and, with the Telegram bridge, `TELEGRAM
 - Every configurable thing is an `openagentix.io` resource. No hidden config in a ConfigMap that users edit by hand.
 - Upstream projects live only behind adapters. No upstream vocabulary in core packages or in a spec; tests enforce it (see `services/control-plane/internal/core/vocabulary_test.go`).
 - Off by default, deny by default. With a feature off, the default chart render is byte-identical to before; the chart tests check this.
+  One recorded exception ([ADR 0024](docs/decisions/0024-availability-defaults.md)): the PodDisruptionBudgets are on by default; `availability.podDisruptionBudgets.enabled=false` gives back the earlier render, and a chart test checks that. A new exception needs its own ADR.
 - The controller never reads Secrets. It cannot read a key back, so design around that.
 - No secret values in files, argv, logs, status or reports. Audit lines never hold message text.
 - Admission guard policies are key allowlists (a field not listed is refused) and are executed in tests, not only rendered.

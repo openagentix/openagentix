@@ -100,6 +100,11 @@ echo "restarts kagent/kagent-controller  # #178" > "$D/allow"
 OUT=$(r FAKE_EXTRA=3)
 t "allowlist entry with an issue: exit 0" "$(grep -c '^exit=0$' <<<"$OUT")" 1
 t "allowlist entry with an issue: the summary still shows it" "$(sum | grep -c 'allowlisted')" 1
+echo "restarts kagent/kagent-controller max=2  # #178" > "$D/allow"
+OUT=$(r FAKE_EXTRA=2)
+t "allowlist max=2, 2 extra restarts: exit 0" "$(grep -c '^exit=0$' <<<"$OUT")" 1
+OUT=$(r FAKE_EXTRA=3)
+t "allowlist max=2, 3 extra restarts: exit 1 (a crash loop is not excused)" "$(grep -c '^exit=1$' <<<"$OUT")" 1
 echo "restarts kagent/kagent-controller  # no issue here" > "$D/allow"
 OUT=$(r FAKE_EXTRA=3)
 t "allowlist entry without an issue number is ignored: exit 1" "$(grep -c '^exit=1$' <<<"$OUT")" 1

@@ -71,6 +71,8 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/gateway-service-type-test.sh
 	hack/ci/uninstall-test.sh
 	hack/ci/recovery-test-test.sh
+	hack/ci/upgrade-test-test.sh
+	hack/ci/lifecycle-test-test.sh
 	hack/gke/tests/run.sh
 	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh

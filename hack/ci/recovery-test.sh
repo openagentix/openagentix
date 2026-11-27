@@ -30,15 +30,18 @@ now(){ $NOWCMD; }
 log(){ printf '[recovery %s] %s\n' "$(now)" "$*" >&2; }
 fails=()
 
-# The allowlist: "<restarts|job> <namespace>/<name prefix>  # #<issue>". An entry without an issue number is ignored.
-allowed(){ # allowed <kind> <ns/name>
+# The allowlist: "<restarts|job> <namespace>/<name prefix> [max=N]  # #<issue>". An entry without an issue number is ignored.
+# An entry may carry max=N (the most extra restarts it excuses); more than that still fails. Without max=N it excuses any number.
+allowed(){ # allowed <kind> <ns/name> [extra restarts]
   [ -f "$ALLOW" ] || return 1
-  local k p rest
+  local k p rest m
   while read -r k p rest; do
     case "$k" in ''|'#'*) continue;; esac
     case "$rest" in *'#'[0-9]*) ;; *) continue;; esac
     [ "$k" = "$1" ] || continue
-    case "$2" in "$p"*) return 0;; esac
+    case "$2" in "$p"*) ;; *) continue;; esac
+    case "$rest" in max=[0-9]*) m=${rest#max=}; m=${m%%[!0-9]*}; [ "${3:-0}" -le "$m" ] || continue;; esac
+    return 0
   done < "$ALLOW"
   return 1
 }
@@ -112,7 +115,7 @@ RESTART_ROWS=$(awk 'NR==FNR{b[$1]=$2;next}{d=$2-b[$1]; e=d-$3; if (d>0) printf "
 EXTRA_BAD=()
 while read -r pod d c e; do
   [ -n "$pod" ] || continue
-  if [ "$e" -gt 0 ] && ! allowed restarts "$pod"; then EXTRA_BAD+=("$pod $e"); fi
+  if [ "$e" -gt 0 ] && ! allowed restarts "$pod" "$e"; then EXTRA_BAD+=("$pod $e"); fi
 done <<<"$RESTART_ROWS"
 [ ${#EXTRA_BAD[@]} -eq 0 ] || fails+=("pods that restarted more than once per container: $(printf '%s; ' "${EXTRA_BAD[@]}")")
 
@@ -173,7 +176,7 @@ secs(){ if [ -n "$2" ]; then echo "$(( $2 - $1 )) s"; else echo "not reached"; f
   printf '%-60s %8s %10s %6s\n' pod restarts containers extra
   while read -r pod d c e; do
     [ -n "$pod" ] || continue
-    note=""; [ "$e" -gt 0 ] && allowed restarts "$pod" && note="  (allowlisted)"
+    note=""; [ "$e" -gt 0 ] && allowed restarts "$pod" "$e" && note="  (allowlisted)"
     printf '%-60s %8s %10s %6s%s\n' "$pod" "$d" "$c" "$e" "$note"
   done <<<"$RESTART_ROWS"
   echo '```'
