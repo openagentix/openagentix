@@ -56,11 +56,14 @@ obs() { printf '  observed: %s\n' "$1"; }
 
 if [ -n "${BANK_OUT:-}" ]; then mkdir -p "$BANK_OUT"; TD=$(cd "$BANK_OUT" && pwd); KEEP=1; else TD=$(mktemp -d); KEEP=0; fi   # an absolute path: the build of oa-eval runs in another directory
 PF=""; REF=""; PFR=""; PFM=""; PFG=""; PFS=""; PFL=""; OIDC_PATCHED=0; OIDC_ORIG=""
+# Every tool server of the tools namespace (the shared one, each profile's, and any use case's): the identity settings are patched for all of them and
+# restored for all of them, not for a fixed list, so a tool server of another use case cannot keep the patched settings.
+tool_servers() { $K get virtualmcpserver -n "$MCPNS" -o name 2>/dev/null | sed 's#.*/##' | grep -E '^tools(-|$)'; }
 restore_oidc() {
   [ "$OIDC_PATCHED" = 1 ] || return 0
   $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p "$OIDC_ORIG" >/dev/null 2>&1
-  for v in tools "tools-$PROFILE" tools-lookup; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-  for v in tools "tools-$PROFILE" tools-lookup; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1; done
+  for v in $(tool_servers); do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+  for v in $(tool_servers); do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1; done
   OIDC_PATCHED=0
 }
 cleanup() {
@@ -333,8 +336,8 @@ $K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-
 $K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
 OIDC_PATCHED=1
 $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p '{"spec":{"inline":{"issuer":"https://kubernetes.default.svc.cluster.local","jwksUrl":"https://kubernetes.default.svc/openid/v1/jwks","caBundleRef":{"configMapRef":{"name":"ci-apiserver-ca","key":"ca.crt"}}}}}' >/dev/null
-for v in tools "tools-$PROFILE" tools-lookup; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-for v in tools "tools-$PROFILE" tools-lookup; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (tool server $v: restart not confirmed)"; done
+for v in $(tool_servers); do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in $(tool_servers); do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (tool server $v: restart not confirmed)"; done
 mcp_token() { $K create token default -n "$MCPNS" --audience "$1" --duration 10m 2>/dev/null; }
 mcp_post() {  # mcp_post <port> <token file> <session id or -> <json>: prints the JSON-RPC answer (the data line of an event stream, or the body)
   local port=$1 tf=$2 sid=$3 body=$4 out hdr=()

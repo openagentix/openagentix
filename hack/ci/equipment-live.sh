@@ -27,13 +27,12 @@
 #      against the records port, and what the egress policy of the group does on this network plugin (recorded: kindnet is not known to enforce egress);
 #  10. the tool servers directly (tools/list and calls with a token of the API server, which the script makes them trust for a while): the group's tool server
 #      lists exactly the 26 tools of the profile (a service tool the profile leaves out, open_proactive_case, is refused), the shared one lists no dealer-records
-#      tool and refuses a call, so does the profile of the quick start agent; when the bank use case is installed too (EQUIPMENT_WITH_BANK=1), its tool server lists
+#      tool and refuses a call, so does the profile of the quick start agent; when the bank use case is installed too (found by its tool server tools-disputes), its tool server lists
 #      no equipment tool and refuses a call, and this one refuses a bank tool.
 # It never prints a token or a header value. Exit 1 when a check fails.
 # Env: KUBECTL, EQUIPMENT_AUDIT_SETTLE (default 6s), EQUIPMENT_CASE_TIMEOUT (default 300s), EQUIPMENT_OUT (a directory for the report and the audit file; default a
 #      temporary one, kept when EQUIPMENT_OUT is set), EQUIPMENT_USER_ID (default service:eval), EQUIPMENT_INSTALL_LOG (a file: checked for secret values too),
-#      EQUIPMENT_INSTALL_LOG2 (the log of the second install), EQUIPMENT_LIVE_LOG (this script's own log: checked for secret values too),
-#      EQUIPMENT_WITH_BANK=1 (the bank use case is installed on this cluster: the isolation checks run in both directions).
+#      EQUIPMENT_INSTALL_LOG2 (the log of the second install), EQUIPMENT_LIVE_LOG (this script's own log: checked for secret values too).
 set -u
 [ "${EQUIPMENT_LIVE:-0}" = 1 ] || { echo "equipment-live: set EQUIPMENT_LIVE=1 to run this against the current cluster (it is opt-in)"; exit 0; }
 KBASE=${KUBECTL:-kubectl}
@@ -58,9 +57,9 @@ fi
 K="$KBASE --context=$CTX_NOW"
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; KNS=${KAGENT_NAMESPACE:-kagent}; GATE_NS=${GATE_NAMESPACE:-openagentix-gateway}; RNS=kestrel-records; DESK_NS=openagentix-system
 PROFILE=dealer; USER_ID=${EQUIPMENT_USER_ID:-service:eval}; EP=dealer-records; KBM=knowledge-dealer; AUTH_SECRET=dealer-records-mcp-auth
-WITH_BANK=${EQUIPMENT_WITH_BANK:-0}
 AUDIT_SETTLE=${EQUIPMENT_AUDIT_SETTLE:-6s}; CASE_TIMEOUT=${EQUIPMENT_CASE_TIMEOUT:-300s}
 YEAR=$(date -u +%Y)
+WITH_BANK=0; $K get virtualmcpserver tools-disputes -n "$MCPNS" >/dev/null 2>&1 && WITH_BANK=1   # the bank use case is installed too: the isolation checks run in both directions
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; }
@@ -69,12 +68,14 @@ obs() { printf '  observed: %s\n' "$1"; }
 
 if [ -n "${EQUIPMENT_OUT:-}" ]; then mkdir -p "$EQUIPMENT_OUT"; TD=$(cd "$EQUIPMENT_OUT" && pwd); KEEP=1; else TD=$(mktemp -d); KEEP=0; fi   # an absolute path: the build of oa-eval runs in another directory
 PF=""; REF=""; PFR=""; PFM=""; PFG=""; PFS=""; PFL=""; PFB=""; OIDC_PATCHED=0; OIDC_ORIG=""
-BANK_VMCPS=""; [ "$WITH_BANK" != 1 ] || BANK_VMCPS="tools-disputes"
+# Every tool server of the tools namespace (the shared one, each profile's, and any use case's): the identity settings are patched for all of them and
+# restored for all of them, not for a fixed list, so a tool server of another use case cannot keep the patched settings.
+tool_servers() { $K get virtualmcpserver -n "$MCPNS" -o name 2>/dev/null | sed 's#.*/##' | grep -E '^tools(-|$)'; }
 restore_oidc() {
   [ "$OIDC_PATCHED" = 1 ] || return 0
   $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p "$OIDC_ORIG" >/dev/null 2>&1
-  for v in tools "tools-$PROFILE" tools-lookup $BANK_VMCPS; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-  for v in tools "tools-$PROFILE" tools-lookup $BANK_VMCPS; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1; done
+  for v in $(tool_servers); do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+  for v in $(tool_servers); do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1; done
   OIDC_PATCHED=0
 }
 cleanup() {
@@ -259,7 +260,13 @@ HV=$($K get secret -n "$MCPNS" "$AUTH_SECRET" -o jsonpath='{.data.value}' | base
 AT=$($K get secret -n "$RNS" records-approver-token -o jsonpath='{.data.token}' | base64 -d)
 # the two values are kept in a shell variable and given to grep through a process substitution: they are never written to a file
 PATS=$(printf '%s\n%s' "$HRAW" "$AT"); unset HV HRAW AT
-[ "$(printf '%s\n' "$PATS" | grep -c .)" = 2 ] && ok "two patterns to look for (the control is not empty)" || bad "the pattern list is not what was expected" "$(printf '%s\n' "$PATS" | grep -c .)"
+WANT_PATS=2
+if [ "$WITH_BANK" = 1 ]; then   # the bank's two values are looked for too: its pods and logs are in the same cluster and the same uploads
+  BHV=$($K get secret -n "$MCPNS" records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
+  BAT=$($K get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
+  PATS=$(printf '%s\n%s\n%s' "$PATS" "${BHV#Bearer }" "$BAT"); WANT_PATS=4; unset BHV BAT
+fi
+[ "$(printf '%s\n' "$PATS" | grep -c .)" = "$WANT_PATS" ] && ok "$WANT_PATS patterns to look for (the control is not empty)" || bad "the pattern list is not what was expected" "$(printf '%s\n' "$PATS" | grep -c .)"
 LEAKS=0; WHERE=""
 scan() { local n; n=$(eval "$2" 2>/dev/null | grep -cF -f <(printf '%s\n' "$PATS")); if [ "$n" != 0 ]; then LEAKS=$((LEAKS+n)); WHERE="$WHERE $1($n)"; fi; }
 for ns in "$MCPNS" toolhive-system "$RNS" "$GATE_NS" "$KNS" agentgateway-system ate-system openagentix-knowledge openagentix-system; do
@@ -370,8 +377,8 @@ $K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-
 $K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
 OIDC_PATCHED=1
 $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p '{"spec":{"inline":{"issuer":"https://kubernetes.default.svc.cluster.local","jwksUrl":"https://kubernetes.default.svc/openid/v1/jwks","caBundleRef":{"configMapRef":{"name":"ci-apiserver-ca","key":"ca.crt"}}}}}' >/dev/null
-for v in tools "tools-$PROFILE" tools-lookup $BANK_VMCPS; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-for v in tools "tools-$PROFILE" tools-lookup $BANK_VMCPS; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (tool server $v: restart not confirmed)"; done
+for v in $(tool_servers); do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in $(tool_servers); do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (tool server $v: restart not confirmed)"; done
 mcp_token() { $K create token default -n "$MCPNS" --audience "$1" --duration 10m 2>/dev/null; }
 mcp_post() {  # mcp_post <port> <token file> <session id or -> <json>: prints the JSON-RPC answer (the data line of an event stream, or the body)
   local port=$1 tf=$2 sid=$3 body=$4 out hdr=()
@@ -434,7 +441,7 @@ if [ "$WITH_BANK" = 1 ]; then
   CALL=$(mcp_call "$BPORT" "$TD/tb" "$SID_B" 4 tools/call '{"name":"records_get_case","arguments":{"case_id":"DSP-'"$YEAR"'-0002"}}')
   check "the bank's own tool server still answers its own tool (records_get_case): the refusals above are not a broken server" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" ")|test("DSP-")|tostring)' <<<"$CALL" 2>/dev/null)" "false true"
 else
-  obs "the bank use case is not installed on this cluster (EQUIPMENT_WITH_BANK is not 1): the reverse isolation check (the bank's tool server against the equipment tools) was not run"
+  obs "the bank use case is not installed on this cluster (no tool server tools-disputes): the reverse isolation check (the bank's tool server against the equipment tools) was not run"
 fi
 check "every backend of the group's tool server is still ready after the calls" "$($K get virtualmcpserver -n "$MCPNS" "tools-$PROFILE" -o json | jq -r '[.status.discoveredBackends[]?|select(.status!="ready")|.name]|join(",")')" ""
 kill $PF $PFS $PFL $PFB 2>/dev/null; PF=""; PFS=""; PFL=""; PFB=""

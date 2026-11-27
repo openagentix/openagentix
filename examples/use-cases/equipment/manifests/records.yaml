@@ -1,6 +1,6 @@
 # The records service (system of record of the equipment use case, domain equipment) in its own namespace. Applied by
 # examples/use-cases/equipment/install.sh, not by the chart. The synthetic data is seeded at start into an emptyDir, so deleting the pod resets it.
-# It is a deployment of its own: the bank use case runs another one in another namespace, so the two never share a record, a Secret or a tool.
+# It is a deployment of its own: the bank use case runs another one in another namespace, so the two share no record, no records tool and no header Secret (they do share the knowledge base).
 #
 # - MCP on 8080 (the port the tool gateway reaches). REST on 127.0.0.1:8081 inside the pod: only `kubectl port-forward` reaches it.
 # - The MCP port needs a credential: the whole Authorization header value, read per request from the file
@@ -115,8 +115,8 @@ spec:
 # The base policy: the records pod accepts no connection and makes none (no egress rule, DNS included). Policies add up, so the one
 # path in is the policy `openagentix-endpoint-dealer-records` that the platform chart renders into this namespace (mcp.endpoints, ADR 0026): it
 # admits the tool server of the group `dealer` on 8080 and nothing else. Until the platform is installed there is no path in at all.
-# This limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy: ingress is shown on kind in CI by other live
-# checks; egress is not shown on kindnet (README). The header credential is the second check. Kubelet probes come from the node and are
+# This limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. The live job (hack/ci/equipment-live.sh) saw ingress
+# enforced on kind in CI, and in-cluster egress enforced for the tool server labels; egress to the internet is not shown (README). The header credential is the second check. Kubelet probes come from the node and are
 # not affected.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

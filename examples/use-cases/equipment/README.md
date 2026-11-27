@@ -47,7 +47,7 @@ The service itself is `examples/use-cases/records` with `RECORDS_DOMAIN=equipmen
 
 ## How this sits beside the bank use case
 
-The bank (`examples/use-cases/bank`) and this use case can run on one cluster. They run **one records deployment each**, and they share nothing:
+The bank (`examples/use-cases/bank`) and this use case can run on one cluster. They run **one records deployment each**. They share no record, no records tool and no header Secret. They do share the knowledge base: each profile lists the knowledge base tools, a search that names no collection reads all of them, and nothing limits a profile to one collection, so each agent can read the other's collection (synthetic documents, read only: agents cannot write documents). A collection allowlist per profile would be a chart change and needs an ADR.
 
 | | Bank | Equipment |
 |---|---|---|
@@ -86,7 +86,15 @@ The script does, in this order, because the platform values need what comes firs
 
 Every step can be run again. A second run keeps the Secrets and changes nothing. If only some of the four Secrets exist (an earlier run stopped half way), all are made again with new values and the pods that hold the old ones are restarted. `--uninstall` removes what the script made (not the chart values). The scripts refuse any context that is not `kind-*`. In the commands below, add `--context kind-oa-equipment-demo` (or your kind context) to every `kubectl` you type yourself.
 
-**The platform installer replaces the release values on every run**, so the script **refuses to run on a release that has more than the quick start and this use case** (schedules, a bridge, channels, notify, memory, other agents, profiles or callers): it would drop them, and it would remove your provider key from the run. It says what would be lost. The bank use case is the one exception, through `--with-bank`.
+**The platform installer replaces the release values on every run**, so the script **refuses to run on a release that has more than the quick start and this use case** (schedules, a bridge, channels, notify, memory, other agents, profiles or callers): it would drop them, and it would remove your provider key from the run. It says what would be lost. On your own cluster the bank use case is the one exception: when the release holds its endpoint, it is composed (below). Beside a full demo, name the other use case in `ALSO_COMPOSE`.
+
+**Beside a full demo, with the bank (or another use case) already there.** The platform installer replaces the release values on every run, so an install that does not list what the release holds would drop it. Beside a full demo nothing is guessed: you list the other use cases yourself. `ALSO_COMPOSE="<file> <file>"` (only with `--beside-full-demo`) names the `values-full-demo.yaml` of each other use case installed beside the same full demo. They are composed by entry name with `hack/compose-values.sh` after your `VALUES_FILE` list and before this use case's own `values-full-demo.yaml`. Without it, a release that holds the bank is refused, naming what would be lost, and the message says to add its `values-full-demo.yaml` to `ALSO_COMPOSE`. A name or a security key that clashes between the composed files is refused. Pass the same variable on every run (a second run passes). The bank's `install.sh` has the same variable, so either order works:
+
+```sh
+VALUES_FILE="<the list you installed the full demo with>" CLUSTER=openagentix \
+ALSO_COMPOSE="examples/use-cases/bank/values-full-demo.yaml" \
+  examples/use-cases/equipment/install.sh --beside-full-demo
+```
 
 **Beside a full demo.** To add the agent to a full demo install, give the script the same list of files you installed with, and the name of that cluster:
 
@@ -178,6 +186,10 @@ The tool names in the set are the names the model sees through the profile: `dea
 
 Replay of the 40 closed cases (the technician's final diagnosis is kept in the records REST view) is not built: with the stub it would only measure the stub.
 
+## Uninstall one of two use cases
+
+`install.sh --uninstall` removes the records namespace, the header Secret and the desk ServiceAccount. It does not remove the chart values, which are in the release. The other use case's `install.sh` then refuses (on your own cluster, because it finds this use case's endpoint in the release and its namespace is gone). The way out: run the platform installer again with only the quick start and the use case you keep, for example `hack/compose-values.sh -o values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml`, then `PROFILE=quickstart VALUES_FILE=values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh`. Beside a full demo, leave the other use case out of `ALSO_COMPOSE` and give the same list of files. Not run live.
+
 ## Tests (all offline)
 
 | Command | What it proves |
@@ -206,7 +218,7 @@ The knowledge base ranked the intended document first for the five queries of th
 
 ## What is not proven
 
-- Not run live yet: `install.sh --beside-full-demo` on a full demo cluster (offline tests compose and render it); the install of one use case beside the other (the offline tests use fakes); the memory and CPU of the added pods; the suspended `fleet-sweep` CronJob run by hand; `ctl.sh reject` on a live cluster; the cases not in the set (`0003`, `0004`).
+- Not run live yet: `install.sh --beside-full-demo` on a full demo cluster (offline tests compose and render it); the install of the bank after this use case (the other order; the offline tests use fakes); two use cases beside a full demo (`ALSO_COMPOSE`, offline tests with fakes only); `--uninstall` of one of two; the memory and CPU of the added pods; the suspended `fleet-sweep` CronJob run by hand; `ctl.sh reject` on a live cluster; the cases not in the set (`0003`, `0004`).
 - A real model's behaviour: not tested. Pass rates, cost per case, the wording of its answers: not measured. The first real-model run has a checklist below.
 - The knowledge base answers in the replay are fixed. Live, the knowledge base ranks the nine documents as it does, and the scenarios cite the title of the top search result.
 - **No event trigger from the machine.** `ctl.sh fault` and `ctl.sh request` open the case in the records service and a person or the schedule starts the agent. A signed webhook (`telemetry.fault` and `service.request` bindings) is not wired. The telematics is a seeded table, not a feed.
@@ -228,7 +240,9 @@ The agent is meant for a real model, and none has run it. The evaluation set's p
 ### Live proof checklist
 
 - [ ] `install.sh` on its own cluster, then `hack/ci/equipment-live.sh` (CI only), all checks pass
-- [ ] `install.sh` of this use case on a cluster that has the bank (both are found and composed), then `hack/ci/equipment-live.sh` with `EQUIPMENT_WITH_BANK=1`
+- [x] `install.sh` of this use case on a cluster that has the bank (the bank is found and composed), then `hack/ci/equipment-live.sh` (it finds the bank by its tool server): done in CI, run RUN_BANK
+- [ ] The bank's `install.sh` on a cluster that has this use case (the other order)
+- [ ] Both use cases beside a full demo with `ALSO_COMPOSE`
 - [ ] `install.sh --beside-full-demo` on a full demo cluster (the agent Ready, the tool server of the profile Ready, memory before and after)
 - [ ] The fleet sweep CronJob run by hand
 - [ ] `ctl.sh reject` on a pending request: the case goes to a person and the drafts are dropped

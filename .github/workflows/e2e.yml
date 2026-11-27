@@ -505,7 +505,6 @@ jobs:
           EQUIPMENT_INSTALL_LOG: install.log
           EQUIPMENT_INSTALL_LOG2: install2.log
           EQUIPMENT_LIVE_LOG: equipment-live.log
-          EQUIPMENT_WITH_BANK: ${{ inputs.equipment_with_bank && '1' || '0' }}
         run: |
           set -o pipefail
           hack/ci/equipment-live.sh 2>&1 | tee equipment-live.log
@@ -550,17 +549,24 @@ jobs:
           LEAK=0
           HV=$(kubectl get secret -n mcp-tools dealer-records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
           AT=$(kubectl get secret -n kestrel-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
-          if [ -n "$HV" ] && [ -n "$AT" ]; then
+          BHV=; BAT=; OK2=1
+          if [ "${{ inputs.equipment_with_bank }}" = true ]; then
+            # the bank is installed on this cluster: its two values are looked for as well, and when they cannot be read nothing is uploaded
+            BHV=$(kubectl get secret -n mcp-tools records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
+            BAT=$(kubectl get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
+            { [ -n "$BHV" ] && [ -n "$BAT" ]; } || OK2=0
+          fi
+          if [ -n "$HV" ] && [ -n "$AT" ] && [ "$OK2" = 1 ]; then
             for f in kind-logs equipment-out install.log install2.log install-bank.log equipment-live.log; do
               [ -e "$f" ] || continue
-              if grep -rlF -f <(printf '%s\n%s\n' "${HV#Bearer }" "$AT") "$f" >/dev/null 2>&1; then
+              if grep -rlF -f <(printf '%s\n%s\n%s\n%s\n' "${HV#Bearer }" "$AT" "${BHV#Bearer }" "$BAT" | grep .) "$f" >/dev/null 2>&1; then
                 echo "a secret value is in $f: it is removed from the upload"; rm -rf "$f"; LEAK=1
               fi
             done
           else
             echo "the secret values could not be read from the cluster: none of the equipment files is uploaded"; rm -rf kind-logs equipment-out install.log install2.log install-bank.log equipment-live.log; LEAK=1
           fi
-          unset HV AT
+          unset HV AT BHV BAT
           [ "$LEAK" = 0 ]
       - name: upload the report, the audit file and the logs
         if: always()

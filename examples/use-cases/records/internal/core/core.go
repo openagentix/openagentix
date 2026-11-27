@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite" // pure Go SQLite driver (BSD-3-Clause), no cgo
 )
@@ -132,8 +133,12 @@ func CleanText(field, s string, max int, required bool) (string, error) {
 		return "", &Error{Kind: Invalid, Msg: fmt.Sprintf("%s is longer than %d characters", field, max)}
 	}
 	for _, r := range s {
-		if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f {
+		if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f || (unicode.IsControl(r) && r != '\n' && r != '\t') {
 			return "", &Error{Kind: Invalid, Msg: field + " has a control character"}
+		}
+		// bidi controls reorder what a person reads (a part id, a quantity): refused as well
+		if r == 0x61c || r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
+			return "", &Error{Kind: Invalid, Msg: field + " has a text direction control character"}
 		}
 	}
 	return s, nil

@@ -199,6 +199,7 @@ helm template t "$CHART" -f "$T/composed.yaml" "${APIS[@]}" > "$T/composed.rende
 check "the composed file renders byte for byte like the quick start plus values.yaml (the same behaviour)" "[ $COMP_R = 0 ] && cmp -s '$T/eq.yaml' '$T/composed.render'" "$(head -3 "$T/composed.render.err")"
 check "the README says install.sh composes the quick start and values.yaml with hack/compose-values.sh" "grep -q 'hack/compose-values.sh' '$HERE/README.md' && grep -q 'components/quickstart/values.yaml' '$HERE/README.md'"
 check "values.yaml and the README name the ways to install: on its own cluster, --beside-full-demo, and beside the bank" "grep -q -- '--beside-full-demo' '$HERE/values.yaml' && grep -q -- '--beside-full-demo' '$HERE/README.md' && grep -qi 'beside the bank' '$HERE/README.md'"
+check "the README and the install script name ALSO_COMPOSE, name no flag that does not exist (--with-bank), and say that the two use cases share the knowledge base" "grep -q 'ALSO_COMPOSE' '$HERE/README.md' && grep -q 'ALSO_COMPOSE' '$HERE/install.sh' && ! grep -rq --exclude-dir=tests -- '--with-bank' '$HERE' && grep -q 'share the knowledge base' '$HERE/README.md' && ! grep -q 'share nothing' '$HERE/README.md' && grep -q 'Uninstall one of two use cases' '$HERE/README.md'"
 check "the README says the egress policy is not shown to be enforced on kindnet unless the live run shows it, and what the live run did show" "grep -qi 'kindnet' '$HERE/README.md'"
 check "the README has the live proof checklist, and the first real-model run list stays unchecked" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[ \\]' '$HERE/README.md')\" -ge 8 ] && grep -q 'first real-model run' '$HERE/README.md'"
 check "ctl.sh asks as a service desk user, not as the approver" "grep -q 'ASK_USER=service:desk-1' '$HERE/ctl.sh' && ! grep -q 'ASK_USER=dealer:svc-mgr-02' '$HERE/ctl.sh'"
@@ -251,6 +252,18 @@ check "values-full-demo.yaml holds the same agent prompt as values.yaml (a test 
 check "values-full-demo.yaml holds the same endpoint, profile and caller as values.yaml" "[ \"\$(yq -c '[.mcp.endpoints, (.mcp.profiles[]|select(.name==\"dealer\")), (.governance.a2a.callers[]|select(.name==\"service-desk\"))]' '$FD')\" = \"\$(yq -c '[.mcp.endpoints, (.mcp.profiles[]|select(.name==\"dealer\")), (.governance.a2a.callers[]|select(.name==\"service-desk\"))]' '$VALS')\" ]"
 check "values-full-demo.yaml sets no security key: no allow list, no network policy switch, no code mode, no capture" "! yq -e '.controlPlane or .networkPolicy or .mcp.virtual or .observability or .gateway' '$FD' >/dev/null 2>&1"
 check "beside the full demo the shared tool server (with its code mode) never names the records service" "! doc '$T/beside-r.yaml' VirtualMCPServer tools | jq -r 'del(.spec.incomingAuth.authzConfig) | tojson' | grep -Eq 'dealer-records|tools-dealer|knowledge-dealer|\"dealer\"'"
+
+echo "# the full demo with both use cases beside it (ALSO_COMPOSE order: your list, the other use case, this one)"
+bash "$ROOT/hack/compose-values.sh" -o "$T/three.yaml" "$T/demo-merged.yaml" "$BANK/values-full-demo.yaml" "$FD" 2> "$T/three.err"; TH_RC=$?
+check "hack/compose-values.sh composes the full demo, the bank's values-full-demo.yaml and this one with no refusal" "[ $TH_RC = 0 ]" "$(head -5 "$T/three.err")"
+helm template t "$CHART" "${API_V[@]}" -f "$T/three.yaml" "${APIS[@]}" > "$T/three-r.yaml" 2> "$T/three-r.err"; TH_R=$?
+check "the composed values render" "[ $TH_R = 0 ]" "$(head -3 "$T/three-r.err")"
+ids "$T/three-r.yaml" > "$T/three.ids"
+check "they remove no object of the full demo and no object of the full demo with the bank" "[ -z \"\$(comm -23 '$T/demo.ids' '$T/three.ids')\" ]"
+for want in "Agent kagent dispute-agent" "Agent kagent service-agent" "VirtualMCPServer mcp-tools tools-disputes" "VirtualMCPServer mcp-tools tools-dealer" "CronJob openagentix-schedules deadline-sweep" "CronJob openagentix-schedules fleet-sweep"; do
+  check "with both beside the full demo: $want" "grep -qx '$want' '$T/three.ids'" "ids: $(tr '\n' ';' < "$T/three.ids" | cut -c1-300)"
+done
+check "the full demo's own agent and its code mode stay, and the shared tool server names neither use case" "doc '$T/three-r.yaml' Agent assistant >/dev/null; yq -e 'select(.kind==\"Agent\" and .metadata.name==\"assistant\")' '$T/three-r.yaml' >/dev/null && ! doc '$T/three-r.yaml' VirtualMCPServer tools | jq -r 'del(.spec.incomingAuth.authzConfig) | tojson' | grep -Eq 'dealer-records|disputes|knowledge-dealer'"
 
 echo "# plain English and no personal data"
 # shellcheck disable=SC2034
