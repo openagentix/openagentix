@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS service_cases(id TEXT PRIMARY KEY, n INTEGER NOT NULL
   kind TEXT NOT NULL CHECK (kind IN ('fault','request','sweep')), fault_code TEXT NOT NULL, dealer_note TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('open','in_review','needs_person','pending_approval','resolved')),
   diagnosis_cause TEXT NOT NULL DEFAULT '', diagnosis TEXT NOT NULL DEFAULT '', opened_at TEXT NOT NULL, response_due TEXT NOT NULL,
-  version INTEGER NOT NULL, pattern TEXT NOT NULL, human_diagnosis TEXT NOT NULL);
+  version INTEGER NOT NULL, pattern TEXT NOT NULL, human_diagnosis TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS service_cases_serial ON service_cases(serial, status);
 CREATE TABLE IF NOT EXISTS work_orders(seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL UNIQUE REFERENCES service_cases(id),
   summary TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);

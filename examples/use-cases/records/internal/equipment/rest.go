@@ -123,11 +123,14 @@ func (d *Domain) Handler() http.Handler {
 		core.WriteJSON(w, code, map[string]any{"case": c, "deduplicated": dup})
 	})
 	mux.HandleFunc("POST /requests", d.route("service_request", 201, func(w http.ResponseWriter, r *http.Request) (string, any, error) {
-		var in struct{ Serial, Note string }
+		var in struct {
+			Serial, Note string
+			Safety       bool
+		}
 		if err := core.ReadJSON(w, r, &in); err != nil {
 			return "", nil, err
 		}
-		v, err := s.CreateRequest(r.Context(), in.Serial, in.Note)
+		v, err := s.CreateRequest(r.Context(), in.Serial, in.Note, in.Safety)
 		return v.ID, v, err
 	}))
 	mux.HandleFunc("GET /cases", d.route("list_cases", 200, func(w http.ResponseWriter, r *http.Request) (string, any, error) {

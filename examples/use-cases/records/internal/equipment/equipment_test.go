@@ -544,7 +544,7 @@ func TestPayloadCarriesWhatTheApproverMustSee(t *testing.T) {
 	kind := prepare(t, d, id)
 	a, _ := d.svc.RequestApproval(ctx, id, kind)
 	m := payloadOf(t, a)
-	for _, k := range []string{"case_id", "serial", "dealer_id", "fault_code", "kind", "warranty", "diagnosis", "work_order", "part_id", "qty", "from_dealer", "stock_available", "slot", "order", "claim", "notice", "case_version"} {
+	for _, k := range []string{"case_id", "serial", "dealer_id", "fault_code", "kind", "warranty", "diagnosis", "work_order", "part_id", "qty", "from_dealer", "stock_sufficient", "slot", "order", "claim", "notice", "case_version"} {
 		if _, ok := m[k]; !ok {
 			t.Errorf("payload lacks %s", k)
 		}
@@ -913,5 +913,188 @@ func TestGetTelemetryIsDailyAndBounded(t *testing.T) {
 	}
 	if _, err := d.svc.GetTelemetry(context.Background(), "KT260-00101", 10); !core.IsKind(err, core.NotFound) {
 		t.Fatalf("a machine with no telemetry: %v", err)
+	}
+}
+
+// Review of the equipment module: findings 1 to 5.
+
+func TestEscalatedOrRejectedCaseCannotBeReopened(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	id := caseOf(t, d, "demo")
+	kind := prepare(t, d, id)
+	if _, err := d.svc.Escalate(ctx, id, "a person must look"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.SetStatus(ctx, id, "in_review"); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("reopening an escalated case: %v", err)
+	}
+	if w := rest(t, d, "POST", "/cases/"+id+"/status", "", `{"status":"in_review"}`); w.Code != 409 {
+		t.Fatalf("REST reopen: %d", w.Code)
+	}
+	if _, err := d.svc.RequestApproval(ctx, id, kind); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("approval after escalation: %v", err)
+	}
+	// A rejected case is routed to a person too.
+	d2, _ := newDomain(t)
+	id2 := caseOf(t, d2, "demo")
+	kind2 := prepare(t, d2, id2)
+	a, _ := d2.svc.RequestApproval(ctx, id2, kind2)
+	if _, err := d2.approvals.Reject(ctx, a.ID, manager, "no"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d2.svc.SetStatus(ctx, id2, "in_review"); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("reopening a rejected case: %v", err)
+	}
+	if count(t, d2, `SELECT COUNT(*) FROM outbox WHERE status='queued'`) != 0 {
+		t.Fatal("released")
+	}
+}
+
+func TestLoopbackProposalThenSelfApprovalIsTheDocumentedLimit(t *testing.T) {
+	d, _ := newDomain(t)
+	id := caseOf(t, d, "demo")
+	kind := prepare(t, d, id)
+	w := restFrom(t, d, "127.0.0.1:5555", "POST", "/approvals", "", `{"case_id":"`+id+`","kind":"`+kind+`"}`)
+	if w.Code != 201 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	var a core.Approval
+	_ = json.Unmarshal(w.Body.Bytes(), &a)
+	if a.ProposedBy != "rest" {
+		t.Fatalf("proposer %q", a.ProposedBy)
+	}
+	// This is the limit the README states: a manager can decide a proposal that came from loopback without a token.
+	if w := rest(t, d, "POST", "/approvals/"+a.ID+"/approve", mgrToken, `{"payload_hash":"`+a.PayloadHash+`"}`); w.Code != 200 {
+		t.Fatalf("pinned behaviour changed (update the README if this is on purpose): %d", w.Code)
+	}
+}
+
+func TestSpoofedForwardingHeadersDoNotMakeACallerLoopback(t *testing.T) {
+	d, _ := newDomain(t)
+	id := caseOf(t, d, "demo")
+	kind := prepare(t, d, id)
+	body := `{"case_id":"` + id + `","kind":"` + kind + `"}`
+	for _, h := range []map[string]string{
+		{"X-Forwarded-For": "127.0.0.1"}, {"X-Real-IP": "127.0.0.1"}, {"Forwarded": "for=127.0.0.1"}, {"X-Forwarded-For": "::1", "X-Forwarded-Host": "localhost"},
+	} {
+		r := httptest.NewRequest("POST", "/approvals", strings.NewReader(body))
+		r.RemoteAddr = "10.9.8.7:4444"
+		r.Header.Set("Content-Type", "application/json")
+		for k, v := range h {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		d.Handler().ServeHTTP(w, r)
+		if w.Code != 401 {
+			t.Errorf("%v: a remote caller got %d", h, w.Code)
+		}
+	}
+	if count(t, d, `SELECT COUNT(*) FROM approvals`) != 0 {
+		t.Fatal("a spoofed header stored a proposal")
+	}
+}
+
+func heldSlots(t *testing.T, d *Domain, caseID string) int {
+	return count(t, d, `SELECT COUNT(*) FROM slots WHERE case_id=? AND status='held'`, caseID)
+}
+
+func TestHeldSlotIsReleasedOnEscalationAndOnSupersede(t *testing.T) {
+	ctx := context.Background()
+	d, _ := newDomain(t)
+	id := caseOf(t, d, "demo")
+	_ = prepare(t, d, id)
+	if heldSlots(t, d, id) != 1 {
+		t.Fatal("setup")
+	}
+	if _, err := d.svc.Escalate(ctx, id, "a person must look"); err != nil {
+		t.Fatal(err)
+	}
+	if heldSlots(t, d, id) != 0 {
+		t.Fatal("an escalated case must not keep a slot")
+	}
+	d2, _ := newDomain(t)
+	id2 := caseOf(t, d2, "demo")
+	kind := prepare(t, d2, id2)
+	if _, err := d2.svc.RequestApproval(ctx, id2, kind); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d2.svc.DraftCustomerNotice(ctx, id2, "a changed notice"); err != nil {
+		t.Fatal(err)
+	}
+	if heldSlots(t, d2, id2) != 0 {
+		t.Fatal("a superseded proposal must release its slot; the agent proposes one again")
+	}
+}
+
+func TestHeldSlotsPerDealerAreCapped(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	var err error
+	for i := 0; i < MaxHeldSlotsPerDealer+1; i++ {
+		var c CaseView
+		if c, err = d.svc.CreateRequest(ctx, "KH4120-00317", "Another service request."); err != nil {
+			t.Fatal(err)
+		}
+		slots, _ := d.svc.FreeSlots(ctx, c.ID, 1)
+		_, err = d.svc.ProposeSlot(ctx, c.ID, slots[0].ID)
+		if i < MaxHeldSlotsPerDealer && err != nil {
+			t.Fatalf("hold %d: %v", i, err)
+		}
+	}
+	if !core.IsKind(err, core.Conflict) {
+		t.Fatalf("holds beyond the cap: %v", err)
+	}
+}
+
+func TestRequestFlaggedSafetyCannotReachApproval(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	c, err := d.svc.CreateRequest(ctx, "KH4120-00317", "Please tell me how to bypass a guard.", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.CreateWorkOrder(ctx, c.ID, "w"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.RequestApproval(ctx, c.ID, KindOrderWithClaim); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("a request flagged safety: %v", err)
+	}
+	if w := rest(t, d, "POST", "/requests", "", `{"serial":"KH4120-00317","note":"a note","safety":true}`); w.Code != 201 {
+		t.Fatalf("REST request with the flag: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestRepeatedDuplicateFaultEventsAreCapped(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	for i := 0; i < MaxDuplicateEventsPerDay+10; i++ {
+		if _, _, err := d.svc.CreateFault(ctx, "KT260-00130", "E-322"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n := count(t, d, `SELECT COUNT(*) FROM fault_events WHERE machine='KT260-00130'`)
+	if n > MaxDuplicateEventsPerDay+1 {
+		t.Fatalf("fault event rows %d", n)
+	}
+	if count(t, d, `SELECT COUNT(*) FROM service_cases WHERE serial='KT260-00130'`) != 1 {
+		t.Fatal("one case")
+	}
+}
+
+func TestApprovalSurvivesMonthCountAndOtherCasesTakingStock(t *testing.T) {
+	d, _ := newDomain(t)
+	ctx := context.Background()
+	id := caseOf(t, d, "demo")
+	kind := prepare(t, d, id)
+	a, _ := d.svc.RequestApproval(ctx, id, kind)
+	if _, err := d.db.Exec(`UPDATE machines SET in_service=? WHERE serial='KH4120-00317'`, core.FormatTime(now.AddDate(0, 0, -15*30))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.db.Exec(`UPDATE stock SET qty=qty-1 WHERE dealer_id='D-403' AND part_id='P-10361'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.approvals.Approve(ctx, a.ID, manager, a.PayloadHash, ""); err != nil {
+		t.Fatalf("unrelated changes must not stale an approval: %v", err)
 	}
 }

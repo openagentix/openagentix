@@ -160,25 +160,25 @@ type approvalOut struct {
 // approvalView is an approval as the agent sees it. The texts came from the agent or from the REST port, so they
 // are labelled as text, not as instructions.
 type approvalView struct {
-	ID                 string   `json:"id"`
-	Subject            string   `json:"subject"`
-	Kind               string   `json:"kind"`
-	Status             string   `json:"status"`
-	ProposedBy         string   `json:"proposed_by"`
-	DecidedBy          string   `json:"decided_by,omitempty"`
-	DecisionNote       string   `json:"untrusted_decision_note,omitempty"`
-	PayloadHash        string   `json:"payload_hash"`
-	Warranty           Warranty `json:"warranty"`
-	PartID             string   `json:"part_id"`
-	Qty                int      `json:"qty"`
-	FromDealer         string   `json:"from_dealer"`
-	Slot               Slot     `json:"slot"`
-	UntrustedDiagnosis string   `json:"untrusted_diagnosis"`
-	UntrustedWorkOrder string   `json:"untrusted_work_order"`
-	UntrustedOrder     string   `json:"untrusted_order"`
-	UntrustedClaim     string   `json:"untrusted_claim,omitempty"`
-	UntrustedNotice    string   `json:"untrusted_notice"`
-	CaseVersion        int64    `json:"case_version"`
+	ID                 string        `json:"id"`
+	Subject            string        `json:"subject"`
+	Kind               string        `json:"kind"`
+	Status             string        `json:"status"`
+	ProposedBy         string        `json:"proposed_by"`
+	DecidedBy          string        `json:"decided_by,omitempty"`
+	DecisionNote       string        `json:"untrusted_decision_note,omitempty"`
+	PayloadHash        string        `json:"payload_hash"`
+	Warranty           warrantyBasis `json:"warranty"`
+	PartID             string        `json:"part_id"`
+	Qty                int           `json:"qty"`
+	FromDealer         string        `json:"from_dealer"`
+	Slot               Slot          `json:"slot"`
+	UntrustedDiagnosis string        `json:"untrusted_diagnosis"`
+	UntrustedWorkOrder string        `json:"untrusted_work_order"`
+	UntrustedOrder     string        `json:"untrusted_order"`
+	UntrustedClaim     string        `json:"untrusted_claim,omitempty"`
+	UntrustedNotice    string        `json:"untrusted_notice"`
+	CaseVersion        int64         `json:"case_version"`
 }
 
 func agentApproval(a core.Approval) approvalView {

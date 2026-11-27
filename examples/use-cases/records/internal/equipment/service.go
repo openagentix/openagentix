@@ -27,6 +27,13 @@ const (
 // ResponseWorkingDays is the dealer's service response window.
 const ResponseWorkingDays = 5
 
+// MaxHeldSlotsPerDealer bounds the technician slots held by cases that are waiting for approval at one dealer.
+const MaxHeldSlotsPerDealer = 10
+
+// MaxDuplicateEventsPerDay bounds the fault events recorded per machine and fault code each day once an open case
+// already covers the fault. Past the bound the event is answered with the open case and not stored again.
+const MaxDuplicateEventsPerDay = 5
+
 // Fleet trend rules: a machine trends to failure when its coolant mean over the last 14 days is at least
 // TrendThresholdC above its mean 30 to 60 days ago. Many isolated spikes mean a flapping sensor instead.
 const (
@@ -85,14 +92,15 @@ type CaseView struct {
 	OpenedAt       string `json:"opened_at"`
 	ResponseDue    string `json:"response_due"`
 	Version        int64  `json:"version"`
+	Safety         bool   `json:"safety_flag"`               // the dealer flagged the request as safety related
 	HumanDiagnosis string `json:"human_diagnosis,omitempty"` // replay ground truth: REST only, never in MCP views
 }
 
-const caseCols = `id,serial,dealer_id,kind,fault_code,dealer_note,status,diagnosis_cause,diagnosis,opened_at,response_due,version,human_diagnosis`
+const caseCols = `id,serial,dealer_id,kind,fault_code,dealer_note,status,diagnosis_cause,diagnosis,opened_at,response_due,version,safety_flag,human_diagnosis`
 
 func scanCase(r interface{ Scan(...any) error }) (CaseView, error) {
 	var c CaseView
-	err := r.Scan(&c.ID, &c.Serial, &c.DealerID, &c.Kind, &c.FaultCode, &c.DealerNote, &c.Status, &c.DiagnosisCause, &c.Diagnosis, &c.OpenedAt, &c.ResponseDue, &c.Version, &c.HumanDiagnosis)
+	err := r.Scan(&c.ID, &c.Serial, &c.DealerID, &c.Kind, &c.FaultCode, &c.DealerNote, &c.Status, &c.DiagnosisCause, &c.Diagnosis, &c.OpenedAt, &c.ResponseDue, &c.Version, &c.Safety, &c.HumanDiagnosis)
 	return c, err
 }
 
@@ -281,7 +289,8 @@ func getPart(ctx context.Context, q querier, id string) (Part, error) {
 // Warranty is the record's decision. A claim and a claim-bearing approval follow it, not the agent.
 type Warranty struct {
 	Covered bool   `json:"covered"`
-	Reason  string `json:"reason"`
+	Reason  string `json:"reason"`          // for people: includes the month and hour counts
+	Basis   string `json:"basis,omitempty"` // stable text without counts: this is what an approval hashes
 }
 
 // CheckWarranty decides coverage from the model's terms, the machine's age and hours, and the fault code.
@@ -300,7 +309,7 @@ func checkWarranty(ctx context.Context, q querier, now time.Time, serial, code s
 			return Warranty{}, err
 		}
 		if !f.Warrantable {
-			return Warranty{Covered: false, Reason: "this fault code is not a warranty item"}, nil
+			return Warranty{Covered: false, Reason: "this fault code is not a warranty item", Basis: "not a warranty item"}, nil
 		}
 	}
 	in, err := time.Parse(core.TimeFmt, m.InService)
@@ -310,11 +319,11 @@ func checkWarranty(ctx context.Context, q querier, now time.Time, serial, code s
 	months := int(now.Sub(in).Hours() / 24 / 30)
 	switch {
 	case months > m.WarrantyMonths:
-		return Warranty{Covered: false, Reason: fmt.Sprintf("outside the warranty period: %d months in service, limit %d", months, m.WarrantyMonths)}, nil
+		return Warranty{Covered: false, Reason: fmt.Sprintf("outside the warranty period: %d months in service, limit %d", months, m.WarrantyMonths), Basis: "outside the warranty period"}, nil
 	case m.Hours > m.WarrantyHours:
-		return Warranty{Covered: false, Reason: fmt.Sprintf("over the hours limit: %d hours, limit %d", m.Hours, m.WarrantyHours)}, nil
+		return Warranty{Covered: false, Reason: fmt.Sprintf("over the hours limit: %d hours, limit %d", m.Hours, m.WarrantyHours), Basis: "over the hours limit"}, nil
 	}
-	return Warranty{Covered: true, Reason: fmt.Sprintf("covered: %d of %d months, %d of %d hours", months, m.WarrantyMonths, m.Hours, m.WarrantyHours)}, nil
+	return Warranty{Covered: true, Reason: fmt.Sprintf("covered: %d of %d months, %d of %d hours", months, m.WarrantyMonths, m.Hours, m.WarrantyHours), Basis: "within the warranty period and hours"}, nil
 }
 
 // StockRow is the stock of one part at one dealer and its distance from the case's dealer.
@@ -518,7 +527,7 @@ func (s *Service) SlotsAt(ctx context.Context, dealerID string, limit int) ([]Sl
 	return out, rows.Err()
 }
 
-func (s *Service) newCase(ctx context.Context, tx *sql.Tx, serial, dealer, kind, code, note string) (string, error) {
+func (s *Service) newCase(ctx context.Context, tx *sql.Tx, serial, dealer, kind, code, note string, safety bool) (string, error) {
 	var n int
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(n),0)+1 FROM service_cases`).Scan(&n); err != nil {
 		return "", err
@@ -528,8 +537,12 @@ func (s *Service) newCase(ctx context.Context, tx *sql.Tx, serial, dealer, kind,
 	}
 	now := s.clock()
 	id := fmt.Sprintf("SVC-%04d-%04d", now.Year(), n)
-	_, err := tx.ExecContext(ctx, `INSERT INTO service_cases(id,n,serial,dealer_id,kind,fault_code,dealer_note,status,opened_at,response_due,version,pattern,human_diagnosis)
-		VALUES(?,?,?,?,?,?,?,'open',?,?,1,'','')`, id, n, serial, dealer, kind, code, note, core.FormatTime(now), core.FormatTime(addWorkingDays(now, ResponseWorkingDays)))
+	flag := 0
+	if safety {
+		flag = 1
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO service_cases(id,n,serial,dealer_id,kind,fault_code,dealer_note,status,opened_at,response_due,version,pattern,human_diagnosis,safety_flag)
+		VALUES(?,?,?,?,?,?,?,'open',?,?,1,'','',?)`, id, n, serial, dealer, kind, code, note, core.FormatTime(now), core.FormatTime(addWorkingDays(now, ResponseWorkingDays)), flag)
 	return id, err
 }
 
@@ -548,18 +561,31 @@ func (s *Service) CreateFault(ctx context.Context, serial, code string) (CaseVie
 	if _, err := getFaultCode(ctx, tx, code); err != nil {
 		return CaseView{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fault_events(machine,code,at,source) VALUES(?,?,?, 'telematics')`, serial, code, core.FormatTime(s.clock())); err != nil {
-		return CaseView{}, false, err
-	}
+	now := s.clock()
 	var id string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM service_cases WHERE serial=? AND fault_code=? AND kind='fault' AND status<>'resolved' ORDER BY id LIMIT 1`, serial, code).Scan(&id)
 	dup := err == nil
-	if errors.Is(err, sql.ErrNoRows) {
-		if id, err = s.newCase(ctx, tx, serial, m.DealerID, "fault", code, ""); err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return CaseView{}, false, err
+	}
+	record := true
+	if dup {
+		var today int
+		day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM fault_events WHERE machine=? AND code=? AND at>=?`, serial, code, core.FormatTime(day)).Scan(&today); err != nil {
 			return CaseView{}, false, err
 		}
-	} else if err != nil {
-		return CaseView{}, false, err
+		record = today < MaxDuplicateEventsPerDay
+	}
+	if record {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO fault_events(machine,code,at,source) VALUES(?,?,?, 'telematics')`, serial, code, core.FormatTime(now)); err != nil {
+			return CaseView{}, false, err
+		}
+	}
+	if !dup {
+		if id, err = s.newCase(ctx, tx, serial, m.DealerID, "fault", code, "", false); err != nil {
+			return CaseView{}, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return CaseView{}, false, err
@@ -569,7 +595,9 @@ func (s *Service) CreateFault(ctx context.Context, serial, code string) (CaseVie
 }
 
 // CreateRequest opens a case from a dealer's service request. The note is the dealer's own words: untrusted text.
-func (s *Service) CreateRequest(ctx context.Context, serial, note string) (CaseView, error) {
+// A request the dealer flags as safety related can never reach an approval. Without the flag, screening depends on
+// the agent calling Escalate.
+func (s *Service) CreateRequest(ctx context.Context, serial, note string, safety ...bool) (CaseView, error) {
 	note, err := core.CleanText("note", note, 500, true)
 	if err != nil {
 		return CaseView{}, err
@@ -583,7 +611,7 @@ func (s *Service) CreateRequest(ctx context.Context, serial, note string) (CaseV
 	if err != nil {
 		return CaseView{}, err
 	}
-	id, err := s.newCase(ctx, tx, serial, m.DealerID, "request", "", note)
+	id, err := s.newCase(ctx, tx, serial, m.DealerID, "request", "", note, len(safety) > 0 && safety[0])
 	if err != nil {
 		return CaseView{}, err
 	}
@@ -619,7 +647,7 @@ func (s *Service) OpenProactiveCase(ctx context.Context, serial, reason string) 
 	var id string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM service_cases WHERE serial=? AND kind='sweep' AND status<>'resolved' ORDER BY id LIMIT 1`, serial).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		id, err = s.newCase(ctx, tx, serial, m.DealerID, "sweep", "", reason)
+		id, err = s.newCase(ctx, tx, serial, m.DealerID, "sweep", "", reason, false)
 	}
 	if err != nil {
 		return CaseView{}, err
@@ -633,6 +661,12 @@ func (s *Service) OpenProactiveCase(ctx context.Context, serial, reason string) 
 // mutate changes a case in one transaction. It refuses a resolved case, bumps the version, and marks a pending
 // approval superseded (the approver saw something that no longer holds).
 func (s *Service) mutate(ctx context.Context, id string, fn func(tx *sql.Tx, c CaseView) (status string, err error)) error {
+	return s.mutateKeepingSlot(ctx, id, false, fn)
+}
+
+// mutateKeepingSlot is mutate. When it supersedes a pending approval it frees the case's held slot, unless the
+// change is itself about the slot.
+func (s *Service) mutateKeepingSlot(ctx context.Context, id string, keepSlot bool, fn func(tx *sql.Tx, c CaseView) (status string, err error)) error {
 	if err := validate(caseRe, "case id", id); err != nil {
 		return err
 	}
@@ -656,6 +690,11 @@ func (s *Service) mutate(ctx context.Context, id string, fn func(tx *sql.Tx, c C
 		if err := core.SupersedePending(ctx, tx, id, s.clock()); err != nil {
 			return err
 		}
+		if !keepSlot {
+			if err := releaseSlots(ctx, tx, id); err != nil {
+				return err
+			}
+		}
 		if status == "" {
 			status = "in_review"
 		}
@@ -670,6 +709,11 @@ func (s *Service) mutate(ctx context.Context, id string, fn func(tx *sql.Tx, c C
 		return err
 	}
 	return tx.Commit()
+}
+
+func releaseSlots(ctx context.Context, tx *sql.Tx, caseID string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE slots SET status='free', case_id='' WHERE case_id=? AND status='held'`, caseID)
+	return err
 }
 
 // SetDiagnosis records the likely cause and the reasoning.
@@ -697,7 +741,16 @@ func (s *Service) SetStatus(ctx context.Context, id, status string) (CaseView, e
 	if status != "in_review" && status != "needs_person" {
 		return CaseView{}, invalid("status must be in_review or needs_person")
 	}
-	if err := s.mutate(ctx, id, func(*sql.Tx, CaseView) (string, error) { return status, nil }); err != nil {
+	err := s.mutate(ctx, id, func(tx *sql.Tx, c CaseView) (string, error) {
+		if c.Status == "needs_person" {
+			return "", conflict("this case was routed to a person; the agent cannot move it back")
+		}
+		if status == "needs_person" {
+			return status, releaseSlots(ctx, tx, id)
+		}
+		return status, nil
+	})
+	if err != nil {
 		return CaseView{}, err
 	}
 	return s.GetCase(ctx, id)
@@ -710,8 +763,10 @@ func (s *Service) Escalate(ctx context.Context, id, reason string) (CaseView, er
 		return CaseView{}, err
 	}
 	err = s.mutate(ctx, id, func(tx *sql.Tx, c CaseView) (string, error) {
-		_, err := tx.ExecContext(ctx, `UPDATE service_cases SET diagnosis_cause='needs a person', diagnosis=? WHERE id=?`, reason, id)
-		return "needs_person", err
+		if _, err := tx.ExecContext(ctx, `UPDATE service_cases SET diagnosis_cause='needs a person', diagnosis=? WHERE id=?`, reason, id); err != nil {
+			return "", err
+		}
+		return "needs_person", releaseSlots(ctx, tx, id)
 	})
 	if err != nil {
 		return CaseView{}, err
@@ -831,7 +886,7 @@ func (s *Service) ProposeSlot(ctx context.Context, id, slotID string) (Slot, err
 		return Slot{}, err
 	}
 	var out Slot
-	err := s.mutate(ctx, id, func(tx *sql.Tx, c CaseView) (string, error) {
+	err := s.mutateKeepingSlot(ctx, id, true, func(tx *sql.Tx, c CaseView) (string, error) {
 		err := tx.QueryRowContext(ctx, `SELECT id,dealer_id,tech,starts_at,status FROM slots WHERE id=?`, slotID).Scan(&out.ID, &out.DealerID, &out.Tech, &out.StartsAt, &out.Status)
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", notFound("slot not found")
@@ -845,7 +900,14 @@ func (s *Service) ProposeSlot(ctx context.Context, id, slotID string) (Slot, err
 		if out.Status != "free" {
 			return "", conflict("that slot is not free")
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET status='free', case_id='' WHERE case_id=? AND status='held'`, id); err != nil {
+		var held int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM slots WHERE dealer_id=? AND status='held' AND case_id<>?`, c.DealerID, id).Scan(&held); err != nil {
+			return "", err
+		}
+		if held >= MaxHeldSlotsPerDealer {
+			return "", conflict("this dealer already has the most slots on hold")
+		}
+		if err := releaseSlots(ctx, tx, id); err != nil {
 			return "", err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE slots SET status='held', case_id=? WHERE id=?`, id, slotID)
@@ -880,26 +942,32 @@ func (s *Service) RequestApprovalBy(ctx context.Context, id, kind, by string) (c
 	return s.approvals.Propose(ctx, core.Proposal{Subject: id, Kind: kind, AmountCents: 0, ProposedBy: by})
 }
 
+// warrantyBasis is the warranty decision as the approval hashes it: no month or hour counts, which change by the day.
+type warrantyBasis struct {
+	Covered bool   `json:"covered"`
+	Basis   string `json:"basis"`
+}
+
 // proposalPayload is exactly what the approver reads and what the hash covers.
 type proposalPayload struct {
-	CaseID         string   `json:"case_id"`
-	Serial         string   `json:"serial"`
-	DealerID       string   `json:"dealer_id"`
-	FaultCode      string   `json:"fault_code"`
-	Kind           string   `json:"kind"`
-	Warranty       Warranty `json:"warranty"`
-	Diagnosis      string   `json:"diagnosis"`
-	DiagnosisCause string   `json:"diagnosis_cause"`
-	WorkOrder      string   `json:"work_order"`
-	PartID         string   `json:"part_id"`
-	Qty            int      `json:"qty"`
-	FromDealer     string   `json:"from_dealer"`
-	StockAvailable int      `json:"stock_available"`
-	Slot           Slot     `json:"slot"`
-	Order          string   `json:"order"`
-	Claim          string   `json:"claim,omitempty"` // present only when the machine is covered
-	Notice         string   `json:"notice"`
-	CaseVersion    int64    `json:"case_version"`
+	CaseID          string        `json:"case_id"`
+	Serial          string        `json:"serial"`
+	DealerID        string        `json:"dealer_id"`
+	FaultCode       string        `json:"fault_code"`
+	Kind            string        `json:"kind"`
+	Warranty        warrantyBasis `json:"warranty"`
+	Diagnosis       string        `json:"diagnosis"`
+	DiagnosisCause  string        `json:"diagnosis_cause"`
+	WorkOrder       string        `json:"work_order"`
+	PartID          string        `json:"part_id"`
+	Qty             int           `json:"qty"`
+	FromDealer      string        `json:"from_dealer"`
+	StockSufficient bool          `json:"stock_sufficient"` // not the count: another case taking stock must not stale an approval
+	Slot            Slot          `json:"slot"`
+	Order           string        `json:"order"`
+	Claim           string        `json:"claim,omitempty"` // present only when the machine is covered
+	Notice          string        `json:"notice"`
+	CaseVersion     int64         `json:"case_version"`
 }
 
 // Describe validates a proposal and returns the payload the approver is asked to approve.
@@ -913,6 +981,9 @@ func (s *Service) Describe(ctx context.Context, tx *sql.Tx, subject, kind string
 	}
 	if c.Status == "needs_person" {
 		return "", 0, conflict("this case was routed to a person")
+	}
+	if c.Safety {
+		return "", 0, conflict("the dealer flagged this request as safety related, so it goes to a person")
 	}
 	if c.FaultCode != "" {
 		f, err := getFaultCode(ctx, tx, c.FaultCode)
@@ -975,8 +1046,8 @@ func (s *Service) Describe(ctx context.Context, tx *sql.Tx, subject, kind string
 	if !ok || order.Status != "draft" {
 		return "", 0, conflict("a parts order draft is required")
 	}
-	pl := proposalPayload{CaseID: c.ID, Serial: c.Serial, DealerID: c.DealerID, FaultCode: c.FaultCode, Kind: kind, Warranty: w, Diagnosis: c.Diagnosis,
-		DiagnosisCause: c.DiagnosisCause, WorkOrder: c.WorkOrder, PartID: cp.part, Qty: cp.qty, FromDealer: cp.from, StockAvailable: have, Order: order.Body, CaseVersion: c.Version}
+	pl := proposalPayload{CaseID: c.ID, Serial: c.Serial, DealerID: c.DealerID, FaultCode: c.FaultCode, Kind: kind, Warranty: warrantyBasis{Covered: w.Covered, Basis: w.Basis}, Diagnosis: c.Diagnosis,
+		DiagnosisCause: c.DiagnosisCause, WorkOrder: c.WorkOrder, PartID: cp.part, Qty: cp.qty, FromDealer: cp.from, StockSufficient: true, Order: order.Body, CaseVersion: c.Version}
 	if w.Covered {
 		cl, ok, err := s.outbox.Current(ctx, tx, subject, "warranty_claim")
 		if err != nil {

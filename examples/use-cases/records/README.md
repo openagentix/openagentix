@@ -63,6 +63,8 @@ made the proposal (with their own token) cannot decide it.
 The MCP endpoint has no login of its own, like the notify service. The tool gateway in front of it authenticates
 agents, and a network policy (a later slice) must keep everyone else out.
 
+The loopback rule looks only at the connection's source address. It never reads `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, and a test sends them from a remote address to prove it. **Chart note:** a sidecar in the same pod that forwards traffic to `127.0.0.1:8081` (a mesh proxy, or a ToolHive proxy run as a sidecar) would make every remote caller look like loopback. Do not run one in front of port 8081, or move REST to a Unix socket. A test pins the limit that a manager can decide a proposal that came from loopback without a token.
+
 The REST port listens on `127.0.0.1:8081` by default, so only a person using `kubectl port-forward` reaches it.
 Agents never need it: their steps go through the MCP port, which is the one ToolHive proxies. This is the choice
 that still works when the MCP path runs behind ToolHive (an agent token on REST would have to be passed through
@@ -131,9 +133,12 @@ Rules the record enforces, whatever the agent says:
 | A superseded part is never ordered | The draft is refused with the replacement part named. The check runs again when the approval is decided |
 | Stock is real | A draft is refused when the chosen dealer lacks the quantity, and the stock is checked again at approval. The approval takes the stock in the same transaction |
 | No order for a flapping sensor | Telematics that spikes on and off without a trend is classified `sensor_flapping`. A parts order for that machine is refused, and so is a proactive case |
-| Safety-critical requests go to a person | A fault code marked safety critical, or a case sent to a person with `escalate_to_person`, cannot reach an approval |
+| Safety-critical requests go to a person | A fault code marked safety critical, a request the dealer flags with `"safety": true` on `POST /requests`, or a case sent to a person with `escalate_to_person`, cannot reach an approval. A case in `needs_person` (escalated, or rejected by a manager) cannot be moved back by the REST status route (the equipment tools have no status tool): it refuses it, and this build has no reopen route. **Screening of a request that has no fault code and no flag relies on the agent calling `escalate_to_person`**; the dealer manager reading the approval is the remaining guard |
 | Fleet sweep | `list_fleet_trends` compares each machine's coolant over the last 14 days with 30 to 60 days ago. A rise of 8 degrees or more is `trending_to_failure`. `open_proactive_case` works only for those machines, once per machine |
 | Only approved drafts leave | The approval queues exactly the kinds in its payload and discards the rest |
+| Slots are not hoarded | A held slot is freed when the case is escalated, when a manager rejects, and when a change supersedes a pending approval (the agent holds one again). One dealer can have at most 10 slots on hold |
+| Fault events are bounded | A fault that an open case already covers is stored at most 5 times per machine and code each day, then answered with the open case without a new row |
+| Approvals do not go stale for no reason | The payload holds the warranty decision and a basis text with no month or hour counts, and `stock_sufficient` instead of the stock count, so a day passing or another case taking stock does not change the hash. Everything else the approver sees still does |
 | Free text is data | The dealer's note, the diagnosis, the work order and the drafts reach the agent in fields named `untrusted_...` |
 
 Hard cases in the seed: an out-of-warranty machine, a part that is empty at the nearest dealer (and a superseded part
