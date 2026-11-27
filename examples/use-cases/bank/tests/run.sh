@@ -140,6 +140,11 @@ check "the injection case expects a refusal and no approval request" "jq -e '.ca
 
 echo "# the restated caller, the profile vMCP and the exposure limits"
 check "the restated quick start caller is the whole entry of the quick start values" "[ \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"quickstart-ask\")' '$QS')\" = \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"quickstart-ask\")' '$VALS')\" ]"
+bash "$ROOT/hack/compose-values.sh" "$QS" "$VALS" > "$T/composed.yaml" 2> "$T/composed.err"; COMP_RC=$?
+check "hack/compose-values.sh composes the quick start and values.yaml, with no refusal and the restated caller kept once" "[ $COMP_RC = 0 ] && yq -e '[.governance.a2a.callers[] | select(.name==\"quickstart-ask\")] | length == 1' '$T/composed.yaml' >/dev/null" "$(cat "$T/composed.err")"
+helm template t "$CHART" -f "$T/composed.yaml" > "$T/composed.render" 2> "$T/composed.render.err"; COMP_R=$?
+check "the composed file renders byte for byte like the quick start plus values.yaml (the same behaviour)" "[ $COMP_R = 0 ] && cmp -s '$T/bank.yaml' '$T/composed.render'" "$(head -3 "$T/composed.render.err")"
+check "the README shows the compose command" "grep -q 'hack/compose-values.sh components/quickstart/values.yaml examples/use-cases/bank/values.yaml' '$HERE/README.md'"
 check "the quick start has exactly the one caller that values.yaml restates (so nothing else is lost)" "[ \"\$(yq -r '.governance.a2a.callers | length' '$QS')\" = 1 ]"
 check "the quick start renders the profile vMCP tools-lookup that the records policy admits" "doc '$T/qs.yaml' VirtualMCPServer tools-lookup | jq -e '.metadata.name == \"tools-lookup\"' >/dev/null && yq -e 'select(.kind==\"NetworkPolicy\") | .spec.ingress[0].from[0].podSelector.matchExpressions[0].values | index(\"tools-lookup\") != null' '$M' >/dev/null"
 check "the quick start shared vMCP has code mode off (install.sh refuses it on)" "! doc '$T/qs.yaml' VirtualMCPServer tools | jq -e '.spec.config.codeMode' >/dev/null 2>&1"
