@@ -147,6 +147,7 @@ jobs:
           hack/ci/default-storageclass-test.sh
           hack/ci/sa-issuer-test.sh
           hack/ci/uninstall-test.sh
+          hack/ci/recovery-test-test.sh
           hack/ci/upgrade-test-test.sh
           hack/ci/lifecycle-test-test.sh
           hack/gke/tests/run.sh
