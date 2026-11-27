@@ -1,0 +1,52 @@
+name: spike-toolhive
+
+# ToolHive spike for the diagnostic tools (issue #230, ADR 0025 slice 2). A throwaway kind cluster on a hosted runner: the ToolHive
+# operator 0.67.1, a stand-in MCP backend and a small identity provider, then hack/spikes/toolhive_spike.py (one check per question).
+# The results table goes to the job summary. NOT part of `ci-ok`: it never gates a merge. It runs only when its own files change, and by hand.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/spike-toolhive.yml
+      - hack/spikes/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-toolhive-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh kind
+      - name: spike
+        env:
+          SPIKE_CLUSTER: oa-spike-toolhive   # a separately named throwaway cluster, own kubeconfig file
+          SPIKE_OUT: ${{ github.workspace }}/spike-out
+        run: |
+          set -o pipefail
+          hack/spikes/toolhive-diagnostics-spike.sh 2>&1 | tee spike.log
+      - name: diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p spike-out
+          tail -150 spike.log || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: spike-toolhive
+          path: |
+            spike-out/
+            spike.log
+          if-no-files-found: ignore
+          retention-days: 30
