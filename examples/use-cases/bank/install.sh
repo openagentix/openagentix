@@ -23,13 +23,16 @@
 # It REFUSES to install when the shared tool server (the vMCP `tools`) has code mode on, or when any agent other than dispute-agent uses
 # it: the records tools join that shared server, and a script run there could call the write tools. Quick start only (README).
 #
-# Env: CLUSTER (kind cluster name, default openagentix)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  DOCKER  KIND
+# Env: CLUSTER (kind cluster name, REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  DOCKER  KIND
 #      KB_INGEST, KB_GRAPH_LOAD (the two hack scripts)  SKIP_BUILD=1 (use RECORDS_IMAGE as it is)  RECORDS_IMAGE
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-CLUSTER=${CLUSTER:-openagentix}
+# No default cluster: a script that changes a cluster must be told which one, so it never runs on a cluster by guess (a name like "openagentix" is
+# also the name of a full demo cluster).
+[ -n "${CLUSTER:-}${KUBE_CONTEXT:-}" ] || { echo "ERROR: set CLUSTER (the kind cluster name) or KUBE_CONTEXT: there is no default cluster. Nothing was changed." >&2; exit 1; }
+CLUSTER=${CLUSTER:-${KUBE_CONTEXT#kind-}}
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
 DOCKER=${DOCKER:-docker}

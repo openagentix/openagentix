@@ -56,7 +56,7 @@ hack/compose-values.sh -o /tmp/bank-values.yaml components/quickstart/values.yam
 PROFILE=quickstart VALUES_FILE=/tmp/bank-values.yaml ./install.sh
 ```
 
-A test checks that this composed file renders byte for byte like the two files given to Helm one after the other, so the behaviour is the same. Read the report (on standard error) and the composed file before you install it. The plain `VALUES_FILE` form still works, because `values.yaml` keeps the restated caller. This use case supports the quick start only: see "Quick start only". The full demo is not supported. Both scripts refuse a context that is not `kind-*`. In the commands below, add `--context kind-openagentix` (or your kind context) to every `kubectl` you type yourself.
+A test checks that this composed file renders byte for byte like the two files given to Helm one after the other, so the behaviour is the same. Read the report (on standard error) and the composed file before you install it. The plain `VALUES_FILE` form still works, because `values.yaml` keeps the restated caller. This use case supports the quick start only: see "Quick start only". The full demo is not supported. Both scripts refuse a context that is not `kind-*`, and they have no default cluster: set `CLUSTER=<kind cluster name>` (or `KUBE_CONTEXT`) on every call, so that a script never acts on a cluster by guess. In the commands below, add `--context kind-openagentix` (or your kind context) to every `kubectl` you type yourself.
 
 ## The demo (about six minutes)
 

@@ -5,12 +5,12 @@
 #   ctl.sh pods                    kubectl get pods -n rca-demo (what the six faults look like to a person)
 #   ctl.sh wait [seconds]          wait until every workload shows its fault (default 240 s)
 # Local kind or k3d cluster only: it refuses any other kube context. The agent can read, never change: nothing here changes the cluster.
-# Env: CLUSTER (default openagentix)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  ASK (the ask script, default hack/ask.sh)
+# Env: CLUSTER (default oa-rca-demo)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  ASK (the ask script, default hack/ask.sh)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
-CLUSTER=${CLUSTER:-openagentix}
+CLUSTER=${CLUSTER:-oa-rca-demo}
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
 ASK=${ASK:-$ROOT/hack/ask.sh}

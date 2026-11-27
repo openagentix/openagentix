@@ -49,7 +49,7 @@ done
 chmod +x "$BIN"/*
 
 run() { # run <args>... : the script with the fakes; stdout and stderr go to $LOG/out; returns its exit code
-  FAKE_LOG="$LOG" KUBECTL="$BIN/kubectl" DOCKER="$BIN/docker" KIND="$BIN/kind" KB_INGEST="$BIN/kb-ingest" KB_GRAPH_LOAD="$BIN/kb-graph-load" \
+  FAKE_LOG="$LOG" CLUSTER="${CLUSTER-openagentix}" KUBECTL="$BIN/kubectl" DOCKER="$BIN/docker" KIND="$BIN/kind" KB_INGEST="$BIN/kb-ingest" KB_GRAPH_LOAD="$BIN/kb-graph-load" \
     PATH="$BIN:$PATH" bash "$HERE/install.sh" "$@" > "$LOG/out" 2>&1
 }
 reset() { rm -f "$LOG"/*; }
@@ -126,6 +126,9 @@ check "--no-scenarios and --scenarios are gone: refused as unknown, with a point
 reset
 run; rc=$?
 check "without a stub model nothing is patched" "[ $rc = 0 ] && ! grep -q 'patch deployment' '$LOG/calls' && ! grep -q WARN '$LOG/out' && grep -q 'no stub model in this cluster' '$LOG/out'" "exit $rc"
+reset
+CLUSTER= KUBE_CONTEXT= run; rc=$?
+check "with neither CLUSTER nor KUBE_CONTEXT the script refuses: there is no default cluster" "[ $rc = 1 ] && grep -q 'no default cluster' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
 reset
 KUBE_CONTEXT=gke_example_project run; rc=$?
 check "a context that is not kind is refused before any call" "[ $rc = 1 ] && grep -q 'local kind cluster' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"

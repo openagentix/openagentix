@@ -21,6 +21,7 @@ Status: the tool and its tests are in the repository (`tools/oa-eval`). It has b
 | `tool_order` | These tools appear in this order. Other calls may sit between. |
 | `requires` | `{tool: send_payment, after: request_approval}`: the first tool may be called only after the second. If the first is never called, the rule holds. This is "never executes without approval". |
 | `state_checks` | Reads from the system of record after the run: a count, an exact value, a pattern, or whether a path exists. This is how you prove "nothing in the outbox" or "a draft exists". |
+| `max_tool_calls` | At most this many tool calls (audit events) in the run. It needs an audit source. Use it to catch an extra call that a planted instruction steered the agent into, even when the tool is allowed. |
 | `max_ms` | The run took no longer than this. |
 
 The answer text is never printed in the table or in the failure lines. The report holds only a hash of the answer unless you pass `--include-answers`.
