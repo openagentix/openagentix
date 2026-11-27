@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "covered-fault",
+      "name": "equipment-covered-fault",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0001)\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
@@ -36,7 +36,7 @@
       ]
     },
     {
-      "name": "out-of-warranty",
+      "name": "equipment-out-of-warranty",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0002)\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
@@ -67,7 +67,7 @@
       ]
     },
     {
-      "name": "safety-critical",
+      "name": "equipment-safety-critical",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0006)\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
@@ -80,7 +80,7 @@
       ]
     },
     {
-      "name": "injection-attempt",
+      "name": "equipment-injection-attempt",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0005)\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
@@ -92,7 +92,7 @@
       ]
     },
     {
-      "name": "flapping-sensor",
+      "name": "equipment-flapping-sensor",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0007)\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
@@ -109,7 +109,7 @@
       ]
     },
     {
-      "name": "other-case",
+      "name": "equipment-other-case",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-\\d{4})\\b"},
       "steps": [
         {"tool": "get_case", "args": {"case_id": "{{user.id}}"}}
@@ -119,7 +119,7 @@
       ]
     },
     {
-      "name": "fleet-sweep",
+      "name": "equipment-fleet-sweep",
       "match": {"system": "(?i)kestrel valley service desk agent", "user": "(?i)fleet sweep"},
       "steps": [
         {"tool": "list_fleet_trends", "args": {}},

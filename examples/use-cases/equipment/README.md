@@ -2,7 +2,7 @@
 
 Kestrel Valley Machinery (a maker of tractors, combines and balers), its dealers, its machines and its customers are invented. Every serial, part, price rule and warranty term here is synthetic. Nothing describes a real company, brand or contract.
 
-Status: built and tested offline. A live run on a kind cluster in CI is the next step (see "What is proven" for what has been shown and what has not). The records service joins the platform through `mcp.endpoints` in a tool group of its own, with a header credential from a Secret (ADR 0026), the same way as the bank use case. **Nothing here shows how a real model behaves**: every agent run here is scripted by the stub model, and the first real-model run is a checklist below.
+Status: built and tested offline, and **run on a kind cluster in CI** through real agent sessions with the stub model scripting the answers (see "What is proven"). The records service joins the platform through `mcp.endpoints` in a tool group of its own, with a header credential from a Secret (ADR 0026), the same way as the bank use case. **Nothing here shows how a real model behaves**: every agent run here is scripted by the stub model, and the first real-model run is a checklist below.
 
 ## The story
 
@@ -191,7 +191,18 @@ Replay of the 40 closed cases (the technician's final diagnosis is kept in the r
 
 Offline (the tests above, no cluster, no model): the scripted chains, the tool arguments, the stop at the approval request, the order, the claim and the notice queued only after a named manager decides (once, with the stock taken once), the out of warranty path with no claim, the escalation of the safety request and of the injected note, and the evaluation set's checks: with the real stub model binary, the real records service and the real `oa-eval`. The values render and the objects they add; the shared tool server never names the records service; `install.sh` and `ctl.sh` against fakes.
 
-Live, on a kind cluster in CI (the opt-in job `e2e (equipment, mcp.endpoints)`: `gh workflow run e2e.yml -f equipment=true --ref <branch>`; `hack/ci/equipment-live.sh`): see the run named in the pull request and `docs/diary/features/equipment-on-endpoints.md`. **The stub model plays `eval/scenario.json`, so every run is scripted by the stub model and shows the platform, not a model.**
+Live, on a kind cluster in CI (the opt-in job `e2e (equipment, mcp.endpoints)`: `gh workflow run e2e.yml -f equipment=true --ref <branch>`; `hack/ci/equipment-live.sh`): **The stub model played `eval/scenario.json`, so every run was scripted by the stub model and shows the platform, not a model.** The first run on the final scripts (run 46066469406) passed 92 checks, none failed. Through real agent sessions (the question goes through the A2A gate, kagent runs the agent, the agent calls the tools through the tool server of its profile) it showed:
+
+- the tool server `tools-dealer` lists `dealer-records` and `knowledge-dealer` as ready and lists exactly the 20 `dealer-records_*` and 6 `knowledge-dealer_*` tools; a service tool that the profile leaves out (`open_proactive_case`) is refused and opens no case; the shared tool server and the profile `lookup` of the quick start agent list none and refuse a call;
+- `oa-eval` passed all seven cases through the gate (audit lines as the audit source, the records REST state as the state source); every audited call was a tool of the profile and none was a tool of the bank use case;
+- the events with `ctl.sh`: the same fault on the same machine reused the open case, a new fault opened one, a dealer's safety flag reached the record and the record refused an approval request for it;
+- the approver path with `ctl.sh`: the order, the claim and the notice were queued (three items) after the decision only, the stock at the dealer went from 4 to 3, the case was resolved, a second approval was refused, and a change to another case superseded its request and approving it was refused;
+- the records MCP port: 401 without the header, with a wrong one and with the approver token; 200 with the right value; the header value and the approver token are in no log, no object and not in the install log;
+- callers: a quick start caller, a wrong user id and a caller with no rule got 403;
+- a pod in `default` timed out against the records port; the egress policy of the group cut a probe with the tool server labels from a web server that a control pod reached (one run, in-cluster target only; nothing is shown about egress to the internet); `kubectl auth can-i get secret/dealer-records-mcp-auth -n mcp-tools` for the shared tool server answered yes (the remaining risk, below);
+- a second `install.sh` run changed no Secret and kept the scenarios.
+
+The knowledge base ranked the intended document first for the five queries of the scenarios in that run. See `docs/diary/features/equipment-on-endpoints.md`.
 
 ## What is not proven
 

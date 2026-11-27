@@ -501,6 +501,22 @@ func TestEquipmentScenarioFileHasNoCredentialsOrPersonalData(t *testing.T) {
 	}
 }
 
+// With --with-bank the stub model loads the scenario files of both use cases from one directory, and it refuses a scenario name that is used twice. The
+// first live run of that install crash-looped the stub model on a shared name, so the real loader is run here on both files.
+func TestEquipmentAndBankScenarioFilesLoadTogether(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{"bank.json": scenarioFile, "equipment.json": eqScenarioFile} {
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startStub(t, dir) // fails the test when the stub model does not start
+}
+
 // The service never offers a tool that releases anything: the scenario can only call tools the agent has, and the stand-in never needs one that moves goods.
 func TestEquipmentScenarioCallsOnlyToolsOfTheService(t *testing.T) {
 	e := newEqEnv(t)
