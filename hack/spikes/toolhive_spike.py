@@ -336,6 +336,23 @@ def headers():
     except Exception as ex:  # noqa: BLE001
         refs.append("error %s" % ex)
     rec("hdr/mechanism", "2", "INFO", "how the vMCP pod receives it: %s" % (refs or "no Secret reference in the pod spec"))
+    # the excluding shared vMCPs: do their pods hold the credential of a backend they do not expose?
+    try:
+        refs2 = []
+        for p in json.loads(k("get", "pods", "-n", NS, "-o", "json"))["items"]:
+            n = p["metadata"]["name"]
+            vm = next((v for v in ("sh-open", "sh-excl", "sh-deny", "sh-cedar", "sh-sep") if re.fullmatch(r"%s-[a-z0-9]+-[a-z0-9]{5}" % v, n)), None)
+            if vm:
+                m = [ev["name"] for c2 in p["spec"]["containers"] for ev in c2.get("env", [])
+                     if "secretKeyRef" in (ev.get("valueFrom") or {}) and ev["valueFrom"]["secretKeyRef"]["name"] == "hdr-token"]
+                refs2.append("%s: %s" % (vm, m or "no reference to the header Secret"))
+        rec("hdr/shared-pod-env", "2", "INFO", "dgs (in the shared group) carries headerForward from Secret hdr-token. vMCP pods that get an env var from that Secret: %s" % refs2)
+        c = anon("sh-open")
+        h = json.loads(text_of(c.call("dgs_whoami")))["headers"]
+        okv = h.get("authorization", {}).get("sha256") == sha(val)
+        rec("hdr/shared-dgs", "2", "PASS" if okv else "FAIL", "headerForward on an entry of the anonymous shared group: the backend received the Secret value: %s" % okv)
+    except Exception as ex:  # noqa: BLE001
+        rec("hdr/shared-pod-env", "2", "ERROR", str(ex))
     # backends the vMCP dropped, from its own status
     try:
         st = json.loads(k("get", "virtualmcpserver", "diag", "-n", NS, "-o", "json"))["status"]
@@ -401,6 +418,21 @@ def audit():
     neg_res, neg_req = CANARY in ld, REQ_CANARY in ld
     v = "PASS" if (pos_res and not neg_res) else ("INCONCLUSIVE" if not pos_res else "FAIL")
     rec("audit/off", "4", v, "includeResponseData false, includeRequestData false: result canary in the vMCP log=%s, request canary=%s (valid only if the control found it)" % (neg_res, neg_req))
+    for name, text in (("diag", ld), ("sh-open", lo)):
+        calls = []
+        for x in text.splitlines():
+            try:
+                e = json.loads(x)
+            except ValueError:
+                continue
+            if e.get("type") == "mcp_tool_call":
+                calls.append(e)
+        if calls:
+            e = calls[-1]
+            rec("audit/fields/" + name, "4", "INFO", "one mcp_tool_call event: top-level keys=%s; subjects=%s; target.name=%s; metadata.extra keys=%s; has data (request/response bodies)=%s" % (
+                sorted(e), e.get("subjects"), (e.get("target") or {}).get("name"), sorted(((e.get("metadata") or {}).get("extra") or {})), "data" in e))
+        else:
+            rec("audit/fields/" + name, "4", "INFO", "no mcp_tool_call event found in the log")
     rec("audit/backend-log", "4", "INFO", "the stand-in backend, not ToolHive, logs request metadata only; canary in its log: %s" % (CANARY in k("logs", "-n", NS, "deploy/mcpstub", "--tail=3000")))
 
 

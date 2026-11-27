@@ -139,6 +139,9 @@ spec:
   transport: streamable-http
   allowPrivateEndpoint: true
   externalAuthConfigRef: {name: noauth}
+  headerForward:   # a credential on a backend of the shared group: do the vMCPs that exclude it still hold it?
+    addHeadersFromSecret:
+      - {headerName: Authorization, valueSecretRef: {name: hdr-token, key: value}}
 ---
 apiVersion: toolhive.stacklok.dev/v1beta1
 kind: MCPServerEntry
