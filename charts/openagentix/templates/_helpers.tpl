@@ -651,3 +651,39 @@ the users from the render and fails if one is missing. */ -}}
 {{- printf "%s:%s" $i.repository $t -}}
 {{- end -}}
 {{- end -}}
+
+{{/* ADR 0024: the PodDisruptionBudget of one Deployment or StatefulSet. Call it on its own line right after a "---" (or at the top of a file), with
+dict "root" $ "name" <workload name> "app" <the app label of its selector> "ns" <its namespace>. It prints nothing when
+availability.podDisruptionBudgets.enabled is false, so the render is then byte-identical to a render without it. The selector is the workload's own
+selector plus the release and part-of labels, so a pod of another team with the same app label in the same namespace is not covered. */}}
+{{- define "oa.pdb" -}}
+{{- if .root.Values.availability.podDisruptionBudgets.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .name }}
+  namespace: {{ .ns }}
+  labels:
+    app: {{ .app }}
+    {{- include "oa.labels" .root | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: {{ .app }}
+      app.kubernetes.io/instance: {{ .root.Release.Name }}
+      app.kubernetes.io/part-of: openagentix
+---
+{{- end }}
+{{- end -}}
+
+{{/* ADR 0024: availability.priorityClassName for a pod template ("" when unset). Fails the render when it is not a DNS-1123 subdomain.
+Used in each pod template as: with (include "oa.priorityClass" $), then the field priorityClassName. */}}
+{{- define "oa.priorityClass" -}}
+{{- $n := toString .Values.availability.priorityClassName -}}
+{{- if $n -}}
+{{- if or (gt (len $n) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $n)) }}{{ fail (printf "availability.priorityClassName %q must be empty or a DNS-1123 subdomain (lower-case letters, digits, '-' and '.', at most 253 characters)" $n) }}{{ end -}}
+{{- $n -}}
+{{- end -}}
+{{- end -}}

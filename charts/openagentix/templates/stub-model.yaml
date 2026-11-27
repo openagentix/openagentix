@@ -17,6 +17,7 @@ spec:
   ports:
     - {name: http, port: 8080, targetPort: http}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" "stub-model" "app" "stub-model" "ns" $g.namespace) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,6 +40,9 @@ spec:
         openagentix.io/source-hash: {{ $s.sourceHash | quote }}
       {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

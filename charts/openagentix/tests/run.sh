@@ -294,7 +294,7 @@ inns() { count "$1" ".metadata.namespace==\"$KNS\" and ($2)"; }
 KB='.[]|select(.kind=="Deployment" and .metadata.name=="kb")'
 KC="$KB|.spec.template.spec.containers[0]"
 KE="$KC|.env[]"
-eq "knowledge block renders into its own namespace"    "$(q "$D" '[.[]|select(.metadata.namespace=="openagentix-knowledge")|.kind]|sort|join(",")')" Deployment,Deployment,NetworkPolicy,NetworkPolicy,NetworkPolicy,PersistentVolumeClaim,Service,Service,Service,StatefulSet
+eq "knowledge block renders into its own namespace"    "$(q "$D" '[.[]|select(.metadata.namespace=="openagentix-knowledge")|.kind]|sort|join(",")')" Deployment,Deployment,NetworkPolicy,NetworkPolicy,NetworkPolicy,PersistentVolumeClaim,PodDisruptionBudget,PodDisruptionBudget,PodDisruptionBudget,Service,Service,Service,StatefulSet
 eq "kb Deployment, kb image"                           "$(q "$D" "$KC|.image")" openagentix/kb:dev
 eq "kb uses the postgres store"                        "$(q "$D" "$KE|select(.name==\"KB_STORE\")|.value")" postgres
 eq "kb database URL comes from a Secret"               "$(q "$D" "$KE|select(.name==\"KB_DATABASE_URL\")|.valueFrom.secretKeyRef|.name+\"/\"+.key")" kb-database/KB_DATABASE_URL
@@ -768,7 +768,7 @@ eq "default render has no delivery MCPServerEntry"     "$(count "$D" '.kind=="MC
 DA=$(docs -f "$NV")
 NP='.[]|select(.kind=="Deployment" and .metadata.name=="notify")'
 NC="$NP|.spec.template.spec.containers[0]"
-eq "enabled: kinds in the notify namespace"            "$(q "$DA" '[.[]|select(.metadata.namespace=="openagentix-notify")|.kind]|sort|join(",")')" Deployment,NetworkPolicy,NetworkPolicy,Service
+eq "enabled: kinds in the notify namespace"            "$(q "$DA" '[.[]|select(.metadata.namespace=="openagentix-notify")|.kind]|sort|join(",")')" Deployment,NetworkPolicy,NetworkPolicy,PodDisruptionBudget,Service
 eq "enabled: one MCPServerEntry and one auth config"   "$(count "$DA" '(.kind=="MCPServerEntry" or .kind=="MCPExternalAuthConfig") and (.metadata.name|startswith("delivery"))')" 2
 eq "entry lives in mcp-tools, in the vMCP group"       "$(q "$DA" '.[]|select(.kind=="MCPServerEntry" and .metadata.name=="delivery")|.metadata.namespace+" "+.spec.groupRef.name')" "mcp-tools tools"
 eq "entry points at the notify /mcp endpoint"          "$(q "$DA" '.[]|select(.kind=="MCPServerEntry" and .metadata.name=="delivery")|.spec.remoteUrl')" http://notify.openagentix-notify.svc.cluster.local:8080/mcp
@@ -828,16 +828,10 @@ D3=$(docs -f "$NV" --set mcp.enabled=false)
 eq "mcp.enabled=false: no entry, and the agent gets no notify tools" "$(count "$D3" '.kind=="MCPServerEntry"')+$(q "$D3" "$AT|.spec.systemPrompt|test(\"delivery_\")")" "0+false"
 echo "# notify: hygiene"
 eq "no Secret objects, no data/stringData anywhere"    "$(count "$DA" '.kind=="Secret" or has("data") or has("stringData")')" 0
-eq "no chat id, URL or token looking value is rendered in the notify namespace" "$(q "$DA" '[.[]|select(.metadata.namespace=="openagentix-notify")|tojson|select(test("api\\.telegram|chatId|chat_id|[0-9]{8,}"))]|length')" 0
+eq "no chat id, URL or token looking value is rendered in the notify namespace" "$(q "$DA" '[.[]|select(.metadata.namespace=="openagentix-notify")|tojson|select(test("api\\.telegram|chatId|chat_id|[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"))]|length')" 0
 H0=$(helm template openagentix "$CHART" -n openagentix-system 2>&1 | shasum -a 256)
 H1=$(helm template openagentix "$CHART" -n openagentix-system --set notify.enabled=false 2>&1 | shasum -a 256)
 eq "notify.enabled=false is byte-identical to the default render" "$H1" "$H0"
-if [ -n "${OA_BASELINE_RENDER:-}" ]; then   # set to the output of `helm template openagentix <chart at the previous commit> -n openagentix-system`
-  # ADR 0023 option F: the default render now has the AgentgatewayParameters object and the Gateway's infrastructure block. Take those two
-  # out of the default render and the rest must equal the baseline (a render of the chart before this change) document by document.
-  BASE_DOCS=$(yq -c 'select(.!=null)' "$OA_BASELINE_RENDER" | jq -s .)
-  eq "default render equals the baseline render apart from the two ADR 0023 additions (OA_BASELINE_RENDER)" "$(jq -c "$STRIP" <<<"$(docs)" | shasum -a 256)" "$(jq -c . <<<"$BASE_DOCS" | shasum -a 256)"
-fi
 E=$(render_err -f "$NV" --set notify.tokens[0].env=lower-case)
 eq "an invalid token env var name fails the render"    "$([ -n "$E" ] && echo failed || echo rendered)" failed
 E=$(render_err -f "$NV" --set notify.destinations.existingSecret.name=)
@@ -1263,7 +1257,7 @@ rm -f "$GX"
 eq "audit.userId must be hash or raw"                  "$([ -n "$(render_err "${GON[@]}" --set governance.a2a.audit.userId=plain)" ] && echo failed || echo rendered)" failed
 eq "the gate needs kagent.enabled"                     "$([ -n "$(render_err "${GON[@]}" --set kagent.enabled=false)" ] && echo failed || echo rendered)" failed
 eq "an invalid gate block is not checked while it is off" "$([ -z "$(render_err --set governance.a2a.audit.userId=plain)" ] && echo rendered || echo failed)" rendered
-eq "the gate alone (no channels, no schedules) renders" "$(q "$(docs --set governance.a2a.enabled=true)" '[.[]|select(.metadata.name|tostring|test("a2a"))|.kind]|sort|join(",")')" ClusterRoleBinding,ConfigMap,Deployment,NetworkPolicy,Service,ServiceAccount
+eq "the gate alone (no channels, no schedules) renders" "$(q "$(docs --set governance.a2a.enabled=true)" '[.[]|select(.metadata.name|tostring|test("a2a"))|.kind]|sort|join(",")')" ClusterRoleBinding,ConfigMap,Deployment,NetworkPolicy,PodDisruptionBudget,Service,ServiceAccount
 eq "stray secret-looking values are never rendered with the gate on" "$(q "$(docs "${GON[@]}" --set bridge.token=SENTINEL-GATE-123 --set governance.a2a.apiKey=SENTINEL-GATE-123)" 'tostring|contains("SENTINEL-GATE-123")')" false
 
 echo "# profiles and egress (ADR 0006, round 2): everything is off by default"
@@ -2041,7 +2035,7 @@ D=$(docs)
 eq "no stub-model Deployment by default"               "$(count "$D" '.metadata.name=="stub-model"')" 0
 D=$(docs --set gateway.stubModel.enabled=true)
 SM='.metadata.name=="stub-model"'
-eq "stub-model: Deployment, Service, NetworkPolicy"    "$(count "$D" "$SM")" 3
+eq "stub-model: Deployment, Service, NetworkPolicy, PodDisruptionBudget"    "$(count "$D" "$SM")" 4
 eq "stub-model lives in the gateway namespace"         "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.metadata.namespace')" agentgateway-system
 eq "stub-model image"                                  "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec.containers[0].image')" openagentix/stub-model:dev
 eq "stub-model runs non-root, read-only, no caps"      "$(q "$D" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.spec|[.securityContext.runAsNonRoot,.containers[0].securityContext.readOnlyRootFilesystem,.containers[0].securityContext.allowPrivilegeEscalation,.containers[0].securityContext.capabilities.drop[0],.automountServiceAccountToken]|join(",")')" "true,true,false,ALL,false"
@@ -2282,6 +2276,59 @@ probe_check "quick start" -f "$RC/quickstart/values.yaml"
 probe_check "minimal" -f "$RC/quickstart/minimal-values.yaml"
 probe_check "bring your own agent" -f "$RC/quickstart/byo-values.yaml"
 probe_check "full demo" "${RCDEMO[@]}" $GKAPI
+
+echo "# PodDisruptionBudgets (ADR 0024, issue #198): one for every Deployment and StatefulSet"
+# problems <docs-json> -> one line per fault: a workload without exactly one budget in its namespace that selects its pod template labels, or a
+# budget that selects no workload or more than one. Empty output means the invariant holds.
+PDB_PROBLEMS='[.[]|select(.kind=="Deployment" or .kind=="StatefulSet")] as $w|[.[]|select(.kind=="PodDisruptionBudget")] as $p
+  | def hits($x; $b): ($b.metadata.namespace==$x.metadata.namespace) and (($b.spec.selector.matchLabels // {})|to_entries|all(. as $e|$x.spec.template.metadata.labels[$e.key]==$e.value));
+  ([$w[]|. as $x|([$p[]|select(hits($x; .))]|length) as $n|select($n!=1)|"workload \($x.kind)/\($x.metadata.name) has \($n) budgets"],
+   [$p[]|. as $b|([$w[]|select(hits(.; $b))]|length) as $n|select($n!=1)|"budget \($b.metadata.name) selects \($n) workloads"])|.[]'
+pdb_check() {   # pdb_check <label> <helm args...>
+  local label=$1; shift
+  local rendered; rendered=$(docs "$@")
+  eq "$label: every workload has exactly one budget, every budget selects exactly one workload" "$(jq -r "$PDB_PROBLEMS" <<<"$rendered")" ""
+  eq "$label: workloads and budgets are equal in number, and not zero" "$(q "$rendered" '([.[]|select(.kind=="Deployment" or .kind=="StatefulSet")]|length) as $w|([.[]|select(.kind=="PodDisruptionBudget")]|length) as $b|"\($w>0) \($w==$b)"')" "true true"
+  eq "$label: every budget is policy/v1 with maxUnavailable 1, no minAvailable, unhealthyPodEvictionPolicy AlwaysAllow" "$(q "$rendered" '[.[]|select(.kind=="PodDisruptionBudget")|select(.apiVersion=="policy/v1" and .spec.maxUnavailable==1 and (.spec|has("minAvailable")|not) and .spec.unhealthyPodEvictionPolicy=="AlwaysAllow")|1]|length')" "$(q "$rendered" '[.[]|select(.kind=="PodDisruptionBudget")]|length')"
+  eq "$label: every budget's selector is exactly app, instance and part-of (no matchExpressions); app equals the workload's selector" "$(q "$rendered" '[.[]|select(.kind=="PodDisruptionBudget")|select((.spec.selector|keys)!=["matchLabels"] or ((.spec.selector.matchLabels|keys)!=["app","app.kubernetes.io/instance","app.kubernetes.io/part-of"]) or .spec.selector.matchLabels["app.kubernetes.io/instance"]!="openagentix" or .spec.selector.matchLabels["app.kubernetes.io/part-of"]!="openagentix")|.metadata.name]|join(",")')" ""
+  eq "$label: every budget is named like its workload, in its namespace, and its app label equals its selector app" "$(q "$rendered" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet")] as $w|[.[]|select(.kind=="PodDisruptionBudget")|. as $b|select(([$w[]|select(.metadata.name==$b.metadata.name and .metadata.namespace==$b.metadata.namespace and .spec.selector.matchLabels.app==$b.spec.selector.matchLabels.app and $b.metadata.labels.app==.spec.selector.matchLabels.app)]|length)!=1)|.metadata.name]|join(",")')" ""
+  eq "$label: every pod template carries app, instance and part-of" "$(q "$rendered" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet")|select(.spec.template.metadata.labels|(has("app") and has("app.kubernetes.io/instance") and has("app.kubernetes.io/part-of"))|not)|.metadata.name]|join(",")')" ""
+  eq "$label: no workload selector changed shape (still the single app label)" "$(q "$rendered" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet")|select((.spec.selector.matchLabels|keys)!=["app"] or (.spec.selector|has("matchExpressions")))|.metadata.name]|join(",")')" ""
+}
+pdb_check "defaults"
+pdb_check "quick start" -f "$RC/quickstart/values.yaml"
+pdb_check "minimal" -f "$RC/quickstart/values.yaml" -f "$RC/quickstart/minimal-values.yaml"
+pdb_check "full demo" "${RCDEMO[@]}" $GKAPI
+pdb_check "openshift" "${RCDEMO[@]}" $GKAPI --set platform=openshift
+DP=$(docs)
+eq "defaults: the five budgets of telegram-bridge, kb, kb-postgres, kb-embeddings and memory-embeddings" "$(q "$DP" '[.[]|select(.kind=="PodDisruptionBudget")|.metadata.name]|sort|join(" ")')" "kb kb-embeddings kb-postgres memory-embeddings telegram-bridge"
+DF=$(docs "${RCDEMO[@]}" $GKAPI)
+eq "full demo: all twelve workloads have a budget (11 Deployments and the kb-postgres StatefulSet)" "$(q "$DF" '[.[]|select(.kind=="PodDisruptionBudget")|.metadata.name]|sort|join(" ")')" "a2a-gate jaeger kb kb-embeddings kb-postgres memory-embeddings notify openagentix-console openagentix-control-plane stub-model telegram-bridge victoria-metrics"
+eq "full demo: a budget lives in the namespace of its workload (observability, knowledge, gateway)" "$(q "$DF" '[.[]|select(.kind=="PodDisruptionBudget" and (.metadata.name|IN("jaeger","victoria-metrics","kb","a2a-gate")))|.metadata.name+"@"+.metadata.namespace]|sort|join(" ")')" "a2a-gate@openagentix-gateway jaeger@openagentix-observability kb@openagentix-knowledge victoria-metrics@openagentix-observability"
+echo "# PodDisruptionBudgets: another release name, and the switch"
+DR=$(helm template other "$CHART" -n openagentix-system "${RCDEMO[@]}" $GKAPI 2>/dev/null | yq -c 'select(.!=null)' | jq -s .)
+eq "release name 'other': budgets select instance=other, and still match their workloads" "$(q "$DR" '[.[]|select(.kind=="PodDisruptionBudget")|.spec.selector.matchLabels["app.kubernetes.io/instance"]]|unique|join(",")')+$(jq -r "$PDB_PROBLEMS" <<<"$DR")" "other+"
+DO=$(docs --set availability.podDisruptionBudgets.enabled=false)
+eq "enabled=false renders no budget"                   "$(count "$DO" '.kind=="PodDisruptionBudget"')" 0
+DOF=$(docs "${RCDEMO[@]}" $GKAPI --set availability.podDisruptionBudgets.enabled=false)
+eq "enabled=false renders no budget (full demo)"       "$(count "$DOF" '.kind=="PodDisruptionBudget"')" 0
+eq "the default render minus its budgets equals the render with the switch off" "$(jq -c '[.[]|select(.kind!="PodDisruptionBudget")]' <<<"$DP" | shasum -a 256)" "$(jq -c . <<<"$DO" | shasum -a 256)"
+if [ -n "${OA_BASELINE_RENDER:-}" ]; then   # set to the output of `helm template openagentix <chart before ADR 0024> -n openagentix-system`
+  eq "enabled=false: byte-identical to the baseline render (OA_BASELINE_RENDER)" "$(helm template openagentix "$CHART" -n openagentix-system --set availability.podDisruptionBudgets.enabled=false | shasum -a 256)" "$(shasum -a 256 < "$OA_BASELINE_RENDER")"
+  eq "default render minus its budgets equals the baseline render document by document (OA_BASELINE_RENDER)" "$(jq -c '[.[]|select(.kind!="PodDisruptionBudget")]' <<<"$DP" | shasum -a 256)" "$(yq -c 'select(.!=null)' "$OA_BASELINE_RENDER" | jq -s -c . | shasum -a 256)"
+fi
+echo "# availability.priorityClassName (ADR 0024)"
+eq "empty (the default) renders no priorityClassName anywhere" "$(q "$DF" '[.[]|select(tojson|test("priorityClassName"))]|length')" 0
+eq "empty is byte-identical to the default render" "$(helm template openagentix "$CHART" -n openagentix-system --set-string availability.priorityClassName= | shasum -a 256)" "$(helm template openagentix "$CHART" -n openagentix-system | shasum -a 256)"
+DPC=$(docs "${RCDEMO[@]}" $GKAPI --set availability.priorityClassName=platform-high)
+eq "platform-high is set on every Deployment and StatefulSet pod template" "$(q "$DPC" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet")|select(.spec.template.spec.priorityClassName!="platform-high")|.metadata.name]|join(",")')" ""
+eq "platform-high: the workloads are not zero" "$(q "$DPC" '[.[]|select(.kind=="Deployment" or .kind=="StatefulSet")]|length>0')" true
+eq "platform-high is set on no CronJob and no other kind" "$(q "$DPC" '[.[]|select(.kind!="Deployment" and .kind!="StatefulSet")|select(tojson|test("priorityClassName"))|.kind]|join(",")')" ""
+eq "a CronJob exists in the full demo (the check above is not vacuous)" "$(q "$DPC" '[.[]|select(.kind=="CronJob")]|length>0')" true
+for BADPC in 'Platform_High' '-lead' 'a..b' "$(printf 'a%.0s' $(seq 1 254))"; do
+  E=$(render_err --set-string "availability.priorityClassName=$BADPC")
+  eq "priorityClassName '$(printf '%s' "$BADPC" | cut -c1-20)' fails the render and names the value" "$(printf '%s' "$E" | /usr/bin/grep -c 'availability.priorityClassName')" 1
+done
 
 echo
 echo "passed=$PASS failed=$FAIL"

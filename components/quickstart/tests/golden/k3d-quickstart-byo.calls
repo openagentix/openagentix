@@ -14,6 +14,10 @@ helm status agent-kourier -n agent-kourier
 helm upgrade --install openagentix charts/openagentix -n openagentix-system --create-namespace -f components/quickstart/values.yaml -f components/quickstart/byo-values.yaml --set-string governance.a2a.image.tag=dev-HASH --set-string gateway.stubModel.image.tag=dev-HASH --set-string controlPlane.image.tag=dev-HASH --set-string console.image.tag=dev-HASH --set-string gateway.stubModel.sourceHash=HASH --set-string governance.a2a.sourceHash=HASH --set-string controlPlane.sourceHash=HASH --set-json controlPlane.apiServerCIDRs=["10.0.0.1/32"] --set-string console.sourceHash=HASH --set-json console.apiServerCIDRs=["10.0.0.1/32"] --wait --timeout 5m
 k3d cluster list -o json
 k3d image import openagentix/a2a-gate:dev-HASH openagentix/stub-model:dev-HASH openagentix/control-plane:dev-HASH openagentix/console:dev-HASH registry.local/oa/echo-a2a:dev-HASH --cluster openagentix
+kubectl --context k3d-openagentix get pdb -n agentgateway-system -o json
+kubectl --context k3d-openagentix get pdb -n openagentix-gateway -o json
+kubectl --context k3d-openagentix get pdb -n openagentix-observability -o json
+kubectl --context k3d-openagentix get pdb -n openagentix-system -o json
 kubectl --context=k3d-openagentix get --raw /.well-known/openid-configuration
 kubectl --context=k3d-openagentix get pods -n kube-system -l component=kube-apiserver -o json
 kubectl annotate agentgatewaymodel.agentgateway.dev quickstart-model -n agentgateway-system meta.helm.sh/release-name=openagentix meta.helm.sh/release-namespace=openagentix-system --overwrite
