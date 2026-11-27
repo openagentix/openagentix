@@ -99,7 +99,7 @@ const (
 func (c *Client) sendChunk(ctx context.Context, chatID int64, chunk string) error {
 	for attempt := 0; ; attempt++ {
 		var out json.RawMessage
-		err := c.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": chunk}, &out, orDefault(c.SendTimeout, 15*time.Second))
+		err := c.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": chunk, "link_preview_options": map[string]any{"is_disabled": true}}, &out, orDefault(c.SendTimeout, 15*time.Second))
 		var apiErr *APIError
 		if err == nil || attempt >= maxRetries || !errors.As(err, &apiErr) || apiErr.Status != 429 {
 			return err

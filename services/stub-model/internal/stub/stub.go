@@ -49,14 +49,18 @@ type request struct {
 	Tools    []tool    `json:"tools"`
 }
 
-// New returns the HTTP handler.
-func New() http.Handler {
+// New returns the HTTP handler with the two built-in behaviours only.
+func New() http.Handler { return NewWithScenarios(nil) }
+
+// NewWithScenarios returns the HTTP handler. A scenario that matches the conversation is used first; with a nil or
+// empty set, or when none matches, the built-in behaviour answers exactly as New does.
+func NewWithScenarios(set *Set) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"object": "list", "data": []any{map[string]any{"id": "quickstart-stub", "object": "model", "owned_by": "openagentix-stub"}}})
 	})
-	mux.HandleFunc("POST /v1/chat/completions", chat)
+	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) { chat(w, r, set) })
 	return mux
 }
 
@@ -66,7 +70,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_, _ = w.Write(b)
 }
 
-func chat(w http.ResponseWriter, r *http.Request) {
+func chat(w http.ResponseWriter, r *http.Request, set *Set) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
 		http.Error(w, `{"error":{"message":"request body too large or unreadable"}}`, http.StatusBadRequest)
@@ -80,7 +84,10 @@ func chat(w http.ResponseWriter, r *http.Request) {
 	if req.Model == "" {
 		req.Model = "quickstart-stub"
 	}
-	text, call := decide(req)
+	text, call, handled := set.decide(req)
+	if !handled {
+		text, call = decide(req)
+	}
 	prompt := 0
 	for _, m := range req.Messages {
 		prompt += len(text0(m.Content)) / 4
@@ -102,14 +109,21 @@ func chat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type toolCall struct{ name, args string }
+type toolCall struct{ name, args, id string }
 
 func (c *toolCall) json(index int, withIndex bool) map[string]any {
-	m := map[string]any{"id": "call_stub_1", "type": "function", "function": map[string]any{"name": c.name, "arguments": c.args}}
+	m := map[string]any{"id": c.callID(), "type": "function", "function": map[string]any{"name": c.name, "arguments": c.args}}
 	if withIndex {
 		m["index"] = index
 	}
 	return m
+}
+
+func (c *toolCall) callID() string {
+	if c.id != "" {
+		return c.id
+	}
+	return "call_stub_1"
 }
 
 func stream(w http.ResponseWriter, model, text string, call *toolCall) {
@@ -191,7 +205,7 @@ func decide(req request) (string, *toolCall) {
 	switch {
 	case strings.Contains(low, "vulnerab") || strings.Contains(low, "cve"):
 		if t := find(req.Tools, "query_vulnerability"); t != nil {
-			return "", &toolCall{t.Function.Name, argsFor(t, prompt)}
+			return "", &toolCall{name: t.Function.Name, args: argsFor(t, prompt)}
 		}
 	case strings.Contains(low, "fetch") || reURL.MatchString(prompt):
 		// Asked on purpose even when the agent's profile does not offer it: the platform decides what is allowed.
@@ -204,7 +218,7 @@ func decide(req request) (string, *toolCall) {
 			name = t.Function.Name
 		}
 		b, _ := json.Marshal(map[string]string{"url": url})
-		return "", &toolCall{name, string(b)}
+		return "", &toolCall{name: name, args: string(b)}
 	}
 	return label + "I am a scripted stand-in for a language model, so I cannot really answer. Try: \"Look up known vulnerabilities of lodash 4.17.20 (npm)\" and I will call a tool for it." + footer, nil
 }

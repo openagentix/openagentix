@@ -52,8 +52,14 @@ refused() {
 
 SA="system:serviceaccount:openagentix-system:openagentix-control-plane"
 AS=(--as="$SA")
-NODE_IMAGE=()
-[ -z "${KIND_NODE_IMAGE:-}" ] || NODE_IMAGE=(--image "$KIND_NODE_IMAGE")
+# The node image is pinned to the one the installer uses (hack/kind-config.yaml), not to kind's own default, so the API server is the same on every
+# machine. ADR 0024: the objects of the chart need Kubernetes 1.30 or newer (unhealthyPodEvictionPolicy, matchLabelKeys, the preStop sleep), so
+# a KIND_NODE_IMAGE older than 1.30 is refused.
+KIND_NODE_IMAGE=${KIND_NODE_IMAGE:-$(sed -n 's/^ *image: *//p' "$ROOT/hack/kind-config.yaml" | head -1)}
+[ -n "$KIND_NODE_IMAGE" ] || { echo "ERROR: no node image in hack/kind-config.yaml and KIND_NODE_IMAGE is not set" >&2; exit 2; }
+NODE_MINOR=$(printf '%s' "$KIND_NODE_IMAGE" | sed -n 's/.*:v1\.\([0-9][0-9]*\)\..*/\1/p')
+if [ -n "$NODE_MINOR" ] && [ "$NODE_MINOR" -lt 30 ]; then echo "ERROR: KIND_NODE_IMAGE=$KIND_NODE_IMAGE is older than Kubernetes 1.30, which ADR 0024 needs" >&2; exit 2; fi
+NODE_IMAGE=(--image "$KIND_NODE_IMAGE")
 
 echo "# cluster $CLUSTER (kubeconfig $KUBECONFIG)"
 kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s ${NODE_IMAGE[@]+"${NODE_IMAGE[@]}"} >/dev/null
@@ -454,6 +460,30 @@ if curl -fsSL --retry 3 -o "$GW_DIR/standard-install.yaml" "https://github.com/k
 else
   bad "the Gateway API and agentgateway CRDs could be fetched (needs network: github.com and cr.agentgateway.dev)" "fetch failed; the Service type objects were not checked on an API server"
 fi
+
+# ---- PodDisruptionBudgets and the availability fields (ADR 0024, issue #198): a real API server, server-side dry run ----
+echo "# PodDisruptionBudgets of the full demo, and the gate and console Deployments (server-side dry run)"
+FULL=(template openagentix charts/openagentix -n openagentix-system)
+for f in components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml \
+         components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml \
+         components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml; do FULL+=(-f "$f"); done
+FULL+=(--set gateway.stubModel.enabled=true --api-versions agentkourier.dev/v1alpha1 --set availability.priorityClassName=system-cluster-critical)
+helm "${FULL[@]}" | yq -c 'select(.!=null)' > "$TMP/full.jsonl"
+for n in $(jq -r 'select(.kind=="PodDisruptionBudget" or .kind=="Deployment" or .kind=="StatefulSet")|.metadata.namespace' "$TMP/full.jsonl" | sort -u); do
+  kubectl get namespace "$n" >/dev/null 2>&1 || kubectl create namespace "$n" >/dev/null
+done
+jq -c 'select(.kind=="PodDisruptionBudget")' "$TMP/full.jsonl" > "$TMP/pdbs.jsonl"
+NPDB=$(wc -l < "$TMP/pdbs.jsonl" | tr -d ' ')
+[ "$NPDB" -ge 11 ] && ok "the full demo renders $NPDB budgets" || bad "the full demo renders at least 11 budgets" "got $NPDB"
+allowed "all $NPDB budgets are accepted (server-side dry run, strict validation)" bash -c "kubectl apply --server-side --dry-run=server --validate=strict -f - < '$TMP/pdbs.jsonl'"
+GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/pdbs.jsonl" 2>/dev/null | jq -s -r '[.[]|.items // [.]|.[]|select(.spec.unhealthyPodEvictionPolicy=="AlwaysAllow" and .spec.maxUnavailable==1)]|length')
+[ "$GOT" = "$NPDB" ] && ok "the API server keeps unhealthyPodEvictionPolicy: AlwaysAllow and maxUnavailable: 1 on every budget ($GOT)" || bad "unhealthyPodEvictionPolicy and maxUnavailable are kept on every budget" "got $GOT of $NPDB"
+for d in a2a-gate openagentix-console; do
+  jq -c --arg d "$d" 'select(.kind=="Deployment" and .metadata.name==$d)' "$TMP/full.jsonl" > "$TMP/dep-$d.json"
+  allowed "the $d Deployment is accepted (server-side dry run, strict validation, priorityClassName system-cluster-critical)" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/dep-$d.json"
+  GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/dep-$d.json" 2>/dev/null | jq -r '.spec.template.spec.priorityClassName // "pruned"')
+  [ "$GOT" = system-cluster-critical ] && ok "the API server keeps priorityClassName on $d ($GOT)" || bad "priorityClassName kept on $d" "got '$GOT'"
+done
 echo
 echo "apiserver-test: passed=$PASS failed=$FAIL"
 [ "$FAIL" = 0 ]

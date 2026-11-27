@@ -1,0 +1,12 @@
+# A kind cluster with one control plane and two workers, for hack/ci/drain-test.sh (ADR 0024, issue #198). The control plane keeps its
+# NoSchedule taint, so every platform pod runs on a worker. The node image is the one hack/kind-config.yaml uses.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: openagentix
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0
+  - role: worker
+    image: kindest/node:v1.37.0
+  - role: worker
+    image: kindest/node:v1.37.0

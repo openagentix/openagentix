@@ -44,6 +44,7 @@ data:
   # Who may call which agent, and which user ids each caller may assert. Not a secret: it names callers, never a credential.
   rules.json: {{ $rules | fromJson | toPrettyJson | toJson }}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" "a2a-gate" "app" "a2a-gate" "ns" $ns) }}
 # One replica: the gate is stateless, and the node is small. A restart drops the 30 s TokenReview cache and the audit hash salt.
 apiVersion: apps/v1
 kind: Deployment
@@ -70,6 +71,9 @@ spec:
         openagentix.io/source-hash: {{ $g.sourceHash | quote }}
         {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       serviceAccountName: a2a-gate
       automountServiceAccountToken: true   # its own token calls TokenReview
       terminationGracePeriodSeconds: 30

@@ -1,6 +1,7 @@
 {{- $_ := include "oa.bridgeMemoryCheck" . }}
 {{- if .Values.bridge.enabled }}
 {{- $b := .Values.bridge }}
+{{- include "oa.pdb" (dict "root" $ "name" "telegram-bridge" "app" "telegram-bridge" "ns" $b.namespace) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,6 +27,9 @@ spec:
         openagentix.io/source-hash: {{ $b.sourceHash | quote }}
       {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       {{- if include "oa.a2aGateOn" . }}
       serviceAccountName: telegram-bridge
       {{- end }}

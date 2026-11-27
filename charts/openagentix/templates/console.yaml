@@ -150,6 +150,7 @@ subjects:
   - {kind: ServiceAccount, name: {{ $sa }}, namespace: {{ $ns }}}
 {{- end }}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" $sa "app" "console" "ns" $ns) }}
 # One replica, hardened like the A2A gate and the control plane. The Secret of the token is created by install.sh (only when absent, never printed); until it
 # exists the pod waits in ContainerCreating.
 apiVersion: apps/v1
@@ -182,6 +183,9 @@ spec:
         openagentix.io/source-hash: {{ $c.sourceHash | quote }}
         {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       serviceAccountName: {{ $sa }}
       automountServiceAccountToken: true   # its own token talks to the API server
       terminationGracePeriodSeconds: 30

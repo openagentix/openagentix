@@ -35,6 +35,9 @@
 #                        your values must name it). hack/images.sh.
 #   IMAGE_PLATFORM=linux/amd64  CLUSTER_TYPE=remote only (the default there), or linux/arm64; one platform. On Apple silicon an amd64 build runs the
 #                        Go compiler under emulation and is slow; BUILDX_BUILDER (read by buildx) can name a remote amd64 builder.
+#   (PodDisruptionBudget check) Before helm upgrade, on every cluster type, hack/pdb-check.sh reads the budgets of the platform namespaces and stops with
+#                        exit 1 when a budget that this release does not own selects a pod of the chart (ADR 0024). The remote preflight switch does not skip it;;
+#                        availability.podDisruptionBudgets.enabled=false in your values does (no budgets of ours, nothing to clash with).
 #   SKIP_PREFLIGHT=1     with CLUSTER_TYPE=remote, do not run hack/preflight.sh first. It reads the cluster (Kubernetes 1.37 or newer, the certificates and
 #                        admission policy APIs, Gateway API CRD bundle, default StorageClass, nodes, Pod Security labels), prints PASS/WARN/FAIL with a fix
 #                        for each, changes nothing, and stops the install on a FAIL. You can run it alone: KUBE_CONTEXT=<context> hack/preflight.sh
@@ -216,6 +219,12 @@ if [ ${#problems[@]} -gt 0 ]; then
   printf '\nERROR: cannot start, required configuration is missing:\n' >&2
   for p in "${problems[@]}"; do printf '  - %s\n' "$p" >&2; done
   printf 'Nothing was changed.\n' >&2; exit 1
+fi
+# PodDisruptionBudgets (ADR 0024): a budget that this release does not own and that selects one of our pods would make that pod impossible to
+# evict. Read-only, on every cluster type, not skipped by the remote preflight switch; it is not run when availability.podDisruptionBudgets.enabled is false.
+# The cluster may not exist yet (a fresh kind or k3d install): then there is nothing to find.
+if [ "$CLUSTER_UP" = 1 ]; then
+  printf '%s\n' "$RENDERED" | KUBECTL=$K KUBE_CONTEXT=$CTX RELEASE=$RELEASE bash hack/pdb-check.sh || exit 1
 fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
@@ -806,6 +815,8 @@ if [ "${SKIP_SKILL:-0}" != 1 ] && jq -e 'select(.kind=="AgentTemplate")|.spec.sk
 fi
 
 # --- 6a. adopt hand-applied objects the chart now owns (label + annotations; nothing is deleted or recreated) ----
+# PodDisruptionBudgets are never adopted (ADR 0024): no earlier chart had them, so one that exists is someone else's, and Helm stops on a same-name budget
+# instead of overwriting it. hack/pdb-check.sh (above) already stopped the install for one that selects our pods.
 adopted=0
 while IFS=$'\t' read -r res name ns; do
   [ -n "$res" ] || continue
@@ -814,7 +825,7 @@ while IFS=$'\t' read -r res name ns; do
   $K label "$res" "$name" -n "$ns" app.kubernetes.io/managed-by=Helm --overwrite >/dev/null
   $K annotate "$res" "$name" -n "$ns" meta.helm.sh/release-name=$RELEASE meta.helm.sh/release-namespace="$RELEASE_NS" --overwrite >/dev/null
   echo "adopted $res/$name ($ns)"; adopted=$((adopted+1))
-done < <(jq -r 'select(.metadata.namespace!=null)|[((.kind|ascii_downcase)+(if (.apiVersion|contains("/")) then "."+(.apiVersion|split("/")[0]) else "" end)),.metadata.name,.metadata.namespace]|@tsv' <<<"$RENDERED")
+done < <(jq -r 'select(.metadata.namespace!=null and .kind!="PodDisruptionBudget")|[((.kind|ascii_downcase)+(if (.apiVersion|contains("/")) then "."+(.apiVersion|split("/")[0]) else "" end)),.metadata.name,.metadata.namespace]|@tsv' <<<"$RENDERED")
 # The one cluster-scoped object the chart keeps on uninstall: the CRD of the control plane (helm.sh/resource-policy: keep). A later install finds it
 # without Helm's ownership marks and would refuse it as foreign, so it is adopted like the namespaced objects above.
 if [ -n "$CP_DEP" ] && $K get crd agentdefinitions.openagentix.io >/dev/null 2>&1 \
