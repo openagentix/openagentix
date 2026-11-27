@@ -197,7 +197,7 @@ check "the four Secrets are still there" "[ -f '$LOG/secret_a' ] && [ -f '$LOG/s
 
 echo "# the guard: what the installer sets is ignored, nothing else (a narrow list)"
 reset
-jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"a"},"knowledge":{"kb":{"image":{"tag":"dev-1"}}},"notify":{"image":{"tag":"dev-2"}}}' "$TMP/expected.json" > "$LOG/release.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"a"},"knowledge":{"kb":{"image":{"tag":"dev-1"}}},"notify":{"image":{"tag":"dev-2"}},"governance":{"a2a":{"image":{"tag":"dev-3"}}},"scheduling":{"image":{"tag":"dev-4"}}}' "$TMP/expected.json" > "$LOG/release.json"
 run; rc=$?
 check "the image tag of a platform component and the API server addresses (anchored paths) are ignored: the release is updated" "[ $rc = 0 ]" "exit $rc: $(cat "$LOG/out" | head -5)"
 reset
@@ -237,7 +237,7 @@ check "beside a full demo: a key of the release that your VALUES_FILE list lacks
 # a second --beside-full-demo run: the release is the composed values (your list plus values-full-demo.yaml) and what the installer sets
 jq -s 'reduce .[] as $x ({}; . * $x)' <(yq . "$TMP/vf/one.yaml") <(yq . "$TMP/vf/two.yaml") > "$TMP/yours.json"
 bash "$ROOT/hack/compose-values.sh" "$TMP/yours.json" "$HERE/values-full-demo.yaml" 2>/dev/null | yq . > "$TMP/beside-composed.json"
-jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"notify":{"image":{"tag":"dev-2"}}}' "$TMP/beside-composed.json" > "$TMP/beside-release.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"notify":{"image":{"tag":"dev-2"}},"governance":{"a2a":{"image":{"tag":"dev-3"}}},"scheduling":{"image":{"tag":"dev-4"}}}' "$TMP/beside-composed.json" > "$TMP/beside-release.json"
 reset; cp "$TMP/beside-release.json" "$LOG/release.json"
 VALUES_FILE="$TMP/vf/one.yaml $TMP/vf/two.yaml" run --beside-full-demo; rc=$?
 check "a SECOND --beside-full-demo run is not refused: the bank's own entries from the first run are in the composed values it compares with" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out" | head -6)"

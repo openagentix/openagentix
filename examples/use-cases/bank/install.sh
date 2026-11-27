@@ -141,7 +141,7 @@ release_extras() { # release_extras <json file of the values this script will ha
     # the dispute desk agent). A scenario.json of another use case, and any other file, stay in the list.
     (if ((.gateway.stubModel.scenarios.files["scenario.json"] // "") | test("fernvale dispute desk agent"; "i")) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]scenario[.]json$" else "^$" end) as $mine
     | ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
-    | map(select((test("^[.](bridge|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine)) | not))
+    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine)) | not))
     | .[]'
 }
 
