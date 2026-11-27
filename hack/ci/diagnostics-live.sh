@@ -77,7 +77,11 @@ CFG_SH=$(jq -r '.items[]|select(any(.metadata.ownerReferences[]?;.name=="tools")
 N=0; for t in $TOOLS; do grep -q "$t" <<<"$CFG_RCA" && N=$((N + 1)); done
 check "the configuration of the dedicated vMCP names all eight tools" "$N" 8
 check "the configuration of the dedicated vMCP hides every other tool (defaultToolVisibility deny)" "$(grep -c 'defaultToolVisibility: deny\|default_tool_visibility: deny\|"defaultToolVisibility": "deny"' <<<"$CFG_RCA" | awk '{print ($1>0)?"yes":"no"}')" yes
-check "the configuration of the shared vMCP names none of them" "$(for t in $TOOLS; do grep -c "$t" <<<"$CFG_SH"; done | paste -sd+ - | bc)" 0
+# the shared vMCP's configuration does hold the eight names, in its Cedar forbid policies (the second layer): those are cut out first, what is left
+# (the aggregation: groups, backends, filters) must not name a tool
+CFG_SH_NOFORBID=$(sed -E 's/forbid\([^;]*;//g' <<<"$CFG_SH")
+check "the shared vMCP's configuration names a tool only in its forbid policies" "$(for t in $TOOLS; do grep -c "$t" <<<"$CFG_SH_NOFORBID"; done | paste -sd+ - | bc)" 0
+check "the shared vMCP's configuration has the eight forbid policies (the second layer)" "$(grep -o 'forbid(' <<<"$CFG_SH" | wc -l | tr -d ' ')" 8
 check "the shared vMCP's configuration was found (the control is not empty)" "$([ -n "$CFG_SH" ] && echo yes || echo no)" yes
 echo "       kagent says: $($K get remotemcpserver -n "$KNS" "toolhive-vmcp-$PROFILE" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null)"
 
