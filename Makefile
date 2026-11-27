@@ -83,6 +83,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh
 	examples/use-cases/bank/tests/install-test.sh
+	examples/use-cases/bank/tests/live-guard-test.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'
 

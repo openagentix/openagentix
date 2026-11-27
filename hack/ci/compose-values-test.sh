@@ -367,13 +367,13 @@ echo "# the quick start plus the bank values (the use case this helper is for)"
 run "$QS" "$BANK"
 check "they compose: exit 0, no refusal" "[ $RC = 0 ] && ! grep -qi 'refused' '$T/err'" "$(cat "$T/err")"
 check "the caller the bank file restates (quickstart-ask) is kept once" "out_has '[.governance.a2a.callers[] | select(.name==\"quickstart-ask\")] | length == 1' && out_has '.governance.a2a.callers | map(.name) == [\"quickstart-ask\",\"disputes-desk\"]'"
-check "the quick start's own entries stay (the osv server, the lookup profile, the quickstart-model) and the agents list holds dispute-agent" "out_has '(.mcp.servers|map(.name)) == [\"osv\"] and (.mcp.profiles|map(.name)) == [\"lookup\"] and (.gateway.models|map(.name)) == [\"quickstart-model\"] and (.agents|map(.name)) == [\"dispute-agent\"]'"
+check "the quick start's own entries stay (the osv server, the lookup profile, the quickstart-model) and the agents list holds dispute-agent" "out_has '(.mcp.servers|map(.name)) == [\"osv\"] and (.mcp.profiles|map(.name)) == [\"lookup\",\"disputes\"] and (.mcp.endpoints|map(.name)) == [\"records\"] and (.gateway.models|map(.name)) == [\"quickstart-model\"] and (.agents|map(.name)) == [\"dispute-agent\"]'"
 check "the change of knowledge.enabled and of the empty agents list is in the report" "grep -q 'knowledge.enabled' '$T/err' && grep -q 'dispute-agent' '$T/err'"
 check "no security key is changed by it" "! grep -qi 'security key changed' '$T/err'"
 if command -v helm >/dev/null; then
   cp "$T/out" "$T/composed.yaml"
-  helm template t "$ROOT/charts/openagentix" -f "$QS" -f "$BANK" > "$T/direct.render" 2> "$T/direct.err"; DR=$?
-  helm template t "$ROOT/charts/openagentix" -f "$T/composed.yaml" > "$T/composed.render" 2> "$T/composed.err"; CR=$?
+  helm template t "$ROOT/charts/openagentix" -f "$QS" -f "$BANK" --set-json 'controlPlane.apiServerCIDRs=["172.18.0.0/24"]' > "$T/direct.render" 2> "$T/direct.err"; DR=$?
+  helm template t "$ROOT/charts/openagentix" -f "$T/composed.yaml" --set-json 'controlPlane.apiServerCIDRs=["172.18.0.0/24"]' > "$T/composed.render" 2> "$T/composed.err"; CR=$?
   check "the composed file renders with helm template" "[ $CR = 0 ] && [ -s '$T/composed.render' ]" "$(cat "$T/composed.err")"
   check "the render of the composed file equals the render of the two files given to helm (the same behaviour)" "[ $DR = 0 ] && cmp -s '$T/direct.render' '$T/composed.render'"
 else

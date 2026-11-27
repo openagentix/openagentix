@@ -15,10 +15,11 @@ yq --version 2>&1 | grep -q '^yq 3\.' || { echo "ERROR: yq must be the Python wr
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 QS="$ROOT/components/quickstart/values.yaml"
+APIS=(--set-json 'controlPlane.apiServerCIDRs=["172.18.0.0/24"]')   # install.sh finds the real ones; an endpoint needs them for the egress policy
 VALS="$HERE/values.yaml"
 helm template t "$CHART" > "$T/default.yaml" 2> "$T/default.err"; DEF_RC=$?
 helm template t "$CHART" -f "$QS" > "$T/qs.yaml" 2> "$T/qs.err"; QS_RC=$?
-helm template t "$CHART" -f "$QS" -f "$VALS" > "$T/bank.yaml" 2> "$T/bank.err"; BANK_RC=$?
+helm template t "$CHART" -f "$QS" -f "$VALS" "${APIS[@]}" > "$T/bank.yaml" 2> "$T/bank.err"; BANK_RC=$?
 ids() { yq -r '[.kind, (.metadata.namespace // "-"), .metadata.name] | join(" ")' "$1" | sort; }
 doc() { yq -c "select(.kind==\"$2\" and .metadata.name==\"$3\")" "$1"; }
 
@@ -30,10 +31,12 @@ ids "$T/qs.yaml" > "$T/qs.ids"; ids "$T/bank.yaml" > "$T/bank.ids"
 comm -13 "$T/qs.ids" "$T/bank.ids" > "$T/added.ids"; comm -23 "$T/qs.ids" "$T/bank.ids" > "$T/removed.ids"
 check "the values remove no object of the quick start" "[ ! -s '$T/removed.ids' ]" "$(cat "$T/removed.ids")"
 for want in "Agent kagent dispute-agent" "AgentTemplate kagent dispute-agent-template" "ModelConfig kagent gateway-dispute-agent" "Harness kagent dispute-agent-harness" \
-            "CronJob openagentix-schedules deadline-sweep" "Deployment openagentix-knowledge kb" "StatefulSet openagentix-knowledge kb-postgres" "MCPServerEntry mcp-tools knowledge"; do
+            "CronJob openagentix-schedules deadline-sweep" "Deployment openagentix-knowledge kb" "StatefulSet openagentix-knowledge kb-postgres" "MCPServerEntry mcp-tools knowledge" \
+            "MCPGroup mcp-tools disputes" "MCPServerEntry mcp-tools records" "MCPServerEntry mcp-tools knowledge-disputes" "VirtualMCPServer mcp-tools tools-disputes" \
+            "NetworkPolicy fernvale-records openagentix-endpoint-records" "NetworkPolicy mcp-tools openagentix-vmcp-egress-disputes"; do
   check "adds: $want" "grep -qx '$want' '$T/added.ids'" "added: $(tr '\n' ';' < "$T/added.ids")"
 done
-check "adds nothing of the records service (it is not a chart object)" "! grep -qi 'records\|fernvale' '$T/added.ids'"
+check "adds of the records service only its endpoint objects: no Deployment, Service, Secret or Namespace (the service is not a chart object)" "! grep -E '^(Deployment|Service|Secret|Namespace|ServiceAccount|StatefulSet) .*(records|fernvale)' '$T/added.ids'"
 check "adds no EgressPolicy: the agent reaches the gateway and its tool path only" "! grep -q '^EgressPolicy' '$T/added.ids'"
 check "adds no Secret" "! grep -q '^Secret' '$T/added.ids'"
 
@@ -52,15 +55,15 @@ TOOLS=$(jq -r '.spec.tools[].mcp.tools[]' "$T/tpl.json")
 check "the prompt names the desk agent (the scenario marker)" "printf %s \"\$PROMPT\" | grep -qi 'You are the Fernvale dispute desk agent'"
 check "the prompt says a credit is never claimed as posted" "printf %s \"\$PROMPT\" | grep -q 'Never say or write that a credit was'"
 check "the prompt treats customer text as untrusted and names the review phrase" "printf %s \"\$PROMPT\" | grep -q 'untrusted_' && printf %s \"\$PROMPT\" | grep -q 'needs human review'"
-check "the knowledge base prompt is added" "printf %s \"\$PROMPT\" | grep -q 'knowledge_kb_search'"
-check "the agent has the three graph tools" "printf '%s\n' \$TOOLS | grep -qx knowledge_kb_graph_search && printf '%s\n' \$TOOLS | grep -qx knowledge_kb_graph_paths && printf '%s\n' \$TOOLS | grep -qx knowledge_kb_graph_entity"
+check "the knowledge base prompt is added" "printf %s \"\$PROMPT\" | grep -q 'knowledge-disputes_kb_search'"
+check "the agent has the three graph tools" "printf '%s\n' \$TOOLS | grep -qx knowledge-disputes_kb_graph_search && printf '%s\n' \$TOOLS | grep -qx knowledge-disputes_kb_graph_paths && printf '%s\n' \$TOOLS | grep -qx knowledge-disputes_kb_graph_entity"
 check "no tool of the agent could move money or send a letter" "! printf '%s\n' \$TOOLS | grep -Eq 'approve|reject|post|credit|send|execute|release|decide|ledger|fetch'"
 check "no execute_tool_script (code mode) and no notify tool" "! printf '%s\n' \$TOOLS | grep -Eq 'execute_tool_script|notify'"
 # every records tool the agent lists exists in the service (tools.go registers them)
 grep -o 'register(d, srv, "[a-z_]*"' "$ROOT/examples/use-cases/records/internal/bank/tools.go" | sed 's/.*"\(.*\)"/\1/' | sort > "$T/service.tools"
 printf '%s\n' $TOOLS | grep '^records_' | sed 's/^records_//' | sort > "$T/agent.tools"
 check "every records tool of the agent is a tool of the service" "[ -s '$T/agent.tools' ] && [ -z \"\$(comm -13 '$T/service.tools' '$T/agent.tools')\" ]" "unknown: $(comm -13 "$T/service.tools" "$T/agent.tools" | tr '\n' ' ')"
-check "the agent uses the shared tool server (no profile is possible yet)" "jq -e '.spec.tools[0].mcp.server.name == \"toolhive-vmcp\"' '$T/tpl.json' >/dev/null"
+check "the agent is on the tool profile disputes: its only tool server is the one of that profile, not the shared one" "jq -e '[.spec.tools[].mcp.server.name] == [\"toolhive-vmcp-disputes\"]' '$T/tpl.json' >/dev/null"
 check "the agent has no memory and no skill" "! jq -e '.spec.skills' '$T/tpl.json' >/dev/null 2>&1 && ! printf %s \"\$PROMPT\" | grep -qi 'memory'"
 check "the agent's model is the quick start model (the gateway counts its tokens)" "jq -e '.spec.modelConfig.name == \"gateway-dispute-agent\"' '$T/tpl.json' >/dev/null && doc '$T/bank.yaml' ModelConfig gateway-dispute-agent | jq -e '.spec.model == \"quickstart-model\"' >/dev/null"
 
@@ -77,15 +80,36 @@ check "the quick start caller is kept" "printf %s \"\$RULES\" | jq -e '.callers[
 check "the sweep has its own caller rule for the dispute agent" "printf %s \"\$RULES\" | jq -e '.callers[] | select(.name==\"schedule-deadline-sweep\") | .agents==[\"kagent/dispute-agent\"]' >/dev/null"
 check "no rule for a branch kiosk: the gate answers 403" "! printf %s \"\$RULES\" | grep -qi kiosk"
 
-echo "# a tool profile for the records tools is not possible with the existing chart (pinned, so the ADR turns this red on purpose)"
-printf 'mcp:\n  profiles:\n    - name: disputes\n      tools:\n        records: [get_case]\n' > "$T/profile.yaml"
-helm template t "$CHART" -f "$QS" -f "$VALS" -f "$T/profile.yaml" > /dev/null 2> "$T/profile.err"; PRC=$?
-check "a profile that names the backend records is refused by the chart" "[ $PRC != 0 ] && grep -q 'workload \"records\" is not a backend of the tool group' '$T/profile.err'" "rc=$PRC: $(cat "$T/profile.err")"
+echo "# the records endpoint, the profile and the profile's tool server (ADR 0026, slice 5)"
+doc "$T/bank.yaml" MCPServerEntry records > "$T/ep.json"
+check "the endpoint entry is in the group disputes, points at the records Service, and takes its header from the Secret records-mcp-auth" "jq -e '.spec.groupRef.name == \"disputes\" and .spec.remoteUrl == \"http://records.fernvale-records.svc.cluster.local:8080/mcp\" and .spec.headerForward.addHeadersFromSecret == [{\"headerName\":\"Authorization\",\"valueSecretRef\":{\"name\":\"records-mcp-auth\",\"key\":\"value\"}}]' '$T/ep.json' >/dev/null" "$(cat "$T/ep.json")"
+check "the values hold no header value, token or password (only the name of a Secret)" "! grep -Eqi 'bearer [a-z0-9]|password|token_sha256' '$VALS'"
+check "no bearerToken and no plaintext header anywhere in the render" "! grep -Eqi 'type: *bearerToken|addPlaintextHeaders|compositeTools|compositeToolRefs' '$T/bank.yaml'"
+doc "$T/bank.yaml" VirtualMCPServer tools-disputes > "$T/vm.json"
+check "the profile's tool server is on the group disputes, has no code mode, and keeps audit request and response data off" "jq -e '.spec.groupRef.name == \"disputes\" and (.spec.config | has(\"codeMode\") | not)' '$T/vm.json' >/dev/null && ! jq -e '.. | objects | select(.includeRequestData == true or .includeResponseData == true)' '$T/vm.json' >/dev/null 2>&1"
+yq -c '.mcp.profiles[] | select(.name=="disputes") | .tools.records | sort' "$VALS" > "$T/profile.records"
+yq -r '.mcp.profiles[] | select(.name=="disputes") | .tools | to_entries[] | .key' "$VALS" | sort | tr '\n' ' ' > "$T/profile.keys"
+check "the profile lists the records tools and the knowledge tools, and nothing else" "[ \"\$(cat '$T/profile.keys')\" = 'knowledge records ' ]"
+check "the profile's records tools are exactly the records tools of the agent (nothing more is offered, nothing is missing)" "[ \"\$(cat '$T/profile.records')\" = \"\$(printf '%s\n' \$TOOLS | grep '^records_' | sed 's/^records_//' | jq -R . | jq -sc 'sort')\" ]"
+check "every records tool the profile lists is a tool of the service" "[ -z \"\$(jq -r '.[]' '$T/profile.records' | sort | comm -13 '$T/service.tools' -)\" ]"
+check "the tool server filter of the profile names records, knowledge-disputes and nothing else" "jq -e '[.spec.config.aggregation.tools[].workload] | sort == [\"knowledge-disputes\",\"records\"]' '$T/vm.json' >/dev/null"
+check "the shared tool server never names records or the header Secret" "! doc '$T/bank.yaml' VirtualMCPServer tools | jq -r 'del(.spec.incomingAuth.authzConfig) | tojson' | grep -Eq 'records|disputes'"
+check "the shared tool server forbids each records tool the profile lists (a second layer)" "[ \"\$(doc '$T/bank.yaml' VirtualMCPServer tools | jq '[.spec.incomingAuth.authzConfig.inline.policies[] | select(startswith(\"forbid\") and contains(\"Tool::\\\"records_\"))] | length')\" = 15 ]"
+check "no other agent and no profile of the quick start uses the group disputes" "[ \"\$(yq -r 'select(.kind==\"VirtualMCPServer\") | select(.spec.groupRef.name==\"disputes\") | .metadata.name' '$T/bank.yaml')\" = tools-disputes ]"
+check "the endpoint's ingress policy admits the tool server of the group, on the pod port 8080, for the pods app=records" "doc '$T/bank.yaml' NetworkPolicy openagentix-endpoint-records | jq -e '.metadata.namespace == \"fernvale-records\" and .spec.podSelector.matchLabels == {\"app\":\"records\"} and ([.spec.ingress[].ports[].port] == [8080])' >/dev/null"
+check "the profile is not opened to definitions or container agents (no allowedProfiles entry, no containerAgents list)" "! yq -e '.controlPlane.policy.allowedProfiles[]? | select(. == \"disputes\")' '$VALS' >/dev/null 2>&1 && ! yq -e '.controlPlane.containerAgents.toolProfiles' '$VALS' >/dev/null 2>&1"
+check "the restated profile lookup is exactly the quick start's" "[ \"\$(yq -c '.mcp.profiles[] | select(.name==\"lookup\")' '$QS')\" = \"\$(yq -c '.mcp.profiles[] | select(.name==\"lookup\")' '$VALS')\" ]"
+check "the quick start agent still reaches only its profile lookup" "! yq -r 'select(.kind==\"AgentTemplate\" and .metadata.name!=\"dispute-agent-template\") | .spec.tools[].mcp.server.name' '$T/bank.yaml' | grep -q disputes"
+printf 'mcp:\n  profiles:\n    - name: disputes\n      codeMode: true\n      tools:\n        records: [get_case]\n' > "$T/codemode.yaml"
+helm template t "$CHART" -f "$QS" -f "$VALS" "${APIS[@]}" -f "$T/codemode.yaml" > /dev/null 2> "$T/codemode.err"; CMRC=$?
+check "code mode on the profile is refused by the chart (the profile lists write tools)" "[ $CMRC != 0 ] && grep -qi 'code mode' '$T/codemode.err'" "rc=$CMRC: $(head -3 "$T/codemode.err")"
+helm template t "$CHART" -f "$QS" -f "$VALS" > /dev/null 2> "$T/noapi.err"; NARC=$?
+check "without the API server addresses the render is refused (install.sh finds them)" "[ $NARC != 0 ] && grep -q 'apiServerCIDRs' '$T/noapi.err'"
 
 echo "# the records manifests"
 M="$HERE/manifests/records.yaml"
 DEP=$(yq -c 'select(.kind=="Deployment")' "$M")
-check "one Deployment, one Service, one NetworkPolicy, one ServiceAccount, one Namespace and no Secret" "[ \"\$(yq -r .kind '$M' | sort | tr '\n' ' ')\" = 'Deployment Namespace NetworkPolicy Service ServiceAccount ' ]"
+check "one Deployment, one Service, one NetworkPolicy, one ServiceAccount, one Namespace and no Secret (the two Secrets are made by install.sh)" "[ \"\$(yq -r .kind '$M' | sort | tr '\n' ' ')\" = 'Deployment Namespace NetworkPolicy Service ServiceAccount ' ]"
 check "everything is in the namespace fernvale-records" "[ \"\$(yq -r 'select(.kind!=\"Namespace\") | .metadata.namespace' '$M' | sort -u)\" = fernvale-records ]"
 check "the namespace enforces the restricted pod security level" "yq -e 'select(.kind==\"Namespace\") | .metadata.labels[\"pod-security.kubernetes.io/enforce\"] == \"restricted\"' '$M' >/dev/null"
 check "non-root, no privilege escalation, read-only root, all capabilities dropped, default seccomp" "printf %s '$DEP' | jq -e '.spec.template.spec.securityContext.runAsNonRoot == true and .spec.template.spec.securityContext.seccompProfile.type == \"RuntimeDefault\" and (.spec.template.spec.containers[0].securityContext | .allowPrivilegeEscalation == false and .readOnlyRootFilesystem == true and .capabilities.drop == [\"ALL\"])' >/dev/null"
@@ -97,11 +121,12 @@ check "only the MCP port is declared" "printf %s '$DEP' | jq -e '[.spec.template
 check "the approvers come from a Secret volume, mounted read only; the data is an emptyDir with a size limit" "printf %s '$DEP' | jq -e '(.spec.template.spec.volumes | map(select(.secret.secretName==\"records-approvers\")) | length == 1) and (.spec.template.spec.volumes | map(select(.name==\"data\" and .emptyDir.sizeLimit)) | length == 1)' >/dev/null"
 check "one replica with the Recreate strategy (one SQLite file)" "printf %s '$DEP' | jq -e '.spec.replicas == 1 and .spec.strategy.type == \"Recreate\"' >/dev/null"
 NP=$(yq -c 'select(.kind=="NetworkPolicy")' "$M")
-check "the NetworkPolicy admits only the vMCP pods of the tool group on 8080 and allows no egress" "printf %s '$NP' | jq -e '(.spec.policyTypes | sort) == [\"Egress\",\"Ingress\"] and .spec.egress == [] and (.spec.ingress | length == 1) and .spec.ingress[0].ports[0].port == 8080 and .spec.ingress[0].from[0].podSelector.matchLabels[\"app\"] == \"virtualmcpserver\"' >/dev/null"
+check "the base NetworkPolicy denies all ingress and all egress for the pod (the chart's policy openagentix-endpoint-records adds the one allowed path, so there is none before the platform is installed)" "printf %s '$NP' | jq -e '(.spec.policyTypes | sort) == [\"Egress\",\"Ingress\"] and .spec.egress == [] and .spec.ingress == [] and .spec.podSelector.matchLabels == {\"app\":\"records\"}' >/dev/null"
+check "the MCP credential is read from a mounted file: RECORDS_MCP_TOKEN_FILE, a read-only Secret volume records-mcp-expected, no insecure flag" "printf %s '$DEP' | jq -e '(.spec.template.spec.containers[0].env | map(select(.name==\"RECORDS_MCP_TOKEN_FILE\")) | length == 1) and (.spec.template.spec.volumes | map(select(.secret.secretName==\"records-mcp-expected\")) | length == 1) and ([.spec.template.spec.containers[0].volumeMounts[] | select(.name==\"mcp-credential\") | .readOnly] == [true])' >/dev/null && ! grep -q 'RECORDS_MCP_INSECURE_NO_AUTH' '$M'"
+check "the env value for the credential does not hold a value (only a path)" "printf %s '$DEP' | jq -r '.spec.template.spec.containers[0].env[] | select(.name==\"RECORDS_MCP_TOKEN_FILE\") | .value' | grep -q '^/etc/records-mcp/'"
 check "the image is a placeholder that install.sh replaces" "grep -q 'image: IMAGE_PLACEHOLDER' '$M'"
-check "the manifests hold no token, password or hash" "! grep -Eqi 'token_sha256|password|[0-9a-f]{64}' '$M' '$HERE/manifests/tool-registration.yaml'"
-R="$HERE/manifests/tool-registration.yaml"
-check "the registration is an MCPServerEntry in the group tools of mcp-tools, with the explicit unauthenticated config" "yq -e 'select(.kind==\"MCPServerEntry\") | .spec.groupRef.name == \"tools\" and .metadata.namespace == \"mcp-tools\" and .spec.remoteUrl == \"http://records.fernvale-records.svc.cluster.local:8080/mcp\"' '$R' >/dev/null && yq -e 'select(.kind==\"MCPExternalAuthConfig\") | .spec.type == \"unauthenticated\"' '$R' >/dev/null"
+check "the manifests hold no token, password or hash" "! grep -Eqi 'token_sha256|password|[0-9a-f]{64}' '$M'"
+check "the hand-applied tool registration is gone: no file, and install.sh neither applies an MCPServerEntry nor patches anything" "[ ! -e '$HERE/manifests/tool-registration.yaml' ] && ! sed -e 's/ #.*//' -e '/^ *#/d' '$HERE/install.sh' | grep -Eq 'apply.*tool-registration|[a-z ]patch |create mcpserverentry'"
 
 echo "# the knowledge base seed"
 KB_DRY=$(KB_INGEST_DRY_RUN=1 "$ROOT/hack/kb-ingest.sh" "$HERE/seed/kb" fernvale-disputes 2>&1); KB_RC=$?
@@ -121,7 +146,7 @@ check "the graph holds the ring: five cases at one merchant on one device" "[ \"
 
 echo "# the scenario and the evaluation set"
 SC="$HERE/eval/scenario.json"
-check "the scenario file is JSON with five scenarios" "[ \"\$(jq '.scenarios | length' '$SC')\" = 5 ]"
+check "the scenario file is JSON with six scenarios" "[ \"\$(jq '.scenarios | length' '$SC')\" = 6 ]"
 SYSRE=$(jq -r '.scenarios[0].match.system' "$SC")
 check "every scenario matches the agent prompt of values.yaml (same marker)" "jq -r '.scenarios[].match.system' '$SC' | sort -u | wc -l | tr -d ' ' | grep -qx 1 && SYSRE='$SYSRE' PROMPT=\"\$PROMPT\" python3 -I -c 'import os,re,sys; sys.exit(0 if re.search(os.environ[\"SYSRE\"], os.environ[\"PROMPT\"]) else 1)'"
 jq -r '.scenarios[].steps[].tool' "$SC" | sort -u > "$T/scn.tools"
@@ -130,7 +155,7 @@ check "no scenario calls a tool that could move money or send a letter" "! grep 
 check "every scenario that asks for approval first sets a route and drafts a letter" "jq -e 'all(.scenarios[] | select(any(.steps[]; .tool==\"request_approval\")); ([.steps[].tool] | index(\"set_route\")) < ([.steps[].tool] | index(\"draft_letter\")) and ([.steps[].tool] | index(\"draft_letter\")) < ([.steps[].tool] | index(\"request_approval\")))' '$SC' >/dev/null"
 check "request_approval is always the last step" "jq -e 'all(.scenarios[] | select(any(.steps[]; .tool==\"request_approval\")); .steps[-1].tool==\"request_approval\")' '$SC' >/dev/null"
 check "the scenario file holds no URL, address, token or credential" "! grep -Eqi 'https?://|@|bearer|password|token' '$SC'"
-helm template t "$CHART" -f "$QS" -f "$VALS" --set-file 'gateway.stubModel.scenarios.files.scenario\.json'="$SC" > "$T/bank-scn.yaml" 2> "$T/bank-scn.err"; SCN_RC=$?
+helm template t "$CHART" -f "$QS" -f "$VALS" --set-file 'gateway.stubModel.scenarios.files.scenario\.json'="$SC" "${APIS[@]}" > "$T/bank-scn.yaml" 2> "$T/bank-scn.err"; SCN_RC=$?
 check "the scenario file is shipped through the chart contract (ADR 0026): quick start, bank values and --set-file render" "[ $SCN_RC = 0 ]" "$(cat "$T/bank-scn.err")"
 check "the chart ConfigMap stub-model-scenarios holds eval/scenario.json byte for byte" "[ \"\$(doc '$T/bank-scn.yaml' ConfigMap stub-model-scenarios | jq -j '.data[\"scenario.json\"]' | shasum -a 256 | cut -c1-64)\" = \"\$(cat '$SC' | shasum -a 256 | cut -c1-64)\" ]"
 check "the stub model Deployment reads the mounted directory and rolls on a change" "doc '$T/bank-scn.yaml' Deployment stub-model | jq -e '(.spec.template.spec.containers[0].env[0].value == \"/etc/stub-model/scenarios\") and (.spec.template.metadata.annotations | has(\"openagentix.io/scenarios-checksum\"))' >/dev/null"
@@ -149,17 +174,39 @@ echo "# the restated caller, the profile vMCP and the exposure limits"
 check "the restated quick start caller is the whole entry of the quick start values" "[ \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"quickstart-ask\")' '$QS')\" = \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"quickstart-ask\")' '$VALS')\" ]"
 bash "$ROOT/hack/compose-values.sh" "$QS" "$VALS" > "$T/composed.yaml" 2> "$T/composed.err"; COMP_RC=$?
 check "hack/compose-values.sh composes the quick start and values.yaml, with no refusal and the restated caller kept once" "[ $COMP_RC = 0 ] && yq -e '[.governance.a2a.callers[] | select(.name==\"quickstart-ask\")] | length == 1' '$T/composed.yaml' >/dev/null" "$(cat "$T/composed.err")"
-helm template t "$CHART" -f "$T/composed.yaml" > "$T/composed.render" 2> "$T/composed.render.err"; COMP_R=$?
+helm template t "$CHART" -f "$T/composed.yaml" "${APIS[@]}" > "$T/composed.render" 2> "$T/composed.render.err"; COMP_R=$?
 check "the composed file renders byte for byte like the quick start plus values.yaml (the same behaviour)" "[ $COMP_R = 0 ] && cmp -s '$T/bank.yaml' '$T/composed.render'" "$(head -3 "$T/composed.render.err")"
-check "the README shows the compose command" "grep -q 'hack/compose-values.sh -o /tmp/bank-values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml' '$HERE/README.md'"
+check "the README says install.sh composes the quick start and values.yaml with hack/compose-values.sh" "grep -q 'hack/compose-values.sh' '$HERE/README.md' && grep -q 'components/quickstart/values.yaml' '$HERE/README.md'"
 check "the quick start has exactly the one caller that values.yaml restates (so nothing else is lost)" "[ \"\$(yq -r '.governance.a2a.callers | length' '$QS')\" = 1 ]"
-check "the quick start renders the profile vMCP tools-lookup that the records policy admits" "doc '$T/qs.yaml' VirtualMCPServer tools-lookup | jq -e '.metadata.name == \"tools-lookup\"' >/dev/null && yq -e 'select(.kind==\"NetworkPolicy\") | .spec.ingress[0].from[0].podSelector.matchExpressions[0].values | index(\"tools-lookup\") != null' '$M' >/dev/null"
-check "the quick start shared vMCP has code mode off (install.sh refuses it on)" "! doc '$T/qs.yaml' VirtualMCPServer tools | jq -e '.spec.config.codeMode' >/dev/null 2>&1"
-check "values.yaml and the README say quick start only" "grep -qi 'quick start only' '$HERE/values.yaml' && grep -qi 'quick start only' '$HERE/README.md'"
-check "values.yaml no longer tells anyone to install beside the full demo" "! grep -qi 'beside the full demo' '$HERE/values.yaml' '$HERE/README.md'"
-check "the README makes no claim about kindnet enforcement" "! grep -qi 'kindnet' '$HERE/README.md' '$HERE/manifests/records.yaml'"
-check "the README has the live proof checklist, all unchecked" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[ \\]' '$HERE/README.md')\" -ge 10 ] && ! grep -q '^- \\[x\\]' '$HERE/README.md'"
+check "values.yaml and the README name the two ways to install: on its own cluster, and --beside-full-demo" "grep -q -- '--beside-full-demo' '$HERE/values.yaml' && grep -q -- '--beside-full-demo' '$HERE/README.md'"
+check "the README says the egress policy is not shown to be enforced on kindnet unless the live run shows it, and what the live run did show" "grep -qi 'kindnet' '$HERE/README.md'"
+check "the README has the live proof checklist, and the first real-model run list stays unchecked" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[ \\]' '$HERE/README.md')\" -ge 8 ] && grep -q 'first real-model run' '$HERE/README.md'"
 check "ctl.sh asks as an analyst, not as the approver" "grep -q 'ASK_USER=desk:analyst-1' '$HERE/ctl.sh' && ! grep -q 'ASK_USER=desk:lead-1' '$HERE/ctl.sh'"
+
+echo "# beside the full demo (values-full-demo.yaml, composed after the values of the install you have)"
+FD="$HERE/values-full-demo.yaml"
+DEMO_FILES=(components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml)
+DEMO_ARGS=(); : > "$T/demo.json"
+for f in "${DEMO_FILES[@]}"; do DEMO_ARGS+=(-f "$ROOT/$f"); yq . "$ROOT/$f" >> "$T/demo.json"; done
+jq -s 'reduce .[] as $x ({}; . * $x)' "$T/demo.json" > "$T/demo-merged.yaml"
+API_V=(--api-versions agentkourier.dev/v1alpha1)
+helm template t "$CHART" "${API_V[@]}" "${DEMO_ARGS[@]}" > "$T/demo.yaml" 2> "$T/demo.err"; DEMO_RC=$?
+helm template t "$CHART" "${API_V[@]}" -f "$T/demo-merged.yaml" > "$T/demo-m.yaml" 2> "$T/demo-m.err"
+check "the full demo files render, and the merged copy of them renders the same (what install.sh --beside-full-demo checks first)" "[ $DEMO_RC = 0 ] && cmp -s '$T/demo.yaml' '$T/demo-m.yaml'" "$(head -3 "$T/demo.err")"
+bash "$ROOT/hack/compose-values.sh" -o "$T/beside.yaml" "$T/demo-merged.yaml" "$FD" 2> "$T/beside.err"; BE_RC=$?
+check "hack/compose-values.sh composes values-full-demo.yaml after the full demo values with no refusal" "[ $BE_RC = 0 ]" "$(head -5 "$T/beside.err")"
+helm template t "$CHART" "${API_V[@]}" -f "$T/beside.yaml" "${APIS[@]}" > "$T/beside-r.yaml" 2> "$T/beside-r.err"; BR_RC=$?
+check "the composed values render" "[ $BR_RC = 0 ]" "$(head -3 "$T/beside-r.err")"
+ids "$T/demo.yaml" > "$T/demo.ids"; ids "$T/beside-r.yaml" > "$T/beside.ids"
+check "the composed values remove no object of the full demo" "[ -z \"\$(comm -23 '$T/demo.ids' '$T/beside.ids')\" ]" "$(comm -23 "$T/demo.ids" "$T/beside.ids" | head -5 | tr '\n' ';')"
+for want in "Agent kagent dispute-agent" "MCPGroup mcp-tools disputes" "MCPServerEntry mcp-tools records" "VirtualMCPServer mcp-tools tools-disputes" "NetworkPolicy fernvale-records openagentix-endpoint-records" "CronJob openagentix-schedules deadline-sweep"; do
+  check "beside the full demo it adds: $want" "comm -13 '$T/demo.ids' '$T/beside.ids' | grep -qx '$want'" "added: $(comm -13 "$T/demo.ids" "$T/beside.ids" | head -30 | tr '\n' ';')"
+done
+check "beside the full demo the agent uses the full demo's model name claude-haiku" "doc '$T/beside-r.yaml' ModelConfig gateway-dispute-agent | jq -e '.spec.model == \"claude-haiku\"' >/dev/null"
+check "values-full-demo.yaml holds the same agent prompt as values.yaml (a test compares them)" "[ \"\$(yq -r '.agents[] | select(.name==\"dispute-agent\") | .systemPrompt' '$FD')\" = \"\$(yq -r '.agents[] | select(.name==\"dispute-agent\") | .systemPrompt' '$VALS')\" ]"
+check "values-full-demo.yaml holds the same endpoint, profile and caller as values.yaml" "[ \"\$(yq -c '[.mcp.endpoints, (.mcp.profiles[]|select(.name==\"disputes\")), (.governance.a2a.callers[]|select(.name==\"disputes-desk\"))]' '$FD')\" = \"\$(yq -c '[.mcp.endpoints, (.mcp.profiles[]|select(.name==\"disputes\")), (.governance.a2a.callers[]|select(.name==\"disputes-desk\"))]' '$VALS')\" ]"
+check "values-full-demo.yaml sets no security key: no allow list, no network policy switch, no code mode, no capture" "! yq -e '.controlPlane or .networkPolicy or .mcp.virtual or .observability or .gateway' '$FD' >/dev/null 2>&1"
+check "beside the full demo the shared tool server (with its code mode) never names records" "! doc '$T/beside-r.yaml' VirtualMCPServer tools | jq -r 'del(.spec.incomingAuth.authzConfig) | tojson' | grep -Eq 'records|disputes'"
 
 echo "# plain English and no personal data"
 # shellcheck disable=SC2034

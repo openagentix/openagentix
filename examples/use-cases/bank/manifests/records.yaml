@@ -2,8 +2,12 @@
 # not by the chart. The synthetic data is seeded at start into an emptyDir, so deleting the pod resets it.
 #
 # - MCP on 8080 (the port the tool gateway reaches). REST on 127.0.0.1:8081 inside the pod: only `kubectl port-forward` reaches it.
+# - The MCP port needs a credential: the whole Authorization header value, read per request from the file
+#   /etc/records-mcp/value (Secret `records-mcp-expected`, key `value`). The tool gateway sends the same value from the Secret
+#   `records-mcp-auth` in the tools namespace (mcp.endpoints, ADR 0026). Without the file the service does not start.
 # - The approvers Secret `records-approvers` (key approvers.json, SHA-256 hashes of approver tokens, never the tokens) is created by
 #   install.sh from generated values. It is not in this file. Without it the pod cannot start, so nobody can approve by accident.
+# - Both Secrets and this namespace come BEFORE the platform values: the chart renders a NetworkPolicy into this namespace.
 # - IMAGE_PLACEHOLDER is replaced by install.sh with the image it built.
 apiVersion: v1
 kind: Namespace
@@ -55,6 +59,7 @@ spec:
             - {name: RECORDS_DOMAIN, value: bank}
             - {name: RECORDS_DATA_DIR, value: /data}
             - {name: RECORDS_APPROVERS_FILE, value: /etc/records/approvers.json}
+            - {name: RECORDS_MCP_TOKEN_FILE, value: /etc/records-mcp/value}
             # RECORDS_REST_ADDR is not set: REST stays on 127.0.0.1:8081 (the default).
           securityContext:
             allowPrivilegeEscalation: false
@@ -78,6 +83,7 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /data}
             - {name: approvers, mountPath: /etc/records, readOnly: true}
+            - {name: mcp-credential, mountPath: /etc/records-mcp, readOnly: true}
       volumes:
         - name: data
           emptyDir: {sizeLimit: 64Mi}
@@ -87,6 +93,12 @@ spec:
             defaultMode: 0440
             items:
               - {key: approvers.json, path: approvers.json}
+        - name: mcp-credential
+          secret:
+            secretName: records-mcp-expected
+            defaultMode: 0440
+            items:
+              - {key: value, path: value}
 ---
 apiVersion: v1
 kind: Service
@@ -99,11 +111,13 @@ spec:
   ports:
     - {name: mcp, port: 8080, targetPort: mcp}
 ---
-# MCP has no login of its own, so only the vMCP pods of the tool group may reach it. Every vMCP of the group connects to every backend
-# (discovery, health), whichever tools it offers, so the policy admits the shared vMCP `tools` and the profile vMCP of the quick start,
-# `tools-lookup`, as the chart's kb policy admits every profile vMCP. A tool profile of your own needs its name added here.
-# This policy limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. Whether yours does must be tested
-# (README, live proof checklist). Kubelet probes come from the node and are not affected. The pod may call nothing: no egress rule, DNS included.
+# The base policy: the records pod accepts no connection and makes none (no egress rule, DNS included). Policies add up, so the one
+# path in is the policy `openagentix-endpoint-records` that the platform chart renders into this namespace (mcp.endpoints, ADR 0026): it
+# admits the tool server of the group `disputes` on 8080 and nothing else. Until the platform is installed there is no path in at all.
+# This limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. The live job (hack/ci/bank-live.sh) saw ingress
+# enforced on kind in CI, and in-cluster egress enforced for the tool server labels in one run; egress to the internet is not shown (README).
+# The header credential is the second check. Kubelet probes come from the node and are
+# not affected.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -114,12 +128,5 @@ spec:
   podSelector:
     matchLabels: {app: records}
   policyTypes: [Ingress, Egress]
-  ingress:
-    - ports: [{protocol: TCP, port: 8080}]
-      from:
-        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: mcp-tools}}
-          podSelector:
-            matchLabels: {app: virtualmcpserver}
-            matchExpressions:
-              - {key: toolhive-name, operator: In, values: [tools, tools-lookup]}
+  ingress: []
   egress: []

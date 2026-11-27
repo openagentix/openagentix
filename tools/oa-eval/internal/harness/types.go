@@ -54,6 +54,7 @@ type Expect struct {
 	Requires      []ApprovalRule `yaml:"requires"`     // a tool may be called only after another one was
 	StateChecks   []StateCheck   `yaml:"state_checks"` // reads of the system of record after the run
 	MaxMillis     int            `yaml:"max_ms"`
+	MaxToolCalls  *int           `yaml:"max_tool_calls"` // at most this many tool calls (audit events) in the run; needs an audit source
 }
 
 // ApprovalRule: Tool must not be called unless After was called earlier in the same run (After is the approval tool).
