@@ -14,6 +14,7 @@ spec:
       image: localhost:5000/ax-assistant-api@sha256:0687d77e1bf056742449587ec8e45613fda1dd059a0aa2f34cf489016c76a517
       imagePullPolicy: IfNotPresent
       command: [sleep, "86400"]
+      securityContext: {allowPrivilegeEscalation: false}
       resources:
         requests: {cpu: 10m, memory: 32Mi}
         limits: {cpu: 500m, memory: 128Mi}
