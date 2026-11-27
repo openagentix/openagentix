@@ -305,6 +305,7 @@ Needs the A2A gate (the only way to the MemoryService), the bridge, and the brid
 {{- range .Values.mcp.servers }}{{ $w = append $w .name }}{{ end -}}
 {{- if .Values.knowledge.enabled }}{{ $w = append $w .Values.knowledge.mcp.entryName }}{{ end -}}
 {{- if .Values.notify.enabled }}{{ $w = append $w .Values.notify.mcp.entryName }}{{ end -}}
+{{- if include "oa.diagOn" . }}{{ $w = append $w "cluster-read" }}{{ end -}}
 {{- $w | toJson -}}
 {{- end -}}
 
@@ -314,7 +315,7 @@ Argument: dict "root" <top-level context> "profile" <one mcp.profiles entry>. */
 {{- $root := .root -}}
 {{- $names := list -}}
 {{- range $w := (keys .profile.tools | sortAlpha) -}}
-{{- $pfx := replace "{workload}" $w $root.Values.mcp.virtual.prefixFormat -}}
+{{- $pfx := replace "{workload}" (include "oa.diagWorkload" (dict "root" $root "profile" $.profile "w" $w)) $root.Values.mcp.virtual.prefixFormat -}}
 {{- range $t := (index $.profile.tools $w) }}{{ $names = append $names (printf "%s%s" $pfx $t) }}{{ end -}}
 {{- end -}}
 {{- if .profile.codeMode }}{{ $names = append $names "execute_tool_script" }}{{ end -}}

@@ -2330,6 +2330,9 @@ for BADPC in 'Platform_High' '-lead' 'a..b' "$(printf 'a%.0s' $(seq 1 254))"; do
   eq "priorityClassName '$(printf '%s' "$BADPC" | cut -c1-20)' fails the render and names the value" "$(printf '%s' "$E" | /usr/bin/grep -c 'availability.priorityClassName')" 1
 done
 
+# shellcheck source=charts/openagentix/tests/diagnostics.sh
+. "$(dirname "$0")/diagnostics.sh"   # ADR 0025, slice 4: cluster-read
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

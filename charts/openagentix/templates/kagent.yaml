@@ -105,14 +105,16 @@ spec:
   description: {{ $a.description | quote }}
   {{- end }}
   modelConfig: {name: {{ include "oa.modelConfigName" $a }}}
+  {{- $prof := include "oa.agentProfile" (dict "root" $ "agent" $a) | fromJson }}
+  {{- /* on a diagnostics profile (ADR 0025) the knowledge and notify tools are the entries of the group `diagnostics` (knowledge-diagnostics_...) */}}
+  {{- $diagP := include "oa.diagProfile" (dict "root" $ "profile" $prof) }}
   {{- $kn := and $.Values.knowledge.enabled $.Values.mcp.enabled $a.knowledge }}
   {{- $nt := and $.Values.notify.enabled $.Values.mcp.enabled $a.notify $a.notify.enabled }}
   {{- $prompt := required (printf "agents[%s].systemPrompt is required" $a.name) $a.systemPrompt }}
-  {{- if $kn }}{{ $prompt = printf "%s\n%s" (trim $prompt) (include "oa.knowledgeAgentPrompt" $ | trim) }}{{ end }}
-  {{- if $nt }}{{ $prompt = printf "%s\n%s" (trim $prompt) (include "oa.notifyAgentPrompt" $ | trim) }}{{ end }}
+  {{- if $kn }}{{ $kp := include "oa.knowledgeAgentPrompt" $ | trim }}{{ if $diagP }}{{ $kp = include "oa.diagRename" (dict "root" $ "text" $kp) }}{{ end }}{{ $prompt = printf "%s\n%s" (trim $prompt) $kp }}{{ end }}
+  {{- if $nt }}{{ $np := include "oa.notifyAgentPrompt" $ | trim }}{{ if $diagP }}{{ $np = include "oa.diagRename" (dict "root" $ "text" $np) }}{{ end }}{{ $prompt = printf "%s\n%s" (trim $prompt) $np }}{{ end }}
   {{- if and $a.memory $a.memory.enabled }}{{ $prompt = printf "%s\n%s" (trim $prompt) (trim $.Values.memory.agentPrompt) }}{{ end }}
   systemPrompt: {{ $prompt | toJson }}
-  {{- $prof := include "oa.agentProfile" (dict "root" $ "agent" $a) | fromJson }}
   {{- $srv := $k.remoteMCPServer.name }}
   {{- if $prof }}{{ $srv = printf "%s-%s" $k.remoteMCPServer.name $prof.name }}{{ end }}
   {{- $entries := list }}
@@ -120,6 +122,7 @@ spec:
   {{- $extra := list }}
   {{- if $kn }}{{ $extra = concat $extra (include "oa.knowledgeTools" $ | fromJsonArray) }}{{ end }}
   {{- if $nt }}{{ $extra = concat $extra (include "oa.notifyTools" $ | fromJsonArray) }}{{ end }}
+  {{- if and $diagP $extra }}{{ $extra = include "oa.diagRename" (dict "root" $ "text" (toJson $extra)) | fromJsonArray }}{{ end }}
   {{- range $t := $a.tools }}
   {{- $names := $t.tools }}
   {{- if and $extra (not $merged) (not $t.server) }}{{ $names = concat $names $extra }}{{ $merged = true }}{{ end }}
