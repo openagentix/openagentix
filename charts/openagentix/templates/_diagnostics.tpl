@@ -27,23 +27,6 @@ the Telegram bridge since PR 234, and notify. A new path joins this list only wi
 {{/* The name of a backend as the profile's vMCP knows it. A diagnostics profile lives on the group `diagnostics`, which holds its own entry for every
 other backend it may list, named <entryName>-diagnostics (the shared group has the entries knowledge and delivery already). cluster-read keeps its name.
 Argument: dict "root" <top> "profile" <profile> "w" <backend name>. */}}
-{{- define "oa.diagWorkload" -}}
-{{- if and (include "oa.diagProfile" .) (ne .w "cluster-read") -}}{{ printf "%s-diagnostics" .w }}{{- else -}}{{ .w }}{{- end -}}
-{{- end -}}
-
-{{/* Renames the tool names of the knowledge base and notify in a text (a prompt, or a JSON list of tool names) to the entries of the group
-`diagnostics`. Argument: dict "root" <top> "text" <string>. */}}
-{{- define "oa.diagRename" -}}
-{{- $r := .root -}}
-{{- $t := .text -}}
-{{- $kp := replace "{workload}" $r.Values.knowledge.mcp.entryName $r.Values.mcp.virtual.prefixFormat -}}
-{{- $kn := replace "{workload}" (printf "%s-diagnostics" $r.Values.knowledge.mcp.entryName) $r.Values.mcp.virtual.prefixFormat -}}
-{{- $np := replace "{workload}" $r.Values.notify.mcp.entryName $r.Values.mcp.virtual.prefixFormat -}}
-{{- $nn := replace "{workload}" (printf "%s-diagnostics" $r.Values.notify.mcp.entryName) $r.Values.mcp.virtual.prefixFormat -}}
-{{- $t | replace (printf "%skb_" $kp) (printf "%skb_" $kn) | replace (printf "%snotify_" $np) (printf "%snotify_" $nn) -}}
-{{- end -}}
-
-{{/* Every namespace the chart itself uses or the platform runs in, plus the system ones: none of them may be a log namespace. JSON list, sorted, unique. */}}
 {{- define "oa.diagPlatformNamespaces" -}}
 {{- $v := .Values -}}
 {{- $cp := $v.controlPlane | default dict -}}

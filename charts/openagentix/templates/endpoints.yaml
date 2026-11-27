@@ -1,0 +1,209 @@
+{{- $_ := include "oa.epDefsCheck" . }}
+{{- if and (include "oa.epOn" .) .Values.mcp.enabled }}
+{{- /* ADR 0026, slice 2: MCP endpoints that already run, each in a tool group of its own, with a header credential from a Secret. The profile vMCPs that list an
+endpoint are rendered on that group by mcp.yaml; the shared vMCP never references the group. Nothing here renders while mcp.endpoints is empty. */}}
+{{- $m := .Values.mcp }}
+{{- $eps := include "oa.epRaw" . | fromJsonArray }}
+{{- $groups := list }}{{ range $e := $eps }}{{ $groups = append $groups $e.group }}{{ end }}
+{{- $groups = $groups | uniq | sortAlpha }}
+{{- $o := .Values.observability | default dict }}
+{{- range $g := $groups }}
+{{- $vm := include "oa.epGroupVmcps" (dict "root" $ "group" $g) | fromJsonArray }}
+---
+# The tool group "{{ $g }}" of mcp.endpoints (ADR 0026). The shared vMCP and the profiles on the shared group do not reference it, so they never hold the
+# header value as an environment value. A profile that lists an endpoint of the group is rendered on it (mcp.yaml).
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPGroup
+metadata:
+  name: {{ $g }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  description: {{ printf "Endpoints of mcp.endpoints in the group %s, and the platform backends a profile of the group lists" $g | quote }}
+{{- range $e := $eps }}
+{{- if eq $e.group $g }}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata:
+  name: {{ $e.name }}-noauth
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  type: unauthenticated
+---
+# The entry sends the header on every request, discovery and calls (headerForward shown on ToolHive 0.67.1; the auth type bearerToken drops the backend
+# silently and is never rendered). The Secret {{ $e.auth.header.secret.name }} is in {{ $m.namespace }} and holds the whole header value; the operator or the use
+# case installer creates it. The chart renders only this reference.
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata:
+  name: {{ $e.name }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+  annotations:
+    openagentix.io/endpoint: {{ $e.name }}
+spec:
+  groupRef: {name: {{ $g }}}
+  remoteUrl: {{ $e.url | quote }}
+  transport: {{ default "streamable-http" $e.transport }}
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: {{ $e.name }}-noauth}
+  headerForward:
+    addHeadersFromSecret:
+      - {headerName: {{ $e.auth.header.name | quote }}, valueSecretRef: {name: {{ $e.auth.header.secret.name | quote }}, key: {{ $e.auth.header.secret.key | quote }}}}
+{{- end }}
+{{- end }}
+{{- /* the platform backends that a profile of the group lists get one more entry in the group, named <entryName>-<group> (ADR 0026 A3) */}}
+{{- range $k := (include "oa.epMirrorKeys" (dict "root" $ "group" $g) | fromJsonArray) }}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata:
+  name: {{ $k }}-{{ $g }}-noauth
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  type: unauthenticated
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata:
+  name: {{ $k }}-{{ $g }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  groupRef: {name: {{ $g }}}
+  {{- if eq $k $.Values.knowledge.mcp.entryName }}
+  remoteUrl: {{ printf "http://kb.%s.svc.cluster.local:8080/mcp" $.Values.knowledge.namespace | quote }}
+  {{- else }}
+  remoteUrl: {{ printf "http://notify.%s.svc.cluster.local:8080/mcp" $.Values.notify.namespace | quote }}
+  {{- end }}
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: {{ $k }}-{{ $g }}-noauth}
+{{- end }}
+{{- if $vm }}
+---
+# Egress of the vMCPs of the group {{ $g }}: where the endpoint's name may lead is limited to the endpoint's own pods and the group's platform backends. DNS, the
+# identity provider's namespace (the actor keys), the API server (discovery, by controlPlane.apiServerCIDRs) and the telemetry endpoint when observability is on.
+# Nothing else. kindnet does not enforce egress to the internet; this is a second layer there and a boundary on Calico or Cilium.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openagentix-vmcp-egress-{{ $g }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: toolhive-name, operator: In, values: {{ toJson $vm }}}
+    matchLabels: {app: virtualmcpserver}
+  policyTypes: [Egress]
+  egress:
+    {{- if include "oa.openshift" $ }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-dns}}
+          podSelector: {matchLabels: {dns.operator.openshift.io/daemonset-dns: default}}
+      ports:
+        - {protocol: UDP, port: 5353}
+        - {protocol: TCP, port: 5353}
+    {{- else }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    {{- end }}
+    {{- range $e := $eps }}
+    {{- if eq $e.group $g }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ regexReplaceAll "^https?://[^./:]+[.]([^./:]+)[.]svc.*$" $e.url "${1}" }}}}
+          podSelector: {matchLabels: {{ toJson $e.ingress.podSelector }}}
+      ports:
+        - {protocol: TCP, port: {{ int $e.ingress.port }}}
+    {{- end }}
+    {{- end }}
+    {{- range $k := (include "oa.epMirrorKeys" (dict "root" $ "group" $g) | fromJsonArray) }}
+    {{- if eq $k $.Values.knowledge.mcp.entryName }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $.Values.knowledge.namespace }}}}
+          podSelector: {matchLabels: {app: kb}}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- else }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $.Values.notify.namespace }}}}
+          podSelector: {matchLabels: {app: notify}}
+      ports:
+        - {protocol: TCP, port: 8080}
+    {{- end }}
+    {{- end }}
+    # the identity provider's namespace: the vMCP fetches the keys that check the callers' tokens. The chart has no label for the provider's pods or
+    # its pod port, so the rule names the namespace
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $.Values.networkPolicy.substrate.namespace }}}}
+    - to:
+        {{- range $.Values.controlPlane.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports:
+        {{- range $.Values.controlPlane.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- if include "oa.obsOn" $ }}
+    {{- $ep := include "oa.obsEndpoint" $ }}
+    {{- $oport := regexFind ":[0-9]+" (regexReplaceAll "^https?://([^/]*).*$" $ep "${1}") | trimPrefix ":" }}
+    {{- if not $oport }}{{ $oport = ternary "4317" "4318" (eq $o.otlp.protocol "grpc") }}{{ end }}
+    {{- if and $o.bundled.enabled (not $o.otlp.endpoint) }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $o.namespace }}}}
+          podSelector: {matchLabels: {app: jaeger}}
+      ports:
+        - {protocol: TCP, port: {{ $oport }}}
+    {{- else if regexMatch "^https?://[^./:]+[.][^./:]+[.]svc" $ep }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ regexReplaceAll "^https?://[^./:]+[.]([^./:]+)[.]svc.*$" $ep "${1}" }}}}
+      ports:
+        - {protocol: TCP, port: {{ $oport }}}
+    {{- else }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports:
+        - {protocol: TCP, port: {{ $oport }}}
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- range $e := $eps }}
+{{- $vm := include "oa.epGroupVmcps" (dict "root" $ "group" $e.group) | fromJsonArray }}
+---
+# Ingress to the endpoint {{ $e.name }} (ADR 0026 A5): only the vMCP pods of its group, on the pod port. The chart renders this policy in a namespace it does not
+# own, and the namespace must exist before the install. Another policy in that namespace that admits more widens the access, and the chart cannot see it. The peer
+# labels can be copied by whoever may create pods in {{ $m.namespace }}; the header is the second check.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openagentix-endpoint-{{ $e.name }}
+  namespace: {{ regexReplaceAll "^https?://[^./:]+[.]([^./:]+)[.]svc.*$" $e.url "${1}" }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{ toJson $e.ingress.podSelector }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- if $vm }}
+    - ports: [{protocol: TCP, port: {{ int $e.ingress.port }}}]
+      from:
+        {{- range $v := $vm }}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $m.namespace }}}}
+          podSelector:
+            matchLabels: {app: virtualmcpserver, toolhive-name: {{ $v | quote }}}
+        {{- end }}
+    {{- else }} []
+    {{- end }}
+{{- end }}
+{{- end }}

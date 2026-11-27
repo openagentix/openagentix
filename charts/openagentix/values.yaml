@@ -289,6 +289,28 @@ mcp:
   #     tools:                     # backend name (mcp.servers, knowledge.mcp.entryName, notify.mcp.entryName) -> its own tool names
   #       osv: [query_vulnerability, get_vulnerability]
   profiles: []
+  # MCP endpoints that already run (ADR 0026): an in-cluster Service of your own, which a tool profile can list like a backend of mcp.servers.
+  # Each endpoint is in a tool group of its own and takes a header credential from a Secret, so the shared vMCP never offers its tools (a Cedar
+  # forbid is a second layer) and never holds the header value as an environment value. A profile that lists an endpoint is rendered on its group, may
+  # list only endpoints of that group and the knowledge and notify backends (the model sees those as knowledge-<group>_kb_search and so on), may not
+  # use code mode, and stays out of the control plane catalog: definitions cannot use it. Needs networkPolicy.enabled and controlPlane.apiServerCIDRs
+  # (install.sh sets them). The chart renders a NetworkPolicy in the endpoint's namespace (it must exist before the install) and an egress policy on the
+  # vMCPs of the group. The Secret is yours: create it in mcp.namespace before the install; the chart renders only the reference. Empty (the default): nothing renders.
+  endpoints: []
+  #  - name: records                    # lower case letters, digits, single dashes; at most 30 characters; it is the tool prefix (records_...)
+  #    url: http://records.fernvale-records.svc.cluster.local:8080/mcp   # <service>.<namespace>.svc[.cluster.local]; no address, no user name, no query
+  #    transport: streamable-http       # streamable-http (default) | sse
+  #    group: disputes                  # the tool group of this endpoint (required): letters, digits, single dashes, at most 20 characters
+  #    auth:
+  #      header:
+  #        name: Authorization          # the header the endpoint expects
+  #        secret: {name: records-mcp-auth, key: value}   # a Secret in mcp.namespace; its value is the whole header value (Bearer <token>)
+  #    ingress:                         # required for an in-cluster endpoint
+  #      podSelector: {app: records}    # the endpoint's pods; must not be empty
+  #      port: 8080                     # the pod port (not the Service port)
+  #    allowDefinitions: false          # refused on an endpoint with a group (definitions cannot use an own-group profile in this release)
+  # Names of endpoints of the shared group mode that the installer holds back on the first apply. Not used yet: any name is refused.
+  endpointEntriesHeld: []
   virtual:
     name: tools                   # the operator serves it as Service vmcp-<name>:4483
     port: 4483

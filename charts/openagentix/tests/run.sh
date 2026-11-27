@@ -2411,6 +2411,8 @@ done
 
 # shellcheck source=charts/openagentix/tests/diagnostics.sh
 . "$(dirname "$0")/diagnostics.sh"   # ADR 0025, slice 4: cluster-read
+# shellcheck source=charts/openagentix/tests/endpoints.sh
+. "$(dirname "$0")/endpoints.sh"     # ADR 0026, slice 2: mcp.endpoints[], own group mode
 
 echo
 echo "passed=$PASS failed=$FAIL"

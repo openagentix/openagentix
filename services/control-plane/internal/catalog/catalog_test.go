@@ -443,3 +443,27 @@ func TestPolicyRefusesPlatformNamespacesAndTheKubernetesAPIInClusterDestinations
 		}
 	}
 }
+
+// The short form of a cluster name, <service>.<namespace>, is told from a public name by its last label (ADR 0026, slice 2): a namespace with a dash
+// or a digit cannot be a top level domain. All three forms of one in-cluster host are internal, and public names stay public.
+func TestInternalEgressHostShortFormOfAClusterName(t *testing.T) {
+	for host, want := range map[string]bool{
+		"records.fernvale-records":                   true,
+		"records.fernvale-records.svc":               true,
+		"records.fernvale-records.svc.cluster.local": true,
+		"records.team1":                              true,
+		"a.b.fernvale-records":                       true,
+		"x.a":                                        true,
+		"api.osv.dev":                                false,
+		"x.mcp-tools.dev":                            false,
+		"example.org":                                false,
+		"example.xn--p1ai":                           false,
+		"shop.example.co":                            false,
+		"kagent":                                     true,
+		"10.0.0.5":                                   true,
+	} {
+		if got := InternalEgressHost(host); got != want {
+			t.Errorf("InternalEgressHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

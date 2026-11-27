@@ -1,0 +1,45 @@
+# CI ONLY. These values make a cluster unfit for agents: the tool gateways trust the API server's own tokens. hack/ci/endpoints-live.sh refuses to run
+# anywhere but on GitHub Actions (or a context named by ENDPOINTS_CI_CONTEXT).
+# Values of the live check of mcp.endpoints (ADR 0026 slice 2), on top of the quick start. The endpoints exist before the install (hack/ci/endpoints-ci-setup.sh):
+#   kind create cluster --name openagentix --config hack/kind-config.yaml
+#   ENDPOINTS=1 hack/ci/endpoints-ci-setup.sh
+#   PROFILE=quickstart VALUES_FILE=hack/ci/endpoints-ci-values.yaml ./install.sh      then      ENDPOINTS=1 hack/ci/endpoints-live.sh
+# The e2e workflow runs it on request (workflow_dispatch, input `endpoints`). It is NOT a recommended configuration. controlPlane.apiServerCIDRs is not set:
+# install.sh finds the addresses (this is part of what the job proves).
+mcp:
+  endpoints:
+    - name: echo
+      url: http://echo.endpoint-ci.svc.cluster.local:8080/mcp
+      group: disputes
+      auth:
+        header: {name: Authorization, secret: {name: echo-mcp-auth, key: value}}
+      ingress:
+        podSelector: {app: echo}
+        port: 8080
+    - name: other                      # in the group, but no profile lists it: the check for what a profile does not list
+      url: http://other.endpoint-ci.svc.cluster.local:8080/mcp
+      group: disputes
+      auth:
+        header: {name: Authorization, secret: {name: other-mcp-auth, key: value}}
+      ingress:
+        podSelector: {app: other}
+        port: 8080
+  # a list replaces the quick start's list, so `lookup` is stated again exactly as components/quickstart/values.yaml has it
+  profiles:
+    - name: lookup
+      codeMode: false
+      tools:
+        osv: [query_vulnerability]
+    - name: disputes
+      codeMode: false
+      tools:
+        echo: [echo, list_notes]       # not set_note: the profile's deny default hides it
+  virtual:
+    incomingAuth:
+      # Only for this job: the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/endpoints-live.sh can make a token and make real
+      # calls through them. The script puts the cluster CA into the ConfigMap below and restarts the vMCPs. Agents' tool calls do not work in a cluster
+      # installed with these values: use them for this check and nothing else.
+      oidc:
+        issuer: https://kubernetes.default.svc.cluster.local
+        jwksUrl: https://kubernetes.default.svc/openid/v1/jwks
+        caBundle: {configMap: ci-apiserver-ca, key: ca.crt}

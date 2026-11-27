@@ -338,6 +338,61 @@
    "origin": "https://other.ci.svc:5000",
    "allow": false,
    "why": "another service"
+  },
+  {
+   "origin": "https://records.fernvale-records",
+   "allow": false,
+   "why": "short form <service>.<namespace>: a last label with a dash is no public top level domain (ADR 0026, slice 2)"
+  },
+  {
+   "origin": "https://records.fernvale-records:8080",
+   "allow": false,
+   "why": "short form with a port"
+  },
+  {
+   "origin": "https://records.team1",
+   "allow": false,
+   "why": "short form, a digit in the last label"
+  },
+  {
+   "origin": "https://records.fernvale-records.svc",
+   "allow": false,
+   "why": "the same host, .svc form"
+  },
+  {
+   "origin": "https://records.fernvale-records.svc.cluster.local",
+   "allow": false,
+   "why": "the same host, full form"
+  },
+  {
+   "origin": "https://*.fernvale-records.svc",
+   "allow": false,
+   "why": "a wildcard that covers it, .svc form"
+  },
+  {
+   "origin": "https://*.fernvale-records.svc.cluster.local",
+   "allow": false,
+   "why": "a wildcard that covers it, full form"
+  },
+  {
+   "origin": "https://a.b.fernvale-records",
+   "allow": false,
+   "why": "short form below a service label"
+  },
+  {
+   "origin": "https://example.xn--p1ai",
+   "allow": true,
+   "why": "a punycode top level domain is public"
+  },
+  {
+   "origin": "https://shop.example.co",
+   "allow": true,
+   "why": "two letters are a top level domain"
+  },
+  {
+   "origin": "https://x.a",
+   "allow": false,
+   "why": "one letter is no top level domain"
   }
  ]
 }

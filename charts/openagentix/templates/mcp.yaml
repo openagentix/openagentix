@@ -42,6 +42,16 @@ permit, is the second layer: an entry that is put into this group by mistake is 
 {{- range $t := (include "oa.diagClusterTools" . | fromJsonArray) }}{{ $forbids = append $forbids (printf "forbid(principal, action == Action::\"call_tool\", resource == Tool::%s);" (quote (printf "%s%s" (replace "{workload}" "cluster-read" $m.virtual.prefixFormat) $t))) }}{{ end }}
 {{- $policies = concat $forbids $policies }}
 {{- end }}
+{{- if include "oa.epOn" . }}
+{{- /* ADR 0026: endpoint tools live in a group of their own, which this vMCP does not reference. A forbid on each endpoint tool that a profile lists, in front of
+the permit, is the second layer: an entry that is put into this group by mistake is still refused (a direct call and a code mode call). */}}
+{{- $eforbids := list }}
+{{- $enames := include "oa.epNames" . | fromJsonArray }}
+{{- range $p := ($m.profiles | default list) }}{{ range $w := (keys $p.tools | sortAlpha) }}{{ if has $w $enames }}{{ range $t := (index $p.tools $w) }}
+{{- $eforbids = append $eforbids (printf "forbid(principal, action == Action::\"call_tool\", resource == Tool::%s);" (quote (printf "%s%s" (replace "{workload}" $w $m.virtual.prefixFormat) $t))) }}
+{{- end }}{{ end }}{{ end }}{{ end }}
+{{- $policies = concat ($eforbids | uniq) $policies }}
+{{- end }}
 {{- if eq $ia.type "oidc" }}
 ---
 # Validates the per-actor JWT that Substrate injects (RemoteMCPServer.spec.actorJwt). Issuer, keys and CA come
@@ -128,8 +138,9 @@ spec:
     useClusterAuth: {{ regexMatch "^https://kubernetes[.]default[.]svc([.]cluster[.]local)?(:[0-9]+)?(/|$)" .Values.controlPlane.containerAgents.serviceAccountTokens.jwksUrl }}
 {{- end }}
 {{- range $p := $m.profiles }}
-{{- /* a profile that lists a diagnostics tool lives on the group `diagnostics` (ADR 0025, Amendment 1): its own entries, audit data off */}}
-{{- $diag := include "oa.diagProfile" (dict "root" $ "profile" $p) }}
+{{- /* a profile that lists a diagnostics tool lives on the group `diagnostics` (ADR 0025, Amendment 1), one that lists an endpoint on the group of that endpoint
+(ADR 0026): its own entries, audit data off */}}
+{{- $grp := include "oa.profileGroup" (dict "root" $ "profile" $p) }}
 {{- $variants := list "" }}{{ if has $p.name $wlNames }}{{ $variants = append $variants "workload" }}{{ end }}
 {{- range $v := $variants }}
 ---
@@ -154,7 +165,7 @@ metadata:
   annotations:
     openagentix.io/tool-profile: {{ $p.name }}
 spec:
-  groupRef: {name: {{ ternary "diagnostics" $m.groupName (not (empty $diag)) }}}
+  groupRef: {name: {{ default $m.groupName $grp }}}
   config:
     aggregation:
       conflictResolution: prefix
@@ -162,7 +173,7 @@ spec:
       defaultToolVisibility: deny
       tools:
         {{- range $w := (keys $p.tools | sortAlpha) }}
-        - workload: {{ include "oa.diagWorkload" (dict "root" $ "profile" $p "w" $w) }}
+        - workload: {{ include "oa.groupWorkload" (dict "root" $ "profile" $p "w" $w) }}
           filter: {{ toJson (index $p.tools $w) }}
         {{- end }}
     {{- if $p.codeMode }}
@@ -172,8 +183,8 @@ spec:
       parallelMaxConcurrency: {{ $m.virtual.codeMode.parallelMaxConcurrency }}
       toolCallTimeout: {{ $m.virtual.codeMode.toolCallTimeout }}
     {{- end }}
-    {{- if $diag }}
-    # Tool arguments and results (log lines, events) are never copied into the audit, whatever the observability values say (ADR 0025 section 6).
+    {{- if $grp }}
+    # Tool arguments and results (log lines, events, case data) are never copied into the audit, whatever the observability values say (ADR 0025 section 6, ADR 0026 decision 5).
     audit:
       enabled: true
       includeRequestData: false

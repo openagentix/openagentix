@@ -428,9 +428,15 @@ func ForbiddenEgressHost(host string, ns Namespaces) (string, bool) {
 	return "", false
 }
 
+// publicTLDRE is the shape of a public top level domain: two to 63 letters, or a punycode label. A Kubernetes namespace name often has a dash or a digit
+// (fernvale-records, team1) and then cannot be a top level domain, so `<service>.<namespace>`, the short form of a cluster name, is told from a public name.
+// A namespace of letters only (payments) has the shape of a top level domain, and nothing offline can tell the two apart.
+var publicTLDRE = regexp.MustCompile(`^([a-z]{2,63}|xn--[a-z0-9-]{1,59})$`)
+
 // InternalEgressHost reports whether host (lower case, no port, a leading "*." already cut) is not a public name from the
-// cluster's point of view: an address, a name without a dot, a name whose last label is an InternalSuffixes entry, or a name
-// with a ".svc." label (a cluster name under any cluster domain). Such a host is refused unless the operator lists exactly its host:port.
+// cluster's point of view: an address, a name without a dot, a name whose last label is an InternalSuffixes entry or has not the shape of
+// a top level domain (the short form <service>.<namespace>, ADR 0026), or a name with a ".svc." label (a cluster name under any cluster
+// domain). Such a host is refused unless the operator lists exactly its host:port.
 func InternalEgressHost(host string) bool {
 	if _, err := netip.ParseAddr(host); err == nil {
 		return true
@@ -439,7 +445,7 @@ func InternalEgressHost(host string) bool {
 	if i < 0 {
 		return true
 	}
-	return slices.Contains(InternalSuffixes, host[i+1:]) || strings.Contains(host, ".svc.")
+	return slices.Contains(InternalSuffixes, host[i+1:]) || !publicTLDRE.MatchString(host[i+1:]) || strings.Contains(host, ".svc.")
 }
 
 // CheckPolicy checks the policy against the catalog: an in-cluster destination may never be one that reaches a platform
