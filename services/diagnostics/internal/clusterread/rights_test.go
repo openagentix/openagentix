@@ -58,7 +58,7 @@ func (a *authz) intendedRules(ns string) ([]authv1.ResourceRule, []authv1.NonRes
 		authv1.ResourceRule{Verbs: []string{"create"}, APIGroups: []string{"authorization.k8s.io"}, Resources: []string{"selfsubjectaccessreviews", "selfsubjectrulesreviews"}},
 		authv1.ResourceRule{Verbs: []string{"create"}, APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"selfsubjectreviews"}})
 	nonRes := []authv1.NonResourceRule{
-		{Verbs: []string{"get"}, NonResourceURLs: []string{"/healthz", "/livez", "/readyz", "/healthz/*", "/livez/*", "/readyz/*", "/version", "/version/", "/api", "/api/*", "/apis", "/apis/*", "/openapi", "/openapi/*", "/.well-known/openid-configuration", "/openid/v1/jwks"}},
+		{Verbs: []string{"get"}, NonResourceURLs: []string{"/healthz", "/livez", "/readyz", "/healthz/*", "/livez/*", "/readyz/*", "/version", "/version/", "/api", "/api/*", "/apis", "/apis/*", "/openapi", "/openapi/*", "/.well-known/openid-configuration", "/openid/v1/jwks", "/.well-known/openid-configuration/", "/openid/v1/jwks/"}},
 	}
 	return rules, nonRes
 }
@@ -174,6 +174,8 @@ func newAuthzClient(cfg Config) (*fake.Clientset, *authz) {
 		a.mu.Unlock()
 		switch {
 		case inc:
+			// like a cluster with a webhook authorizer: the RBAC rules are there, and the list is incomplete
+			in.Status.ResourceRules, in.Status.NonResourceRules = a.rulesFor(ns)
 			in.Status.Incomplete = true
 		case empty:
 		default:
@@ -314,26 +316,58 @@ func TestRightsCheckStopsOnAnyForbiddenRight(t *testing.T) {
 	}
 }
 
-func TestRightsCheckIncompleteReviewFallsBackToAccessReviews(t *testing.T) {
+func TestRightsCheckIncompleteReviewStillEvaluatesTheRules(t *testing.T) {
 	cfg := testConfig()
 	c, a := newAuthzClient(cfg)
 	a.incomplete["kagent"] = true
+	a.incomplete["rca-demo"] = true
 	ck := NewChecker(c, cfg)
 	if err := ck.Run(ctx()); err != nil {
-		t.Fatalf("incomplete review with the intended role must pass through the fallback: %v", err)
+		t.Fatalf("incomplete reviews with the intended role must pass: %v", err)
 	}
-	var fell bool
-	for _, r := range a.seen {
-		if r.Namespace == "kagent" {
-			fell = true
+	for _, g := range []grant{
+		{ns: "kagent", resource: "secrets", verb: "get", names: []string{"db-creds"}},
+		{ns: "rca-demo", resource: "pods", sub: "exec", verb: "create", names: []string{"web-1"}},
+		{ns: "kagent", group: "openagentix.io", resource: "agentdefinitions", verb: "create"},
+		{ns: "rca-demo", resource: "secrets", verb: "list"},
+	} {
+		a.revoke()
+		a.grant(g)
+		if err := ck.Run(ctx()); err == nil {
+			t.Errorf("%+v: an incomplete review let a forbidden grant through", g)
 		}
 	}
-	if !fell {
-		t.Fatal("no access review was sent for the namespace whose rules review was incomplete")
+}
+
+func TestRightsCheckIncompleteReviewsAtManyNamespacesStayCheap(t *testing.T) {
+	cfg := testConfig()
+	for i := 0; i < 98; i++ {
+		cfg.StatusNamespaces = append(cfg.StatusNamespaces, fmt.Sprintf("team-%02d", i))
 	}
-	a.grant(grant{ns: "kagent", resource: "secrets", verb: "get"})
-	if err := ck.Run(ctx()); err == nil {
-		t.Fatal("a grant visible only to the fallback passed")
+	c, a := newAuthzClient(cfg)
+	for _, ns := range cfg.namespaces() {
+		a.incomplete[ns] = true
+	}
+	ck := NewChecker(c, cfg)
+	if err := ck.Run(ctx()); err != nil {
+		t.Fatalf("100 incomplete namespaces: %v", err)
+	}
+	if total := len(a.seen) + len(a.seenURLs) + len(a.rulesNS); total > 1200 {
+		t.Errorf("%d requests: the fallback must add a short fixed list per namespace", total)
+	}
+}
+
+func TestDefaultDiscoveryRulesDoNotFailTheCheck(t *testing.T) {
+	// system:basic-user, system:discovery, system:public-info-viewer and
+	// system:service-account-issuer-discovery, bound to every authenticated identity
+	nonRes := []authv1.NonResourceRule{{Verbs: []string{"get"}, NonResourceURLs: []string{
+		"/.well-known/openid-configuration", "/.well-known/openid-configuration/", "/openid/v1/jwks", "/openid/v1/jwks/",
+		"/api", "/api/*", "/apis", "/apis/*", "/healthz", "/livez", "/openapi", "/openapi/*", "/readyz", "/version", "/version/"}}}
+	if bad := evalRules("rca-demo", true, nil, nonRes); len(bad) != 0 {
+		t.Fatalf("default rules refused: %v", bad)
+	}
+	if bad := evalRules("rca-demo", true, nil, []authv1.NonResourceRule{{Verbs: []string{"get"}, NonResourceURLs: []string{"/metrics/"}}}); len(bad) == 0 {
+		t.Fatal("/metrics/ passed")
 	}
 }
 

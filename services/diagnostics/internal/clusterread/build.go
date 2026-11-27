@@ -300,10 +300,10 @@ func (b *builder) container(c *corev1.Container, cs *corev1.ContainerStatus) map
 		m["args_count"] = len(c.Args)
 	} else {
 		if len(c.Command) > 0 {
-			untrusted["command"] = b.argv(c.Command)
+			untrusted["command"] = b.argv(c.Command, base(c.Command, c.Args))
 		}
 		if len(c.Args) > 0 {
-			untrusted["args"] = b.argv(c.Args)
+			untrusted["args"] = b.argv(c.Args, base(c.Command, c.Args))
 		}
 	}
 	if len(untrusted) > 0 {
@@ -403,11 +403,13 @@ func (b *builder) env(vars []corev1.EnvVar) []map[string]any {
 	return out
 }
 
-// argv redacts a command line: each element after redaction and cut at 512
-// bytes, with the element after a secret-like flag replaced.
-func (b *builder) argv(in []string) []string {
+// argv redacts a command line: each element after redaction and cut at 512 bytes, with the element
+// after a secret-like flag replaced. Arguments of mysql and curl that carry a password as a separate
+// element (-p<value>, -u user:password) are redacted too. client is the program name.
+func (b *builder) argv(in []string, client string) []string {
 	out := make([]string, 0, len(in))
-	hide := false
+	hide, userNext := false, false
+	mysql := strings.Contains(client, "mysql") || strings.Contains(client, "mariadb")
 	for _, a := range in {
 		if hide {
 			out = append(out, redact.Marker)
@@ -419,8 +421,19 @@ func (b *builder) argv(in []string) []string {
 		if len(v) > preCut {
 			v = v[:preCut]
 		}
-		v, n := b.sc.ScrubScript(v)
-		b.red += n
+		switch {
+		case userNext && strings.Contains(v, ":"):
+			v = v[:strings.Index(v, ":")+1] + redact.Marker
+			b.red++
+		case mysql && len(v) > 2 && strings.HasPrefix(v, "-p"):
+			v = "-p" + redact.Marker
+			b.red++
+		default:
+			var n int
+			v, n = b.sc.ScrubScript(v)
+			b.red += n
+		}
+		userNext = a == "-u" || a == "--user"
 		out = append(out, redact.Cut(v, maxArg))
 		hide = redact.SecretFlag(a)
 	}
@@ -645,4 +658,19 @@ func (b *builder) node(n *corev1.Node, full bool) map[string]any {
 		m["conditions"] = conds
 	}
 	return m
+}
+
+// base is the program name of a container: the first element of the command, or of the arguments.
+func base(command, args []string) string {
+	first := ""
+	switch {
+	case len(command) > 0:
+		first = command[0]
+	case len(args) > 0:
+		first = args[0]
+	}
+	if i := strings.LastIndex(first, "/"); i >= 0 {
+		first = first[i+1:]
+	}
+	return strings.ToLower(first)
 }

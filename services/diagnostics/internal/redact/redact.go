@@ -62,6 +62,11 @@ func keepPair(match, val string) bool {
 	return false
 }
 
+// keepPort leaves host:port/path@digest (an image id) alone: a port is not a password.
+func keepPort(_, val string) bool { return portPathRe.MatchString(val) }
+
+var portPathRe = regexp.MustCompile(`^[0-9]{1,5}/`)
+
 func keepWord(_, val string) bool {
 	switch strings.ToLower(strings.Trim(val, `"'`)) {
 	case "true", "false", "ok", "yes", "no", "null", "none":
@@ -89,7 +94,7 @@ var plainRules = []rule{
 	// Bearer and Basic credentials in free text
 	{re: regexp.MustCompile(`(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]{8,})`), group: 3, keep: func(_, v string) bool { return !looksSecret(v) }},
 	// URL with a password in the user part (the password may hold a slash), and a DSN without a scheme
-	{re: regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]*:)([^\s@]+)(@)`), group: 2},
+	{re: regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]*:)([^\s@]+)(@)`), group: 2, keep: keepPort},
 	{re: regexp.MustCompile(`(\b[A-Za-z0-9_.\-]+:)([^\s@:/]+)(@(?:tcp|udp|unix)\()`), group: 2},
 	// token prefixes, anchored at a word start and followed by 16 token characters
 	{re: regexp.MustCompile(`(^|[^A-Za-z0-9])((?:` + prefixes + `)[A-Za-z0-9_-]{16,})`), group: 2},

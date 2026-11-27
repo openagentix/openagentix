@@ -125,6 +125,18 @@ func (c Config) forbiddenAt(scope string) []right {
 	return out
 }
 
+// shortAt is the fixed list asked for a namespace whose rules review is incomplete.
+func (c Config) shortAt(scope string) []right {
+	out := []right{
+		{scope, "", "secrets", "", "get"}, {scope, "", "secrets", "", "list"}, {scope, "", "configmaps", "", "get"},
+		{scope, "", "pods", "exec", "create"}, {scope, "", "pods", "attach", "create"}, {scope, "", "pods", "portforward", "create"},
+	}
+	if !slices.Contains(c.LogNamespaces, scope) {
+		out = append(out, right{scope, "", "pods", "log", "get"})
+	}
+	return out
+}
+
 // namespaces are the namespaces the check reviews: the listed ones, kube-system and our own.
 func (c Config) namespaces() []string {
 	out := slices.Clone(c.LogNamespaces)
@@ -156,10 +168,28 @@ func allowedVerbs(group, resource string, isLog bool) []string {
 	return nil
 }
 
-// allowedURLs are the non-resource paths of the default roles every user gets.
+// allowedURLs are the non-resource paths of the default roles that the API server binds to every
+// authenticated identity. Source: the bootstrap policy of Kubernetes, plugin/pkg/auth/authorizer/rbac/
+// bootstrappolicy/policy.go, ClusterRoles system:discovery (/api, /api/*, /apis, /apis/*, /healthz,
+// /livez, /openapi, /openapi/*, /readyz, /version, /version/), system:public-info-viewer (/healthz,
+// /livez, /readyz, /version, /version/) and system:service-account-issuer-discovery
+// (/.well-known/openid-configuration/ and /openid/v1/jwks/, with the trailing slash in newer versions),
+// and the resource rules of system:basic-user (selfsubjectaccessreviews, selfsubjectrulesreviews,
+// selfsubjectreviews). Read from memory of the upstream file, not from a cluster: it needs proof on a
+// real API server (ADR 0025, slice 5). A path is also accepted with or without a trailing slash.
 var allowedURLs = []string{
 	"/healthz", "/livez", "/readyz", "/healthz/*", "/livez/*", "/readyz/*", "/version", "/version/", "/api", "/api/*", "/apis", "/apis/*",
 	"/openapi", "/openapi/*", "/.well-known/openid-configuration", "/openid/v1/jwks",
+}
+
+func allowedURL(u string) bool {
+	if slices.Contains(allowedURLs, u) {
+		return true
+	}
+	if strings.HasSuffix(u, "/") && !strings.HasSuffix(u, "/*") {
+		return slices.Contains(allowedURLs, strings.TrimSuffix(u, "/"))
+	}
+	return false
 }
 
 // evalRules returns the grants of a rules review that the read role does not hold.
@@ -188,7 +218,7 @@ func evalRules(ns string, isLog bool, rules []authv1.ResourceRule, nonRes []auth
 	for _, r := range nonRes {
 		for _, u := range r.NonResourceURLs {
 			for _, v := range r.Verbs {
-				if v != "get" || !slices.Contains(allowedURLs, u) {
+				if v != "get" || !allowedURL(u) {
 					bad = append(bad, fmt.Sprintf("%s %s is allowed in %s", u, v, scopeName(ns)))
 				}
 			}
@@ -339,8 +369,11 @@ func (c *Checker) check(ctx context.Context) (string, error) {
 			return err
 		}
 		if rr.Status.Incomplete {
-			// a webhook authorizer can make the list incomplete: ask about each right instead
-			for _, r := range c.cfg.forbiddenAt(ns) {
+			// A webhook authorizer (managed clusters) makes the list incomplete, but the RBAC rules are
+			// still in it: they are evaluated below like any other. A short fixed list of access
+			// reviews covers the worst grants a webhook could add. Grants a webhook makes for named
+			// objects are not seen: a stated limit.
+			for _, r := range c.cfg.shortAt(ns) {
 				allowed, err := c.accessReview(ctx, r)
 				if err != nil {
 					return err
@@ -349,7 +382,6 @@ func (c *Checker) check(ctx context.Context) (string, error) {
 					note(fmt.Sprintf("%s is allowed in %s", r.name(), scopeName(ns)))
 				}
 			}
-			return nil
 		}
 		note(evalRules(ns, slices.Contains(c.cfg.LogNamespaces, ns), rr.Status.ResourceRules, rr.Status.NonResourceRules)...)
 		if c.cfg.kind(ns) != nsNone && !readsPods(rr.Status.ResourceRules) {

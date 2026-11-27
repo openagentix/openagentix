@@ -69,3 +69,8 @@ func (l *Logger) Write(r Record) {
 		"redactions", r.Redactions,
 	)
 }
+
+// Dropped writes one line that counts audit lines left out because of the bound on refused calls.
+func (l *Logger) Dropped(n int) {
+	l.log.Info("audit_dropped", "server", l.server, "count", n)
+}

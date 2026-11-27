@@ -30,8 +30,6 @@ type HandlerOptions struct {
 	BearerFile string
 	// Insecure turns the check off. Only for tests and local runs.
 	Insecure bool
-	// CallerKey names the caller of a request for rate limits; the default is the remote address.
-	CallerKey func(*http.Request) string
 }
 
 type reachedKey struct{}
@@ -63,10 +61,11 @@ func authorized(r *http.Request, file string) bool {
 	if err != nil {
 		return false
 	}
-	got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok {
+	h := r.Header.Get("Authorization")
+	if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
 		return false
 	}
+	got := h[7:]
 	a, b := sha256.Sum256([]byte(got)), sha256.Sum256(want)
 	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
@@ -85,9 +84,7 @@ func NewHandler(s *Server, gate Gate, log *slog.Logger, version string, o Handle
 	case !o.Insecure:
 		return nil, errors.New("no bearer file: the server refuses to serve /mcp without one (insecure mode is for tests only)")
 	}
-	if o.CallerKey == nil {
-		o.CallerKey = remoteHost
-	}
+
 	if version == "" {
 		version = "dev"
 	}
@@ -148,13 +145,13 @@ func NewHandler(s *Server, gate Gate, log *slog.Logger, version string, o Handle
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		if o.BearerFile != "" && !authorized(r, o.BearerFile) {
 			if denied.Allow() {
-				log.Warn("request refused: missing or wrong bearer value", "caller", o.CallerKey(r))
+				log.Warn("request refused: missing or wrong bearer value", "caller", remoteHost(r))
 			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		mcpHandler.ServeHTTP(w, r.WithContext(WithCaller(r.Context(), o.CallerKey(r))))
+		mcpHandler.ServeHTTP(w, r)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -162,6 +159,14 @@ func NewHandler(s *Server, gate Gate, log *slog.Logger, version string, o Handle
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if o.BearerFile != "" {
+			if _, err := readBearer(o.BearerFile); err != nil {
+				// pod Ready but every call refused would hide the fault
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("not ready\n"))
+				return
+			}
+		}
 		if gate != nil {
 			if ok, why := gate.Ready(); !ok {
 				// the reason is in the server log; an unauthenticated probe learns nothing about rights

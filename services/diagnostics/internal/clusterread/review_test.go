@@ -3,7 +3,6 @@ package clusterread
 import (
 	"strings"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -118,40 +117,54 @@ func TestNotReadyDoesNotDiscloseTheReason(t *testing.T) {
 	}
 }
 
-func TestPerCallerRateLimit(t *testing.T) {
-	rg := newRig(t, func(o *Options) { o.CallsPerMinute = 100; o.PerCallerPerMinute = 3 }, pod("rca-demo", "p", "Running"))
-	a, b := WithCaller(ctx(), "10.0.0.1"), WithCaller(ctx(), "10.0.0.2")
-	for i := 0; i < 3; i++ {
-		if _, err := rg.srv.PodsList(a, PodsListArgs{Namespace: "rca-demo"}); err != nil {
-			t.Fatalf("a call %d: %v", i, err)
+func TestRefusedCallsCannotBlockValidCalls(t *testing.T) {
+	rg := newRig(t, func(o *Options) { o.RefusedAuditPerMinute = 3 }, pod("rca-demo", "p", "Running"))
+	for i := 0; i < 100; i++ {
+		if _, err := rg.srv.PodsGet(ctx(), PodsGetArgs{Namespace: "nope", Name: "x"}); err == nil {
+			t.Fatal("accepted")
 		}
 	}
-	before := rg.apiCalls()
-	if _, err := rg.srv.PodsList(a, PodsListArgs{Namespace: "rca-demo"}); err == nil || !strings.Contains(err.Error(), "rate limit") || rg.apiCalls() != before {
-		t.Fatalf("caller a not limited: %v", err)
+	if _, err := rg.srv.PodsList(ctx(), PodsListArgs{Namespace: "rca-demo"}); err != nil {
+		t.Fatalf("a flood of refused calls blocked a valid call: %v", err)
 	}
-	if _, err := rg.srv.PodsList(b, PodsListArgs{Namespace: "rca-demo"}); err != nil {
-		t.Fatalf("caller b starved by caller a: %v", err)
+	if n := strings.Count(rg.audit.String(), "\n"); n > 5 {
+		t.Fatalf("%d audit lines for 100 refused calls", n)
 	}
 }
 
-func TestRefusedCallsAreLimitedAndAuditIsBounded(t *testing.T) {
-	rg := newRig(t, func(o *Options) { o.RefusalsPerMinute = 3 })
-	for i := 0; i < 60; i++ {
-		_, err := rg.srv.PodsGet(ctx(), PodsGetArgs{Namespace: "nope", Name: "x"})
-		if err == nil {
-			t.Fatal("accepted")
-		}
-		if i >= 3 && !strings.Contains(err.Error(), "rate limit") {
-			t.Fatalf("call %d: refusals are not limited: %v", i, err)
+func TestDroppedAuditLinesAreCounted(t *testing.T) {
+	rg := newRig(t, func(o *Options) { o.RefusedAuditPerMinute = 3 })
+	for i := 0; i < 20; i++ {
+		_, _ = rg.srv.PodsGet(ctx(), PodsGetArgs{Namespace: "nope", Name: "x"})
+	}
+	if strings.Contains(rg.audit.String(), "audit_dropped") {
+		t.Fatal("summary before it is due")
+	}
+	rg.srv.FlushAudit()
+	a := rg.audit.String()
+	if !strings.Contains(a, `"msg":"audit_dropped"`) || !strings.Contains(a, `"count":17`) {
+		t.Fatalf("no summary of the 17 dropped lines: %s", a)
+	}
+	n := strings.Count(a, "audit_dropped")
+	rg.srv.FlushAudit()
+	if strings.Count(rg.audit.String(), "audit_dropped") != n {
+		t.Fatal("the same drops were reported twice")
+	}
+}
+
+func TestMySQLAndCurlArgumentsInSeparateElements(t *testing.T) {
+	p := canaryPod("rca-demo", "web-1")
+	p.Spec.Containers[0].Command = []string{"mysql"}
+	p.Spec.Containers[0].Args = []string{"-h", "db", "-uroot", "-pzzcanary-mysql-0501", "-u", "admin:zzcanary-curl-0502", "--user", "bob:zzcanary-user-0503"}
+	rg := newRig(t, nil, p)
+	out := js(t, mustResult(rg.srv.PodsGet(ctx(), PodsGetArgs{Namespace: "rca-demo", Name: "web-1"})))
+	for _, c := range []string{"zzcanary-mysql-0501", "zzcanary-curl-0502", "zzcanary-user-0503"} {
+		if strings.Contains(out, c) {
+			t.Errorf("%s leaked from separate arguments", c)
 		}
 	}
-	if n := strings.Count(rg.audit.String(), "\n"); n > 5 {
-		t.Fatalf("%d audit lines for 60 refused calls", n)
-	}
-	*rg.now = rg.now.Add(time.Minute)
-	if _, err := rg.srv.PodsGet(ctx(), PodsGetArgs{Namespace: "rca-demo", Name: "x"}); err == nil || strings.Contains(err.Error(), "rate limit") {
-		t.Fatalf("the refusal budget did not refill: %v", err)
+	if !strings.Contains(out, "-uroot") || !strings.Contains(out, "db") {
+		t.Errorf("harmless arguments were lost: %s", out)
 	}
 }
 

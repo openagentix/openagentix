@@ -142,6 +142,18 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 		log.Warn("rights check failed: serving nothing until a later check passes", "reason", err.Error())
 	}
 	go checker.Loop(ctx, f.checkEvery)
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				srv.FlushAudit()
+			}
+		}
+	}()
 
 	hs := &http.Server{
 		Handler:           handler,

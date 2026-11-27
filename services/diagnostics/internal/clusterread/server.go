@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -66,9 +67,12 @@ type Options struct {
 	Now   func() time.Time
 	// Gate, if set, must report ready before any tool is served.
 	Gate Gate
-	// CallsPerMinute (all callers) and LogsPerMinute default to 60 and 20. PerCallerPerMinute and
-	// RefusalsPerMinute (both per caller key) default to 30.
-	CallsPerMinute, LogsPerMinute, PerCallerPerMinute, RefusalsPerMinute int
+	// CallsPerMinute and LogsPerMinute default to 60 and 20, counted over all callers. There is no
+	// per-caller layer: behind the vMCP every call comes from the vMCP pod, so a caller key would
+	// mean one budget per profile vMCP, and a budget for refused calls could block valid ones.
+	// RefusedAuditPerMinute (default 20) bounds the audit lines of refused and rate-limited calls;
+	// the others are counted and reported by FlushAudit.
+	CallsPerMinute, LogsPerMinute, RefusedAuditPerMinute int
 }
 
 // Server serves the eight tools.
@@ -84,39 +88,9 @@ type Server struct {
 	logLim *ratelimit.Limiter
 	calls  int
 
-	mu         sync.Mutex
-	perCaller  map[string]*callerLimits
-	callerRate int
-	refuseRate int
-	auditLim   *ratelimit.Limiter // bounds the audit lines of calls refused for rate
-	rejectLim  *ratelimit.Limiter // bounds the audit lines of calls the MCP layer rejected
-}
-
-type callerLimits struct{ calls, refusals *ratelimit.Limiter }
-
-type callerKey struct{}
-
-// WithCaller returns a context that carries the caller key (the network address of the
-// vMCP pod). Rate limits are kept per key, so one caller cannot use up the budget of the others.
-func WithCaller(ctx context.Context, key string) context.Context {
-	return context.WithValue(ctx, callerKey{}, key)
-}
-
-const maxCallers = 512
-
-func (s *Server) limits(ctx context.Context) *callerLimits {
-	key, _ := ctx.Value(callerKey{}).(string)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if l, ok := s.perCaller[key]; ok {
-		return l
-	}
-	if len(s.perCaller) >= maxCallers {
-		s.perCaller = map[string]*callerLimits{}
-	}
-	l := &callerLimits{calls: ratelimit.New(s.callerRate, s.now), refusals: ratelimit.New(s.refuseRate, s.now)}
-	s.perCaller[key] = l
-	return l
+	mu       sync.Mutex
+	auditLim *ratelimit.Limiter // bounds the audit lines of refused and rate-limited calls
+	dropped  atomic.Int64       // audit lines not written because of the bound
 }
 
 // NewServer checks the configuration and builds a Server.
@@ -136,11 +110,8 @@ func NewServer(o Options) (*Server, error) {
 	if o.LogsPerMinute <= 0 {
 		o.LogsPerMinute = 20
 	}
-	if o.PerCallerPerMinute <= 0 {
-		o.PerCallerPerMinute = 30
-	}
-	if o.RefusalsPerMinute <= 0 {
-		o.RefusalsPerMinute = 30
+	if o.RefusedAuditPerMinute <= 0 {
+		o.RefusedAuditPerMinute = 20
 	}
 	if o.Logs == nil {
 		kube := o.Client
@@ -150,7 +121,7 @@ func NewServer(o Options) (*Server, error) {
 	}
 	return &Server{cfg: o.Config, kube: o.Client, logs: o.Logs, sc: redact.New(), au: o.Audit, now: o.Now, gate: o.Gate,
 		calls: o.CallsPerMinute, all: ratelimit.New(o.CallsPerMinute, o.Now), logLim: ratelimit.New(o.LogsPerMinute, o.Now),
-		perCaller: map[string]*callerLimits{}, callerRate: o.PerCallerPerMinute, refuseRate: o.RefusalsPerMinute, auditLim: ratelimit.New(2, o.Now), rejectLim: ratelimit.New(30, o.Now)}, nil
+		auditLim: ratelimit.New(o.RefusedAuditPerMinute, o.Now)}, nil
 }
 
 // ---- argument structs, with the schema text agents see ----
@@ -206,18 +177,13 @@ func (s *Server) do(ctx context.Context, tool, target, object string, isLog bool
 			return
 		}
 		// calls refused for rate are the only ones a caller can make without limit: bound their lines
-		if outcome == "rate_limited" && !s.auditLim.Allow() {
+		if (outcome == "rate_limited" || outcome == "refused") && !s.auditLim.Allow() {
+			s.dropped.Add(1)
 			return
 		}
 		s.au.Write(audit.Record{Tool: tool, Target: in.target, Object: in.object, Outcome: outcome, Duration: time.Since(began), Bytes: size, Lines: in.lines, Redactions: in.red})
 	}()
-	lim := s.limits(ctx)
-	if !lim.refusals.Available() {
-		outcome = "rate_limited"
-		return nil, refuse("rate limit reached: too many refused calls; check the arguments and wait a minute")
-	}
 	if err := validate(); err != nil {
-		lim.refusals.Allow()
 		outcome = "refused"
 		return nil, err
 	}
@@ -228,17 +194,11 @@ func (s *Server) do(ctx context.Context, tool, target, object string, isLog bool
 			return nil, refuse("the server is not ready, so it serves no tool; ask the operator to check the cluster-read server")
 		}
 	}
-	if !lim.calls.Allow() {
-		outcome = "rate_limited"
-		return nil, refuse("rate limit reached: at most %d calls a minute for one caller; wait and try again", s.callerRate)
-	}
 	if !s.all.Allow() {
-		lim.calls.Refund()
 		outcome = "rate_limited"
 		return nil, refuse("rate limit reached: at most %d calls a minute in all; wait and try again", s.calls)
 	}
 	if isLog && !s.logLim.Allow() {
-		lim.calls.Refund()
 		s.all.Refund()
 		outcome = "rate_limited"
 		return nil, refuse("rate limit reached for pods_log: wait a minute and try again")
@@ -662,8 +622,20 @@ func (s *Server) NodesGet(ctx context.Context, a NodesGetArgs) (Result, error) {
 // AuditRejected writes the audit line of a call that the MCP layer rejected before it reached a tool
 // (an argument of the wrong type, for example). It holds the tool name only.
 func (s *Server) AuditRejected(tool string) {
-	if s.au == nil || !s.rejectLim.Allow() {
+	if s.au == nil {
+		return
+	}
+	if !s.auditLim.Allow() {
+		s.dropped.Add(1)
 		return
 	}
 	s.au.Write(audit.Record{Tool: tool, Outcome: "refused"})
+}
+
+// FlushAudit writes one line that says how many audit lines the bound dropped since the last call.
+// The server calls it once a minute.
+func (s *Server) FlushAudit() {
+	if n := s.dropped.Swap(0); n > 0 && s.au != nil {
+		s.au.Dropped(int(n))
+	}
 }

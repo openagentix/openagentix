@@ -229,23 +229,45 @@ func TestBearerConfigurationIsChecked(t *testing.T) {
 	}
 }
 
-func TestCallerKeyReachesTheRateLimit(t *testing.T) {
-	rg := newRig(t, func(o *Options) { o.PerCallerPerMinute = 2; o.CallsPerMinute = 100 }, pod("rca-demo", "p", "Running"))
-	srv := httptest.NewServer(mustHandler(t, rg.srv, nil, io.Discard, HandlerOptions{Insecure: true, CallerKey: func(r *http.Request) string { return r.Header.Get("X-Test-Caller") }}))
-	t.Cleanup(srv.Close)
-	call := func(caller string) bool {
-		sess, err := connect(t, srv.URL, headerTransport{"X-Test-Caller", caller})
-		if err != nil {
-			t.Fatal(err)
-		}
-		r, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: "pods_list_in_namespace", Arguments: map[string]any{"namespace": "rca-demo"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return !r.IsError
+func TestBearerSchemeIsCaseInsensitiveAndReadyzNeedsTheFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "bearer")
+	if err := os.WriteFile(file, []byte(bearerCanary), 0o640); err != nil {
+		t.Fatal(err)
 	}
-	if !call("a") || !call("a") || call("a") || !call("b") {
-		t.Fatal("limits are not kept per caller key")
+	rg := newRig(t, nil)
+	srv := httptest.NewServer(mustHandler(t, rg.srv, nil, io.Discard, HandlerOptions{BearerFile: file}))
+	t.Cleanup(srv.Close)
+	for _, scheme := range []string{"bearer", "BEARER", "Bearer"} {
+		req, _ := http.NewRequest("POST", srv.URL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", scheme+" "+bearerCanary)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == 401 {
+			t.Errorf("scheme %q refused", scheme)
+		}
+	}
+	get := func() (int, string) {
+		resp, err := http.Get(srv.URL + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, _ := get(); code != 200 {
+		t.Fatalf("readyz with a readable file: %d", code)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := get(); code != 503 || strings.TrimSpace(body) != "not ready" {
+		t.Fatalf("readyz with the bearer file gone: %d %q", code, body)
 	}
 }
 

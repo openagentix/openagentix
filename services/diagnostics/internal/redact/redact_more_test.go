@@ -101,3 +101,19 @@ func TestStripTextKeepsNewlines(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestImageIDWithRegistryPortIsNotACredential(t *testing.T) {
+	sc := New()
+	for _, in := range []string{
+		"docker-pullable://registry:5000/app@sha256:" + strings.Repeat("ab", 32),
+		"docker-pullable://registry.local:5000/team/app@sha256:" + strings.Repeat("cd", 32),
+		"https://host:8443/path@v2",
+	} {
+		if out, n := sc.Scrub(in); out != in || n != 0 {
+			t.Errorf("changed %q -> %q", in, out)
+		}
+	}
+	if out, n := sc.Scrub("postgres://u:ab/" + cv + "@host/db"); n == 0 || strings.Contains(out, cv) {
+		t.Errorf("a password with a slash must still be redacted: %q", out)
+	}
+}
