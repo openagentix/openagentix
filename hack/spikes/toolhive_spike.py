@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -60,7 +61,8 @@ def k(*args, timeout=60):
 
 def pods_of(vmcp):
     names = k("get", "pods", "-n", NS, "-o", "name").split()
-    return [n for n in names if n.startswith("pod/vmcp-%s-" % vmcp)]
+    # the operator names the Deployment (and so the pods) after the VirtualMCPServer; the Service is vmcp-<name>
+    return [n for n in names if re.fullmatch(r"pod/%s-[a-z0-9]+-[a-z0-9]{5}" % re.escape(vmcp), n)]
 
 
 def logs_of(vmcp):
@@ -278,7 +280,7 @@ def headers():
     for e, form in forms.items():
         tn = "%s_whoami" % e
         if tn not in names:
-            rec("hdr/" + e, "2", "FAIL" if e != "hdrd" else "INFO", "%s: backend not in the vMCP tool list (dropped?)" % form)
+            rec("hdr/" + e, "2", "FAIL" if e != "hdrd" else "INFO", "%s: the backend is not in the vMCP tool list (dropped, see hdr/dropped)" % form)
             continue
         r = c.call(tn)
         try:
@@ -315,19 +317,32 @@ def headers():
     bad = [n for n, t in sinks.items() if raw in t]
     rec("hdr/no-leak", "2", "PASS" if not bad else "FAIL",
         "header value searched in: %s; found in: %s" % (", ".join(sinks), bad or "none"))
-    # how does the vMCP get at the value? (reference, not value)
-    pods = k("get", "pods", "-n", NS, "-o", "json")
+    # how does the vMCP get at the value? (names of references only, never values)
     refs = []
     try:
-        for p in json.loads(pods)["items"]:
-            if p["metadata"]["name"].startswith("vmcp-diag"):
-                for c2 in p["spec"]["containers"]:
+        for p in json.loads(k("get", "pods", "-n", NS, "-o", "json"))["items"]:
+            if re.fullmatch(r"diag-[a-z0-9]+-[a-z0-9]{5}", p["metadata"]["name"]):
+                for c2 in p["spec"]["containers"] + p["spec"].get("initContainers", []):
                     for ev in c2.get("env", []):
                         if "secretKeyRef" in (ev.get("valueFrom") or {}):
-                            refs.append("%s -> secret %s" % (ev["name"], ev["valueFrom"]["secretKeyRef"]["name"]))
+                            refs.append("env %s from secret %s" % (ev["name"], ev["valueFrom"]["secretKeyRef"]["name"]))
+                    for ef in c2.get("envFrom", []):
+                        if "secretRef" in ef:
+                            refs.append("envFrom secret %s" % ef["secretRef"]["name"])
+                    refs.append("container %s env names: %s" % (c2["name"], sorted(e["name"] for e in c2.get("env", []))))
+                for v in p["spec"].get("volumes", []):
+                    if "secret" in v:
+                        refs.append("volume %s from secret %s" % (v["name"], v["secret"].get("secretName")))
     except Exception as ex:  # noqa: BLE001
         refs.append("error %s" % ex)
-    rec("hdr/mechanism", "2", "INFO", "vMCP pod env entries that reference Secrets: %s" % (refs or "none"))
+    rec("hdr/mechanism", "2", "INFO", "how the vMCP pod receives it: %s" % (refs or "no Secret reference in the pod spec"))
+    # backends the vMCP dropped, from its own status
+    try:
+        st = json.loads(k("get", "virtualmcpserver", "diag", "-n", NS, "-o", "json"))["status"]
+        bad = ["%s: %s" % (c["type"], c.get("message", "")) for c in st.get("conditions", []) if c.get("status") == "False" and c["type"] != "Ready"]
+        rec("hdr/dropped", "2", "INFO", "backendCount=%s; conditions that are False: %s" % (st.get("backendCount"), bad or "none"))
+    except Exception as ex:  # noqa: BLE001
+        rec("hdr/dropped", "2", "ERROR", str(ex))
 
 
 def identity():
@@ -378,7 +393,8 @@ def audit():
     ev_d = [x for x in ld.splitlines() if "audit" in x.lower() or "tools/call" in x or "tool_call" in x.lower()]
     ev_o = [x for x in lo.splitlines() if "audit" in x.lower() or "tools/call" in x or "tool_call" in x.lower()]
     rec("audit/events", "4", "INFO", "audit-like lines: diag=%d (capture off), sh-open=%d (capture on)" % (len(ev_d), len(ev_o)),
-        {"diag_sample": [x[:400] for x in ev_d[:2]], "open_sample": [x[:400] for x in ev_o[:2]]})
+        {"diag_sample": [x[:500] for x in ev_d[:3]], "open_sample": [x[:500] for x in ev_o[:3]]})
+    rec("audit/log-shape", "4", "INFO", "first log lines of the capture-on vMCP (shape only): %s" % [x[:160] for x in lo.splitlines()[:6]])
     pos_res, pos_req = CANARY in lo, REQ_CANARY in lo
     rec("audit/control", "4", "PASS" if pos_res else "INCONCLUSIVE",
         "control (includeResponseData true, includeRequestData true): result canary in the vMCP log=%s, request canary=%s" % (pos_res, pos_req))

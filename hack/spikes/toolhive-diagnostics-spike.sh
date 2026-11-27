@@ -97,7 +97,7 @@ SPIKE_RESULT_CANARY=$RESULT_CANARY SPIKE_REQUEST_CANARY=$REQUEST_CANARY SPIKE_OU
 say "dumps (no Secret objects)"
 kubectl get mcpgroups,mcpserverentries,mcpexternalauthconfigs,mcpoidcconfigs,virtualmcpservers,configmaps -n "$NS" -o yaml > "$OUT/objects-live.yaml" 2>&1 || true
 for v in sh-open sh-excl sh-deny sh-cedar sh-sep diag; do
-  for p in $(kubectl get pods -n "$NS" -o name | grep "^pod/vmcp-$v-" || true); do kubectl logs -n "$NS" "$p" --all-containers --tail=3000 > "$OUT/log-vmcp-$v.txt" 2>&1 || true; done
+  for p in $(kubectl get pods -n "$NS" -o name | grep "^pod/$v-" || true); do kubectl logs -n "$NS" "$p" --all-containers --tail=3000 > "$OUT/log-vmcp-$v.txt" 2>&1 || true; done
 done
 kubectl logs -n "$NS" deploy/mcpstub --tail=5000 > "$OUT/log-backend.txt" 2>&1 || true
 kubectl logs -n toolhive-system deploy/toolhive-operator --tail=5000 > "$OUT/log-operator.txt" 2>&1 || true
