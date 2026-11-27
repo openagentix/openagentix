@@ -33,7 +33,9 @@ check "the script restores the identity settings in the exit trap, and the trap 
 check "every kubectl call of the script names the context it checked (K carries --context)" "grep -q '^K=\"\$KBASE --context=\$CTX_NOW\"' '$LIVE' && ! grep -nE '^[^#]*(\\\$KBASE|kubectl) ' '$LIVE' | grep -v 'KBASE config current-context' | grep -v '^[0-9]*:K=' | grep -v 'KBASE=' | grep -v 'obs \"kubectl' | grep -q ."
 check "the leak patterns are never written to a file, and the cleanup removes the token files" "! grep -q '> *\"\$TD/secret' '$LIVE' && grep -q 'rm -f \"\$TD/token\" \"\$TD/tg\" \"\$TD/ts\" \"\$TD/tl\"' '$LIVE'"
 check "the leak scan covers previous container logs, both install logs and the script's own log" "grep -q -- '--previous' '$LIVE' && grep -q 'EQUIPMENT_INSTALL_LOG2' '$LIVE' && grep -q 'EQUIPMENT_LIVE_LOG' '$LIVE'"
-check "the identity settings are patched and restored for every tool server of the tools namespace, not for a fixed list" "grep -q '^tool_servers()' '$LIVE' && ! grep -qE 'for v in tools \"tools-' '$LIVE' && [ \"\$(grep -c 'for v in \$(tool_servers)' '$LIVE')\" = 4 ]"
+check "the list of tool servers is read once, just before the identity patch, and the restore reuses it (a server that goes missing meanwhile is still restarted)" "[ \"\$(grep -c '^TOOL_SERVERS=\$(tool_servers)' '$LIVE')\" = 1 ] && [ \"\$(grep -c 'for v in \$TOOL_SERVERS' '$LIVE')\" = 4 ] && ! grep -q 'for v in \$(tool_servers)' '$LIVE'"
+check "the direct-call section stops when the original identity settings cannot be read, and a failed restore is a failed check with a message" "grep -q 'could not read the identity settings' '$LIVE' && grep -q 'exit 1' '$LIVE' && grep -q 'the identity settings were NOT restored' '$LIVE'"
+check "the identity settings are patched and restored for every tool server of the tools namespace, not for a fixed list" "grep -q '^tool_servers()' '$LIVE' && ! grep -qE 'for v in tools \"tools-' '$LIVE'"
 check "bash -n and shellcheck" "bash -n '$LIVE' && { ! command -v shellcheck >/dev/null || shellcheck -S warning '$LIVE'; }"
 
 echo; echo "$PASS passed, $FAIL failed"

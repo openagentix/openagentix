@@ -293,9 +293,17 @@ reset
 ALSO_COMPOSE="$TMP/af/missing.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
 check "an ALSO_COMPOSE file that cannot be read is refused before any change" "[ $rc = 1 ] && grep -q 'cannot read' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 reset
-printf 'agents:\n  - name: service-agent\n    model: other\n' > "$TMP/af/clash.yaml"
-ALSO_COMPOSE="$TMP/af/clash.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
+mkdir -p "$TMP/af/c"; printf 'agents:\n  - name: service-agent\n    model: other\n' > "$TMP/af/c/values-full-demo.yaml"
+ALSO_COMPOSE="$TMP/af/c/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
 check "a name that clashes between the composed files (same agent name, other content) is refused by the composer, nothing installed" "[ $rc = 1 ] && grep -q 'did not compose' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+
+reset
+ALSO_COMPOSE="$RT/examples/use-cases/bank/values.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
+check "an ALSO_COMPOSE file that is not named values-full-demo.yaml (the use case's own values.yaml would replace lists of the full demo) is refused before any change" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml files of other use cases' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+mkdir -p "$TMP/af/x"; cp "$RT/examples/use-cases/bank/values-full-demo.yaml" "$TMP/af/x/values-full-demo.yaml"
+ALSO_COMPOSE="$TMP/af/x/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "a file with that name, wherever it is, is accepted" "[ $rc = 0 ]" "exit $rc: $(tail -3 "$LOG/out")"
 
 echo "# checks on the platform after the install"
 reset
