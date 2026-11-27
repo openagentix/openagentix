@@ -62,6 +62,7 @@ done
 
 if [ "$MODE" = uninstall ]; then
   say "removing the bank use case objects from $KUBE_CONTEXT (the chart values stay: install the platform again without values.yaml and without STUB_SCENARIOS to remove the agent and the scenarios)"
+  "${KC[@]}" delete configmap bank-scenarios -n agentgateway-system --ignore-not-found   # made by the first version of this script (a kubectl patch); the chart now ships the scenarios
   "${KC[@]}" delete -f "$HERE/manifests/tool-registration.yaml" --ignore-not-found
   "${KC[@]}" delete namespace "$NS" --ignore-not-found
   "${KC[@]}" delete serviceaccount disputes-desk -n "$DESK_NS" --ignore-not-found
@@ -147,8 +148,12 @@ KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$KB_GRAPH_LOAD" "$COLLECTION" "
 # ---- 6. scenarios for the stub model: checked, not made --------------------------------------------------------------------
 # The chart ships them (STUB_SCENARIOS on the platform install, ADR 0026): the ConfigMap stub-model-scenarios and the mount belong to the release.
 if "${KC[@]}" get deployment stub-model -n agentgateway-system >/dev/null 2>&1; then
-  if "${KC[@]}" get configmap stub-model-scenarios -n agentgateway-system >/dev/null 2>&1; then
-    say "the stub model has scenarios from the chart (runs with them are scripted by the stub model, not the behaviour of a model)"
+  if SCN_CM=$("${KC[@]}" get configmap stub-model-scenarios -n agentgateway-system -o json 2>/dev/null); then
+    if printf '%s' "$SCN_CM" | jq -e '.data["scenario.json"] != null' >/dev/null 2>&1; then
+      say "the stub model has scenarios from the chart (runs with them are scripted by the stub model, not the behaviour of a model)"
+    else
+      echo "WARN: the ConfigMap stub-model-scenarios has no scenario.json, so the stub will not work the bank cases. Run the platform install again with STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json (and the same VALUES_FILE)." >&2
+    fi
   else
     echo "WARN: the stub model has no scenarios, so it will not work the bank cases. Run the platform install again with STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json (and the same VALUES_FILE)." >&2
   fi

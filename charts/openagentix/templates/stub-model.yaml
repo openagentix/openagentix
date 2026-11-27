@@ -14,7 +14,8 @@
 {{- fail (printf "gateway.stubModel.scenarios.files.%s must be a string with the JSON text of a scenario file (pass the file with --set-file, or use install.sh STUB_SCENARIOS)" $name) }}
 {{- end }}
 {{- $doc := fromJson $text }}
-{{- if and (hasKey $doc "Error") (not (hasKey $doc "scenarios")) }}
+{{- /* fromJson answers a parse failure with a map that holds only an Error key whose text is Go's JSON error. A real object that has an "Error" key is not one. */ -}}
+{{- if and (hasKey $doc "Error") (eq (len $doc) 1) (kindIs "string" $doc.Error) (regexMatch "^(invalid character|unexpected end of JSON|json:)" $doc.Error) }}
 {{- fail (printf "gateway.stubModel.scenarios.files.%s is not a JSON object" $name) }}
 {{- end }}
 {{- if not (kindIs "slice" $doc.scenarios) }}

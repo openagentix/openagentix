@@ -2108,6 +2108,11 @@ for f in noscen mapscen strscen; do
   ERR=$(render_err --set gateway.stubModel.enabled=true --set-file "gateway.stubModel.scenarios.files.$f\\.json=$SCD/$f.json")
   eq "refused: $f.json has no scenarios list"            "$(/usr/bin/grep -c "$SCF.$f.json has no \"scenarios\" list" <<<"$ERR")" 1
 done
+printf '{"Error":"x"}' > "$SCD/errobj.json"; printf '{"Error":"x","scenarios":[]}' > "$SCD/errok.json"
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.errobj\.json'="$SCD/errobj.json")
+eq "refused: an object with an Error key and no scenarios says it has no scenarios list (not that it is no JSON object)" "$(/usr/bin/grep -c "$SCF.errobj.json has no \"scenarios\" list" <<<"$ERR")" 1
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.errok\.json'="$SCD/errok.json")
+eq "allowed: an object with an Error key and a scenarios list"  "$ERR" ""
 bigfile() { { printf '{"scenarios":[],"pad":"'; head -c $(($2-25)) /dev/zero | tr '\0' a; printf '"}'; } > "$SCD/$1"; }   # bigfile NAME TOTAL-BYTES
 bigfile max.json 262144
 ERR=$(render_err --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.max\.json'="$SCD/max.json")
