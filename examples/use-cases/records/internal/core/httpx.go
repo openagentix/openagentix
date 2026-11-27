@@ -92,6 +92,8 @@ func WriteError(w http.ResponseWriter, err error) {
 		code = http.StatusNotFound
 	case Conflict:
 		code = http.StatusConflict
+	case TooMany:
+		code = http.StatusTooManyRequests
 	}
 	WriteJSON(w, code, map[string]string{"error": e.Msg})
 }
@@ -107,7 +109,7 @@ func Outcome(err error) string {
 		return "not_found"
 	case IsKind(err, Conflict):
 		return "conflict"
-	case IsKind(err, Forbidden), IsKind(err, Unauthorized):
+	case IsKind(err, Forbidden), IsKind(err, Unauthorized), IsKind(err, TooMany):
 		return "denied"
 	}
 	return "error"

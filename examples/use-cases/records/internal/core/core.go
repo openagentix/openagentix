@@ -40,6 +40,7 @@ const (
 	Forbidden
 	NotFound
 	Conflict
+	TooMany
 )
 
 // Error is a safe, user-facing error. Msg never holds input text or internal detail.

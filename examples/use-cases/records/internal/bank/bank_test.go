@@ -919,3 +919,83 @@ func TestAgentViewLabelsEverythingWrittenThroughREST(t *testing.T) {
 		}
 	}
 }
+
+// Re-check follow-ups.
+
+func restFrom(t *testing.T, d *Domain, remote, method, path, token, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.RemoteAddr = remote
+	if method == "POST" {
+		r.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	d.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func TestRESTProposalNeedsATokenFromOutsideThePod(t *testing.T) {
+	d, _ := newDomain(t)
+	c := prepare(t, d, RouteChargeback)
+	body := `{"case_id":"` + c.ID + `","kind":"chargeback","amount_cents":` + strconv.FormatInt(c.AmountCents, 10) + `}`
+	if w := restFrom(t, d, "10.4.5.6:4000", "POST", "/approvals", "", body); w.Code != 401 {
+		t.Fatalf("remote without a token: %d", w.Code)
+	}
+	if n := count(t, d, `SELECT COUNT(*) FROM approvals`); n != 0 {
+		t.Fatal("a refused proposal was stored")
+	}
+	w := restFrom(t, d, "127.0.0.1:4000", "POST", "/approvals", "", body)
+	if w.Code != 201 {
+		t.Fatalf("loopback without a token: %d %s", w.Code, w.Body)
+	}
+	var a core.Approval
+	_ = json.Unmarshal(w.Body.Bytes(), &a)
+	if a.ProposedBy != "rest" {
+		t.Fatalf("proposed_by %q", a.ProposedBy)
+	}
+}
+
+func TestFailedLoginsGetTooManyRequests(t *testing.T) {
+	d, _ := newDomain(t)
+	last := 0
+	for i := 0; i < core.FailLimitPerMinute+5; i++ {
+		last = restFrom(t, d, "10.4.5.6:4000", "GET", "/audit", "wrong", "").Code
+	}
+	if last != 429 {
+		t.Fatalf("repeated failed logins ended with %d", last)
+	}
+	if w := restFrom(t, d, "10.4.5.6:4000", "GET", "/audit", leadToken, ""); w.Code != 200 {
+		t.Fatalf("a valid token must still work: %d", w.Code)
+	}
+}
+
+func TestMCPApprovalResultLabelsAgentAndRESTText(t *testing.T) {
+	d, _ := newDomain(t)
+	s := mcpSession(t, d)
+	c := firstOpenCase(t, d)
+	_, _ = d.svc.SetRoute(context.Background(), c.ID, RouteChargeback, "ROUTE-TEXT-5521")
+	_, _ = d.svc.DraftLetter(context.Background(), c.ID, "LETTER-TEXT-5522")
+	_, _ = d.svc.DraftChargeback(context.Background(), c.ID, "FILING-TEXT-5523")
+	out, isErr := call(t, s, "request_approval", map[string]any{"case_id": c.ID, "kind": RouteChargeback, "amount_cents": c.AmountCents})
+	if isErr {
+		t.Fatal(out)
+	}
+	id := regexp.MustCompile(`APR-[0-9]{4}`).FindString(out)
+	got, isErr := call(t, s, "get_approval", map[string]any{"approval_id": id})
+	if isErr {
+		t.Fatal(got)
+	}
+	for _, text := range []string{out, got} {
+		if strings.Contains(text, `"payload"`) || strings.Contains(text, `"route_reason"`) || strings.Contains(text, `"letter"`) {
+			t.Errorf("raw payload fields reach the agent: %s", text)
+		}
+		for _, want := range []string{"untrusted_route_reason", "untrusted_letter", "untrusted_filing", "ROUTE-TEXT-5521", "LETTER-TEXT-5522"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("missing %s in %s", want, text)
+			}
+		}
+	}
+}

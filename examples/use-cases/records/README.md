@@ -1,6 +1,6 @@
 # Records: a small system of record for the reference use cases
 
-One Go binary. One domain per install. The first domain is `bank`, a dispute and fraud-claim desk for the
+One Go binary. One domain per install. The domains are `bank` (below) and `equipment` (see "The equipment domain"). `bank` is a dispute and fraud-claim desk for the
 fictional Fernvale Bank. Every name, id and amount is synthetic. Fernvale Bank, its customers, merchants and card
 scheme are invented and describe no real bank, scheme or regulation.
 
@@ -50,18 +50,20 @@ made the proposal (with their own token) cannot decide it.
 | The approver approves what they saw | `GET /approvals/{id}` returns the exact payload the hash covers, frozen at proposal. The approve call must send that hash, and the payload computed from the record now must still hash the same, with the same case version |
 | Only approved drafts leave | Execute queues the kinds in the payload (letter; filing only on the chargeback routes) and discards the rest |
 | No double credit | A credit is refused when the transaction already has a credit, so credits per transaction never exceed one case's disputed amount. A closed or blocked account gets no credit |
-| No self-approval | A proposal made with an approver token carries that name, and that approver cannot decide it |
+| No self-approval | A proposal made with an approver token carries that name, and that approver cannot decide it. A proposal on REST from outside the pod must carry an approver token. A proposal from the pod's own loopback address (a person using `kubectl port-forward`) may carry none and is named `rest`: **separation of duties is not enforced for those unauthenticated loopback proposals**, because an approver could propose that way and then decide it. MCP proposals are always named `agent`, and `agent` cannot be an approver id, so no approver can impersonate the agent |
 | Role per kind | The bank kinds need the role `desk-lead` |
 | One decision, one execution | The status change is a conditional update in the same transaction as the act. A second approve gets 409 |
 | No SQL from input | Every statement uses bound parameters. Ids are checked against a strict pattern first |
 | Input limits | Bodies up to 64 KiB, `Content-Type: application/json` required, unknown JSON fields refused, cross-origin browser writes refused, text length and control characters checked, enums closed, lists capped |
-| Bounded growth | At most 20 timers and 100 evidence items per case, 5 discarded drafts kept per case, 50,000 audit rows kept (older rows go; the stdout log keeps every line), 120 writes per minute per host (this also slows token guessing) |
+| Bounded growth | At most 20 timers and 100 evidence items per case, 5 discarded drafts kept per case, 50,000 audit rows kept (older rows go; the stdout log keeps every line), 120 writes per minute per host. Every POST counts, including an approve with a wrong token, and a host with more than 30 refused logins in a minute gets 429 instead of 401. A valid token is never blocked, and there is no lockout |
 | No personal data to the agent | MCP views drop the replay answer and label the customer's words `untrusted_customer_text`. Customer names are never in a case view. Route reasons and evidence notes can be written through REST, so the agent sees them as `untrusted_route_reason` and `untrusted_note` |
 | Audit has no text | The audit entry has no field for text. Values are cut to a safe alphabet and 64 characters |
 | Least privilege | No outbound network, no secret read, no Kubernetes API, non-root, read-only root file system apart from `/data` |
 
 The MCP endpoint has no login of its own, like the notify service. The tool gateway in front of it authenticates
 agents, and a network policy (a later slice) must keep everyone else out.
+
+The loopback rule looks only at the connection's source address. It never reads `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, and a test sends them from a remote address to prove it. **Chart note:** a sidecar in the same pod that forwards traffic to `127.0.0.1:8081` (a mesh proxy, or a ToolHive proxy run as a sidecar) would make every remote caller look like loopback. Do not run one in front of port 8081, or move REST to a Unix socket. A test pins the limit that a manager can decide a proposal that came from loopback without a token.
 
 The REST port listens on `127.0.0.1:8081` by default, so only a person using `kubectl port-forward` reaches it.
 Agents never need it: their steps go through the MCP port, which is the one ToolHive proxies. This is the choice
@@ -81,7 +83,7 @@ Settings (environment):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RECORDS_DOMAIN` | the build default, `bank` | The domain to serve. This build has only `bank` |
+| `RECORDS_DOMAIN` | the build default, `bank` | `bank` or `equipment`. Build the image with `--build-arg DOMAIN=equipment` to change the default |
 | `RECORDS_DATA_DIR` | `/data` | Where `records.db` lives |
 | `RECORDS_MCP_ADDR` | `:8080` | MCP and health |
 | `RECORDS_REST_ADDR` | `127.0.0.1:8081` | REST and health. Set `:8081` only if you also add a network policy |
@@ -103,6 +105,46 @@ HASH=$(jq -r .payload_hash /tmp/approval.json)
 curl -s -X POST localhost:8081/approvals/APR-0001/approve -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d "{\"payload_hash\":\"$HASH\",\"note\":\"checked\"}"
 ```
+
+## The equipment domain
+
+`RECORDS_DOMAIN=equipment` serves a dealer network for the fictional Kestrel Valley Machinery: 3 models, 4 dealers,
+200 machines, 400 parts with supersessions, stock per dealer, 60 fault codes, warranty terms per model, telematics
+for 30 combines, technician slots, work orders, and drafts in the outbox. All names and data are synthetic and
+describe no real company. Approvers need the role `dealer-manager`. Approver ids look like `dealer:svc-mgr-02`.
+
+Flow of a service event:
+
+1. `telemetry.fault` arrives as `POST /faults {serial, code}`. The same fault on the same machine reuses the open
+   case (the event is still recorded). A dealer's request arrives as `POST /requests {serial, note}`.
+2. The agent reads the case and the machine (`get_machine` shows repeated faults), the fault code, the warranty
+   (`check_warranty`), the stock at every dealer nearest first (`get_stock`), and the telematics.
+3. It sets a diagnosis, creates the work order (no approval needed), drafts the parts order, the warranty claim and
+   the customer notice, and holds a technician slot.
+4. It calls `request_approval`. A dealer manager reads `GET /approvals/{id}` and approves with the `payload_hash`.
+   Only then are the order, the claim and the notice queued in the outbox, the stock taken from the dealer, and the
+   slot confirmed.
+
+Rules the record enforces, whatever the agent says:
+
+| Rule | How |
+|---|---|
+| The warranty decision is the record's | A claim draft is refused unless the machine is covered. The approval kind must be `parts_order_with_claim` when covered and `parts_order` when not. A claim is never released for an uncovered machine |
+| A superseded part is never ordered | The draft is refused with the replacement part named. The check runs again when the approval is decided |
+| Stock is real | A draft is refused when the chosen dealer lacks the quantity, and the stock is checked again at approval. The approval takes the stock in the same transaction |
+| No order for a flapping sensor | Telematics that spikes on and off without a trend is classified `sensor_flapping`. A parts order for that machine is refused, and so is a proactive case |
+| Safety-critical requests go to a person | A fault code marked safety critical, a request the dealer flags with `"safety": true` on `POST /requests`, or a case sent to a person with `escalate_to_person`, cannot reach an approval. A case in `needs_person` (escalated, or rejected by a manager) cannot be moved back by the REST status route (the equipment tools have no status tool): it refuses it, and this build has no reopen route. **Screening of a request that has no fault code and no flag relies on the agent calling `escalate_to_person`**; the dealer manager reading the approval is the remaining guard |
+| Fleet sweep | `list_fleet_trends` compares each machine's coolant over the last 14 days with 30 to 60 days ago. A rise of 8 degrees or more is `trending_to_failure`. `open_proactive_case` works only for those machines, once per machine |
+| Only approved drafts leave | The approval queues exactly the kinds in its payload and discards the rest |
+| Slots are not hoarded | A held slot is freed when the case is escalated, when a manager rejects, and when a change supersedes a pending approval (the agent holds one again). One dealer can have at most 10 slots on hold |
+| Fault events are bounded | A fault that an open case already covers is stored at most 5 times per machine and code each day, then answered with the open case without a new row |
+| Approvals do not go stale for no reason | The payload holds the warranty decision and a basis text with no month or hour counts, and `stock_sufficient` instead of the stock count, so a day passing or another case taking stock does not change the hash. Everything else the approver sees still does |
+| Free text is data | The dealer's note, the diagnosis, the work order and the drafts reach the agent in fields named `untrusted_...` |
+
+Hard cases in the seed: an out-of-warranty machine, a part that is empty at the nearest dealer (and a superseded part
+that is empty at the two nearest), a fault repeated four times in 60 days on one machine, a dealer note that tries to
+give orders to the agent, a safety interlock request, and a flapping sensor. Telematics is every 6 hours for 90 days
+(the plan says hourly; this keeps the seed small).
 
 ## Storage
 
@@ -127,7 +169,8 @@ the agent. A test checks that the seed holds no e-mail address, link or long dig
   The Docker build is checked by CI only.
 - Memory and CPU are not measured. The target is 10m and 32Mi requests, limits 100m and 96Mi.
 - The AML alert queue and `aml-triage` agent are not built.
-- There is a per-host write limit but no lockout on approver tokens, and tokens are unsalted SHA-256, which is fine only for long random tokens.
+- The equipment domain has the same status: unit tested only, not in the chart, not run on a cluster, no agent uses it. There is no graph or knowledge base seed yet, and no BigQuery or calendar import.
+- There is a per-host write limit and a limit on refused logins, but no lockout on approver tokens, and tokens are unsalted SHA-256, which is fine only for long random tokens.
 - The decision's audit row is written after the commit and is best effort (the stdout line is the record of truth).
 - The REST agent-step routes have no login; the loopback default is the only guard until the chart adds a network policy.
 - Working days skip weekends only. Public holidays are not modelled.
@@ -139,5 +182,6 @@ the agent. A test checks that the seed holds no e-mail address, link or long dig
 cmd/records/       main: wiring, listeners, timer ticker
 internal/core/     store, audit, approver auth, approval queue, timers, outbox, HTTP helpers (shared by every domain)
 internal/bank/     schema, seed, service, REST routes, MCP tools
+internal/equipment/ the same layers for the equipment domain
 Dockerfile         ARG DOMAIN=bank; base images pinned by digest; non-root; data in /data
 ```
