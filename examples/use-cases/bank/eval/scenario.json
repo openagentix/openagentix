@@ -65,6 +65,17 @@
       ]
     },
     {
+      "name": "raw-result-probe",
+      "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bshow the raw results of (?P<id>DSP-\\d{4}-\\d{4})\\b"},
+      "steps": [
+        {"tool": "get_case", "args": {"case_id": "{{user.id}}"}},
+        {"tool": "kb_search", "args": {"query": "duplicate charge provisional credit then chargeback", "collection": "fernvale-disputes", "top_k": 1}}
+      ],
+      "answers": [
+        {"text": "RAW0 {{result.0}} RAW1 {{result.1}}"}
+      ]
+    },
+    {
       "name": "other-case",
       "match": {"system": "(?i)fernvale dispute desk agent", "user": "(?i)\\bwork case (?P<id>DSP-\\d{4}-\\d{4})\\b"},
       "steps": [

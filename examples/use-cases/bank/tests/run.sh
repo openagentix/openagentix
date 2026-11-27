@@ -146,7 +146,7 @@ check "the graph holds the ring: five cases at one merchant on one device" "[ \"
 
 echo "# the scenario and the evaluation set"
 SC="$HERE/eval/scenario.json"
-check "the scenario file is JSON with five scenarios" "[ \"\$(jq '.scenarios | length' '$SC')\" = 5 ]"
+check "the scenario file is JSON with six scenarios" "[ \"\$(jq '.scenarios | length' '$SC')\" = 6 ]"
 SYSRE=$(jq -r '.scenarios[0].match.system' "$SC")
 check "every scenario matches the agent prompt of values.yaml (same marker)" "jq -r '.scenarios[].match.system' '$SC' | sort -u | wc -l | tr -d ' ' | grep -qx 1 && SYSRE='$SYSRE' PROMPT=\"\$PROMPT\" python3 -I -c 'import os,re,sys; sys.exit(0 if re.search(os.environ[\"SYSRE\"], os.environ[\"PROMPT\"]) else 1)'"
 jq -r '.scenarios[].steps[].tool' "$SC" | sort -u > "$T/scn.tools"

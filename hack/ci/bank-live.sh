@@ -108,6 +108,12 @@ if printf '%s' "$PROBE" | grep -qi 'is not offered to this agent'; then
   echo "       FINDING: the agent was not offered a tool the scenario names. RemoteMCPServer: $($K get remotemcpserver -n "$KNS" "$RMS" -o yaml 2>/dev/null | grep -iE 'reason|message|discover|tool' | head -20 | tr '\n' ' ' | cut -c1-800)"
 fi
 check "the answer is the scripted one for a case with no scenario of its own (it read the case and changed nothing)" "$(printf '%s' "$PROBE" | grep -ci 'needs human review')" 1
+# the wire format: what the agent runtime hands to the model as the result of a tool call. The scenario placeholders read fields of it, so a different shape shows
+# up as "<missing ...>" in the answers. The probe scenario (read only) answers with the first two raw results.
+FMT=$(ASK_SA=$DESK_NS/disputes-desk ASK_USER=desk:probe ASK_TIMEOUT=300 "$ROOT/hack/ask.sh" dispute-agent "Show the raw results of DSP-$YEAR-0002" 2>&1)
+echo "       FORMAT PROBE: the first two tool results as the model received them (first 3500 characters):"
+printf '%s\n' "$FMT" | grep -v '^$' | cut -c1-3500 | sed 's/^/       | /'
+check "the format probe shows no unresolved placeholder: the scenarios read the results the way the runtime hands them over" "$(printf '%s' "$FMT" | grep -c '<missing')" 0
 sleep 3; audit_pull "$TD/audit.jsonl"
 echo "       audit lines so far, by tool: $(jq -rs 'group_by(.tool)|map("\(.[0].tool)=\(length)")|join(" ")' "$TD/audit.jsonl" 2>/dev/null)"
 echo "       one raw AUDIT line of the group's tool server (to read its shape): $($K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROFILE" --all-containers --tail=-1 2>/dev/null | grep -m1 AUDIT | cut -c1-700)"
