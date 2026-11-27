@@ -106,6 +106,8 @@ jobs:
           yq --version
       - run: helm lint charts/openagentix
       - run: charts/openagentix/tests/run.sh
+      - name: bank use case values and seed tests
+        run: examples/use-cases/bank/tests/run.sh
 
   # ---------------------------------------------------------------------------------------------------------------
   shell:
@@ -152,6 +154,7 @@ jobs:
           hack/ci/lifecycle-test-test.sh
           hack/gke/tests/run.sh
           components/runtime/tests/run.sh
+          examples/use-cases/bank/tests/install-test.sh
       - name: reference docs tests
         run: |
           pip install --quiet pyyaml==6.0.2 jsonschema==4.26.0
