@@ -518,10 +518,32 @@ jobs:
           kubectl logs -n openagentix-gateway -l app=a2a-gate --tail=60 | cut -c1-300 || true
           kind export logs ./kind-logs --name oa-rca-demo || true
       - name: scan what is about to be uploaded for the planted values
+        id: planted
         if: always()
         run: hack/ci/rca-upload-scan.sh rca-out rca-live.log install.log --platform-logs kind-logs
-      - name: upload the report, the audit file and the logs
+      - name: scan what is about to be uploaded for the real values (the cluster-read bearer value, a service account token)
+        id: real
         if: always()
+        run: |
+          # The bearer value is read from the cluster and given to grep through a process substitution: it is never written to a file. The gate token of the
+          # live script lives in a shell variable only, and a service account token is a JWT, so the shape of a JWT is searched too. A file that holds one is
+          # removed from the upload and the job fails. When the bearer value cannot be read, nothing is uploaded, because nothing can be scanned.
+          LEAK=0
+          BV=$(kubectl get secret -n openagentix-diagnostics cluster-read-bearer -o jsonpath='{.data.bearer}' 2>/dev/null | base64 -d 2>/dev/null)
+          if [ -n "$BV" ]; then
+            for f in kind-logs rca-out install.log rca-live.log; do
+              [ -e "$f" ] || continue
+              if grep -rlIF -f <(printf '%s\n' "$BV") "$f" >/dev/null 2>&1 || grep -rlIE 'eyJ[A-Za-z0-9_-]{15,}[.]eyJ[A-Za-z0-9_-]{15,}[.]' "$f" >/dev/null 2>&1; then
+                echo "a real secret value or a token is in $f: it is removed from the upload"; rm -rf "$f"; LEAK=1
+              fi
+            done
+          else
+            echo "the bearer value could not be read from the cluster: none of the files is uploaded"; rm -rf kind-logs rca-out install.log rca-live.log; LEAK=1
+          fi
+          unset BV
+          [ "$LEAK" = 0 ]
+      - name: upload the report, the audit file and the logs
+        if: ${{ always() && steps.planted.outcome == 'success' && steps.real.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rca-live

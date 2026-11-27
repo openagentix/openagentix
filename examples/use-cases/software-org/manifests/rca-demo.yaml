@@ -3,7 +3,7 @@
 # any kube context that is not a local kind or k3d cluster. Do not apply it anywhere else.
 #
 # The six faults, and what a person (or the agent) should see:
-#   img-typo          image tag that does not exist                  waiting, ImagePullBackOff (or ErrImagePull for a moment)
+#   img-typo          image from a host that does not exist (registry.invalid)  waiting, ImagePullBackOff (or ErrImagePull for a moment)
 #   crash-start       exits 1 at once with an error in the log       waiting, CrashLoopBackOff, last exit code 1
 #   oom-kill          grows past a 16Mi memory limit                 last state terminated, reason OOMKilled, exit code 137
 #   cfg-missing-key   env value from a ConfigMap key that is absent  waiting, CreateContainerConfigError
@@ -61,7 +61,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: app
-          image: busybox:1.37-no-such-tag
+          image: registry.invalid/busybox:1.37-no-such-tag
           command: ["sh", "-c", "echo invoice-renderer started; sleep 3600"]
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
           resources:

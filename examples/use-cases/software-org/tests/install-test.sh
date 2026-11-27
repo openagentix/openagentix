@@ -3,6 +3,7 @@
 # no network. Needs: bash, jq, yq (the Python wrapper, for compose-values.sh). Usage: examples/use-cases/software-org/tests/install-test.sh
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n       %s\n' "$1" "$2"; }
@@ -267,6 +268,72 @@ check "beside the full demo: a file of the list that cannot be read is refused" 
 reset
 KUBE_CONTEXT=gke_proj_zone_prod VALUES_FILE="$FDLIST" run --beside-full-demo; rc=$?
 check "beside the full demo still refuses a context that is not kind or k3d" "[ $rc = 1 ] && grep -q 'local kind or k3d' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+
+echo "# ALSO_COMPOSE: this agent beside the full demo AND the bank (and any other use case with a values-full-demo.yaml)"
+BANKFD="examples/use-cases/bank/values-full-demo.yaml"
+reset
+ALSO_COMPOSE="$BANKFD" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE with the bank's values-full-demo.yaml: exits 0 and the platform installer runs once" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]" "rc=$rc $(tail -4 "$LOG/out")"
+check "the composed values keep every full demo list entry (the schedule, the memory caller, the bridge), every bank entry (agent, profile, caller) and this agent" "grep -q 'demo-brief' '$LOG/platform.values' && grep -q 'memory-canary' '$LOG/platform.values' && grep -q 'dispute-agent' '$LOG/platform.values' && grep -q 'disputes-desk' '$LOG/platform.values' && grep -q 'name: disputes' '$LOG/platform.values' && grep -q 'pod-rca' '$LOG/platform.values' && grep -q 'rca-desk' '$LOG/platform.values'"
+yq . "$LOG/platform.values" > "$TMP/composed-also.json"
+check "every entry name of every list of the full demo and of the bank file is still in the composed values (nothing was dropped by the order of composition)" "python3 -I - '$TMP/composed-also.json' '$FDLIST' '$ROOT/$BANKFD' <<'PY'
+import sys, json, subprocess
+comp = json.load(open(sys.argv[1]))
+def names(d, path=''):
+    out = set()
+    if isinstance(d, dict):
+        for k, v in d.items(): out |= names(v, path + '.' + k)
+    elif isinstance(d, list):
+        for e in d:
+            if isinstance(e, dict) and isinstance(e.get('name'), str): out.add(path + '[' + e['name'] + ']')
+            out |= names(e, path + '[]' if not (isinstance(e, dict) and isinstance(e.get('name'), str)) else path + '[' + e['name'] + ']')
+    return out
+have = names(comp)
+def merge(a, b):
+    if isinstance(a, dict) and isinstance(b, dict):
+        r = dict(a)
+        for k, v in b.items(): r[k] = merge(a[k], v) if k in a else v
+        return r
+    return b
+base = {}
+for f in sys.argv[2].split():
+    base = merge(base, json.loads(subprocess.check_output(['yq', '.', '$ROOT/' + f])))
+bank = json.loads(subprocess.check_output(['yq', '.', sys.argv[3]]))
+miss = sorted(n for d in (base, bank) for n in names(d) if n not in have)
+print(miss[:10]) if miss else None
+sys.exit(1 if miss else 0)
+PY"
+jq -c ". * $installer_keys" "$TMP/composed-also.json" > "$TMP/release-also.json"
+reset
+FAKE_HELM_VALUES="$(cat "$TMP/release-also.json")" ALSO_COMPOSE="$BANKFD" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a second run with the same ALSO_COMPOSE passes" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(cat "$TMP/release-also.json")" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "the release holds the bank and ALSO_COMPOSE is not given: refused, the bank's entries are named, and the message says to add its values-full-demo.yaml to ALSO_COMPOSE; nothing is installed" "[ $rc = 1 ] && grep -qF '.agents[dispute-agent]' '$LOG/out' && grep -qF 'add its values-full-demo.yaml to ALSO_COMPOSE' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+printf 'agents:\n  - name: dispute-agent\n    model: other\n    systemPrompt: x\n    tools: []\n' > "$TMP/clash2/values-full-demo.yaml" 2>/dev/null || { mkdir -p "$TMP/clash2"; printf 'agents:\n  - name: dispute-agent\n    model: other\n    systemPrompt: x\n    tools: []\n' > "$TMP/clash2/values-full-demo.yaml"; }
+ALSO_COMPOSE="$BANKFD $TMP/clash2/values-full-demo.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "two composed files that clash (the same agent name with other content) are refused by compose, and nothing is installed" "[ $rc = 1 ] && grep -q 'did not compose' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+ALSO_COMPOSE="$BANKFD" CLUSTER=oa-rca-demo run; rc=$?
+check "ALSO_COMPOSE without --beside-full-demo is refused" "[ $rc = 1 ] && grep -q 'beside-full-demo only' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+reset
+ALSO_COMPOSE="components/quickstart/values.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE takes values-full-demo.yaml files only: another file is refused" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml files' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+reset
+ALSO_COMPOSE="examples/use-cases/nope/values-full-demo.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a file of ALSO_COMPOSE that cannot be read is refused" "[ $rc = 1 ] && grep -q 'cannot read' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+
+echo "# the model keys of the quick start are ignored only in the default modes"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"models":[{"name":"quickstart-model","provider":"Anthropic"}],"stubModel":{"enabled":false}}}' "$TMP/release-default.json")" ANTHROPIC_API_KEY=$SECRET_KEY run --real-model; rc=$?
+check "default mode: the quickstart-model entry and stubModel.enabled that a provider key makes the installer set are not extras" "[ $rc = 0 ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"models":[{"name":"quickstart-model","provider":"Anthropic"}]}}' "$TMP/release-also.json")" ALSO_COMPOSE="$BANKFD" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "--beside-full-demo: a quickstart-model entry of the release that your list lacks is refused and named (a model choice would be lost)" "[ $rc = 1 ] && grep -qF '.gateway.models[quickstart-model]' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"stubModel":{"enabled":false}}}' "$TMP/release-also.json")" ALSO_COMPOSE="$BANKFD" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "--beside-full-demo: a stubModel.enabled of the release that your list lacks is refused and named" "[ $rc = 1 ] && grep -qF '.gateway.stubModel.enabled' '$LOG/out'"
 
 echo "# beside an installed bank: the bank is composed, never dropped"
 ROOT_UC="$HERE/../bank"

@@ -34,6 +34,8 @@
 #
 # Env: CLUSTER (REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER; k3d-<name> is accepted)  KUBECTL  HELM
 #      VALUES_FILE (--beside-full-demo only: the files of the install you have, space separated, relative to the repository root or absolute)
+#      ALSO_COMPOSE (--beside-full-demo only: the values-full-demo.yaml files of other use cases installed beside yours, composed by entry name after your
+#      list and before this agent's file; no detection: a use case you leave out is refused by the release check, which says to add it here)
 #      PLATFORM_INSTALL (the platform installer, default ./install.sh in the repository root; a test sets a fake)  COMPOSE (compose-values.sh)
 #      Any other variable of the platform installer (SKIP_*, AGENT_WAIT, STUB_SCENARIOS with --beside-full-demo, ...) goes through to it.
 set -euo pipefail
@@ -95,6 +97,7 @@ if [ "$REAL" = 1 ]; then
 fi
 [ "$BESIDE" = 0 ] || [ "$REAL" = 0 ] || die "--beside-full-demo keeps the model of your full demo: do not combine it with --real-model. Nothing was changed."
 [ "$BESIDE" = 0 ] || [ "$SKIP_PLATFORM" = 0 ] || die "--beside-full-demo runs the platform installer: do not combine it with --skip-platform. Nothing was changed."
+[ -z "${ALSO_COMPOSE:-}" ] || [ "$BESIDE" = 1 ] || die "ALSO_COMPOSE is for --beside-full-demo only. Nothing was changed."
 if [ "$BESIDE" = 1 ] && [ -z "${VALUES_FILE:-}" ]; then
   die "--beside-full-demo needs VALUES_FILE: the same list of files you installed the full demo with. Helm replaces the release values on every run, so a list that is missing would drop what it set. Nothing was changed."
 fi
@@ -120,7 +123,7 @@ release_values() { # prints the user-supplied values of the release as JSON, or 
 release_extras() { # release_extras <json file of the values this script will hand over>: prints the paths the release has and those values lack, one per line
   local rel; rel=$(release_values) || return 1
   [ -n "$rel" ] || return 0
-  printf '%s' "$rel" | jq -r --slurpfile exp "$1" '
+  printf '%s' "$rel" | jq -r --argjson beside "$BESIDE" --slurpfile exp "$1" '
     def flat($pre):
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
       elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
@@ -128,7 +131,7 @@ release_extras() { # release_extras <json file of the values this script will ha
     # the scenario file this script ships is software-org-rca.json: it is replaced without complaint when the release holds an earlier copy. A scenario.json (the
     # bank, or another use case) and any other file stay in the list, unless STUB_SCENARIOS gives them again (they are then in the expected values).
     ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
-    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$|^[.]gateway[.]stubModel[.]scenarios[.]files[.]software-org-rca[.]json$|^[.]gateway[.]models\\[quickstart-model\\]|^[.]gateway[.]stubModel[.]enabled$|^\\{\\}$")) | not))
+    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$|^[.]gateway[.]stubModel[.]scenarios[.]files[.]software-org-rca[.]json$|^\\{\\}$") or ($beside == 0 and test("^[.]gateway[.]models\\[quickstart-model\\]|^[.]gateway[.]stubModel[.]enabled$"))) | not))
     | .[]'
 }
 
@@ -154,7 +157,15 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     "$HELM" "${HELM_ARGS[@]}" "${VF_ARGS[@]}" > "$TMP/render.yours" 2>"$TMP/render.err" || { cat "$TMP/render.err" >&2; die "the chart does not render from your VALUES_FILE list as given (the reason is above). Nothing was changed."; }
     "$HELM" "${HELM_ARGS[@]}" -f "$VALUES_BASE" > "$TMP/render.merged" 2>"$TMP/render.err" || { cat "$TMP/render.err" >&2; die "the chart does not render from your merged values. Nothing was changed."; }
     cmp -s "$TMP/render.yours" "$TMP/render.merged" || die "your VALUES_FILE list does not merge into one file that renders the same (a later file of yours replaces a list the merge would join). I will not guess: add the agent by hand with your list and values-full-demo.yaml. Nothing was changed."
-    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
+    # The values-full-demo.yaml files of the other use cases that are installed beside yours (ALSO_COMPOSE, a space separated list) go AFTER your list and
+    # BEFORE this agent's file, composed by entry name. There is no detection: the release check below names what is missing when you leave one out.
+    ALSO=()
+    for f in ${ALSO_COMPOSE:-}; do
+      [ -r "$f" ] || die "cannot read $f (ALSO_COMPOSE is read from the repository root). Nothing was changed."
+      case "$(basename "$f")" in values-full-demo.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml files of other use cases, not $f. Nothing was changed." ;; esac
+      ALSO+=("$f")
+    done
+    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO[@]+"${ALSO[@]}"} "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install, the files of ALSO_COMPOSE and this agent do not fit together as they are. Nothing was changed."
   else
     say "composing the values (components/quickstart/values.yaml and examples/use-cases/software-org/values.yaml)"
     "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
@@ -180,7 +191,7 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
   if [ -n "$EXTRAS" ]; then
     LIST=$(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g')
     if [ "$BESIDE" = 1 ]; then
-      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list (and STUB_SCENARIOS) do not have: $LIST. The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files, and the same STUB_SCENARIOS (a directory with every scenario file), you installed with. Nothing was changed."
+      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list (and STUB_SCENARIOS) do not have: $LIST. The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files, and the same STUB_SCENARIOS (a directory with every scenario file), you installed with. If the release holds another use case (the bank, equipment), add its values-full-demo.yaml to ALSO_COMPOSE. Nothing was changed."
     else
       die "the release $RELEASE in $KUBE_CONTEXT has more than the quick start and this use case: $LIST. The platform installer would replace those values and drop them. Use a cluster of its own, or add the agent to your install with: VALUES_FILE=\"<your files>\" CLUSTER=<its cluster> $0 --beside-full-demo. Nothing was changed."
     fi

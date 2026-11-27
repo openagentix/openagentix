@@ -136,10 +136,10 @@ func rcaBuildCluster(t *testing.T) *rcaCluster {
 		switch name {
 		case "img-typo":
 			p.Status.Phase = corev1.PodPending
-			cs.State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image \"busybox:1.37-no-such-tag\""}}
-			events = []*corev1.Event{sched, ev("Normal", "Pulling", "Pulling image \"busybox:1.37-no-such-tag\"", -8, 3),
-				ev("Warning", "Failed", "Failed to pull image \"busybox:1.37-no-such-tag\": manifest unknown", -7, 3),
-				ev("Normal", "BackOff", "Back-off pulling image \"busybox:1.37-no-such-tag\"", -1, 20)}
+			cs.State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image \"registry.invalid/busybox:1.37-no-such-tag\""}}
+			events = []*corev1.Event{sched, ev("Normal", "Pulling", "Pulling image \"registry.invalid/busybox:1.37-no-such-tag\"", -8, 3),
+				ev("Warning", "Failed", "Failed to pull image \"registry.invalid/busybox:1.37-no-such-tag\": manifest unknown", -7, 3),
+				ev("Normal", "BackOff", "Back-off pulling image \"registry.invalid/busybox:1.37-no-such-tag\"", -1, 20)}
 		case "crash-start":
 			p.Status.Phase = corev1.PodRunning
 			cs.RestartCount = 5
