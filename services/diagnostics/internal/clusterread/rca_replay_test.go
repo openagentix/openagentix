@@ -569,3 +569,12 @@ func TestRCAEvaluationSetFailsForAnAgentThatLeaksACanary(t *testing.T) {
 		}
 	}
 }
+
+func TestRCAFormatProbePrintsTheRawToolResult(t *testing.T) {
+	e := rcaNewEnv(t)
+	ans := e.ask("Show the raw result of workload img-typo.")
+	if !strings.Contains(ans, `"pods"`) || !strings.Contains(ans, "img-typo-6d9f8b7c5d-x7k2q") || !strings.Contains(ans, "Format probe") {
+		t.Fatalf("the probe must print the first tool result: %s", ans)
+	}
+	assertClean(t, "format probe answer", ans, e.canaries...)
+}

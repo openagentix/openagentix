@@ -153,7 +153,7 @@ PY"
 check "the base64 and hex forms in the set are the forms of the canary prefix (three base64 alignments and hex)" "python3 -I -c 'import base64,binascii; p=b\"rcacanary\"; assert base64.b64encode(p).decode()==\"cmNhY2FuYXJ5\"; assert \"YWNhbmFy\" in base64.b64encode(b\"x\"+p).decode(); assert \"Y2FjYW5h\" in base64.b64encode(b\"xx\"+p).decode(); assert binascii.hexlify(p)[:10]==b\"7263616361\"'"
 
 echo "# the scenarios"
-check "the scenario file is JSON with seven scenarios (the six workloads and one that does not exist)" "[ \"\$(jq '.scenarios | length' '$SC')\" = 7 ]"
+check "the scenario file is JSON with eight scenarios (the six workloads, one that does not exist, and the format probe the live job prints)" "[ \"\$(jq '.scenarios | length' '$SC')\" = 8 ]"
 check "every scenario matches the agent prompt of values.yaml (the same marker)" "jq -r '.scenarios[].match.system' '$SC' | sort -u | wc -l | tr -d ' ' | grep -qx 1 && SYSRE=\"\$(jq -r '.scenarios[0].match.system' '$SC')\" PROMPT=\"\$PROMPT\" python3 -I -c 'import os,re,sys; sys.exit(0 if re.search(os.environ[\"SYSRE\"], os.environ[\"PROMPT\"]) else 1)'"
 jq -r '.scenarios[].steps[].tool' "$SC" | sort -u > "$T/scn.tools"
 check "every tool a scenario calls is a tool of the agent (by suffix)" "while read -r t; do printf '%s\n' \$TOOLS | grep -q \"_\$t\$\" || { echo \"missing \$t\"; exit 1; }; done < '$T/scn.tools'"
@@ -161,7 +161,7 @@ check "every scenario call is on rca-demo (no scenario reads a namespace of the 
 check "no scenario holds a canary, a URL, an address or a credential" "! grep -Eqi 'rcacanary|https?://|@|bearer|password|token' '$SC'"
 check "the scenarios use the log tool only after the pod and the events (no log before the status)" "jq -e 'all(.scenarios[]; ([.steps[].tool] | index(\"pods_log\")) as \$l | (\$l == null) or (\$l > ([.steps[].tool] | index(\"pods_get\"))))' '$SC' >/dev/null"
 check "every answer of every scenario says it is scripted by the stub model, or the stub adds that itself (the stub adds the label: the answers must not claim a model)" "! jq -r '.scenarios[].answers[].text' '$SC' | grep -Eqi 'as a language model'"
-check "every scenario has a last answer with no condition that says inconclusive (a state it did not expect is not guessed)" "jq -e 'all(.scenarios[]; (.answers[-1].when == null) and (.answers[-1].text | test(\"(?i)inconclusive\")))' '$SC' >/dev/null"
+check "every scenario has a last answer with no condition that says inconclusive (a state it did not expect is not guessed)" "jq -e 'all(.scenarios[] | select(.name != \"raw-result-probe\"); (.answers[-1].when == null) and (.answers[-1].text | test(\"(?i)inconclusive\")))' '$SC' >/dev/null"
 check "no answer claims that anything was changed" "! jq -r '.scenarios[].answers[].text' '$SC' | grep -Eqi '\\b(i|we) (restarted|deleted|fixed|scaled|patched|rolled back)\\b'"
 
 echo "# the evaluation set"

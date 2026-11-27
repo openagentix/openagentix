@@ -1,6 +1,27 @@
 {
   "scenarios": [
     {
+      "name": "raw-result-probe",
+      "match": {
+        "system": "(?i)you are the brambleworks pod root-cause agent",
+        "user": "(?i)\\braw result of workload (?P<w>[a-z-]+)\\b"
+      },
+      "steps": [
+        {
+          "tool": "pods_list_in_namespace",
+          "args": {
+            "namespace": "rca-demo",
+            "labelSelector": "app={{user.w}}"
+          }
+        }
+      ],
+      "answers": [
+        {
+          "text": "Format probe (scripted). The first tool result, as the agent runtime gave it to the model: {{result.0}}"
+        }
+      ]
+    },
+    {
       "name": "img-typo",
       "match": {
         "system": "(?i)you are the brambleworks pod root-cause agent",

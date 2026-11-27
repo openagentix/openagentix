@@ -47,7 +47,7 @@ ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; }
 check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "got '$2', want '$3'"; fi; }
 
-if [ -n "${RCA_OUT:-}" ]; then mkdir -p "$RCA_OUT"; TD=$RCA_OUT; KEEP=1; else TD=$(mktemp -d); KEEP=0; fi
+if [ -n "${RCA_OUT:-}" ]; then mkdir -p "$RCA_OUT"; TD=$(cd "$RCA_OUT" && pwd); KEEP=1; else TD=$(mktemp -d); KEEP=0; fi   # an absolute path: the build of oa-eval runs in another directory
 PF=""; REF=""
 cleanup() {
   [ -z "$PF" ] || kill "$PF" 2>/dev/null
@@ -96,6 +96,11 @@ if printf '%s' "$PROBE" | grep -qi 'is not offered to this agent'; then
   echo "       FINDING: the agent was not offered the cluster-read tools. The stub scenario says which tool is missing (above)."
   echo "       RemoteMCPServer: $($K get remotemcpserver -n "$KNS" "$RMS" -o yaml 2>/dev/null | grep -iE 'reason|message|discover|tool' | head -20 | tr '\n' ' ' | cut -c1-800)"
 fi
+# the wire format: what the agent runtime hands to the model as the result of a tool call. The scenario placeholders read fields of it, so a
+# different shape (for example the JSON of the tool inside a string) shows up as "<missing ...>" in the answers. The probe prints the raw result.
+FMT=$(ASK_SA=openagentix-system/rca-desk ASK_USER=sre:probe ASK_TIMEOUT=300 "$ROOT/hack/ask.sh" pod-rca "Show the raw result of workload img-typo." 2>&1)
+echo "       FORMAT PROBE: the first tool result as the model received it (first 1800 characters):"
+printf '%s\n' "$FMT" | grep -v '^$' | cut -c1-1800 | sed 's/^/       | /'
 sleep 3; audit_pull "$TD/audit.jsonl"
 echo "       audit lines so far, by tool: $(jq -rs 'group_by(.tool)|map("\(.[0].tool)=\(length)")|join(" ")' "$TD/audit.jsonl" 2>/dev/null)"
 echo "       one raw AUDIT line of the vMCP of the profile (to read its shape): $($K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROFILE" --all-containers --tail=-1 2>/dev/null | grep -m1 AUDIT | cut -c1-700)"
