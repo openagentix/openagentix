@@ -215,7 +215,13 @@ func (d *Domain) Handler() http.Handler {
 
 	// Approvals. Proposing from outside the pod needs a token; deciding always does.
 	mux.HandleFunc("GET /approvals", d.route("list_approvals", 200, func(w http.ResponseWriter, r *http.Request) (string, any, error) {
-		v, err := d.approvals.List(r.Context(), r.URL.Query().Get("status"), "")
+		subject := r.URL.Query().Get("case_id")
+		if subject != "" {
+			if err := validate(caseRe, "case_id", subject); err != nil {
+				return "", nil, err
+			}
+		}
+		v, err := d.approvals.List(r.Context(), r.URL.Query().Get("status"), subject)
 		return "", map[string]any{"approvals": v}, err
 	}))
 	mux.HandleFunc("POST /approvals", d.route("request_approval", 201, func(w http.ResponseWriter, r *http.Request) (string, any, error) {

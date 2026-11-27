@@ -26,6 +26,7 @@ case "$*" in
   *"get namespace mcp-tools"*) [ -f "$FAKE_LOG/ns_mcp" ] && exit 0 || exit 1 ;;
   *"create namespace fernvale-records"*) : > "$FAKE_LOG/ns" ;;
   *"create namespace mcp-tools"*) : > "$FAKE_LOG/ns_mcp" ;;
+  *"get namespace kestrel-records"*) [ -n "${FAKE_NO_COMPANION_NS:-}" ] && exit 1 || exit 0 ;;
   *"get namespace openagentix-knowledge"*) exit 0 ;;
   *"get agents.api.kagent.dev dispute-agent"*) [ -z "${FAKE_NO_AGENT:-}" ] && exit 0 || exit 1 ;;
   *"get virtualmcpservers.toolhive.stacklok.dev tools-disputes"*) printf %s "${FAKE_CODEMODE:-false}"; exit 0 ;;
@@ -70,6 +71,9 @@ cat > "$BIN/platform-install" <<'EOF'
 #!/usr/bin/env bash
 echo "platform-install CLUSTER=${CLUSTER:-} KUBE_CONTEXT=${KUBE_CONTEXT:-} PROFILE=${PROFILE:-} STUB_SCENARIOS=${STUB_SCENARIOS:-} ANTHROPIC=${ANTHROPIC_API_KEY:+set} MODEL_NAME=${MODEL_NAME:-}" >> "$FAKE_LOG/calls"
 [ -z "${VALUES_FILE:-}" ] || cp "$VALUES_FILE" "$FAKE_LOG/platform-values.yaml"
+if [ -n "${STUB_SCENARIOS:-}" ]; then
+  if [ -d "$STUB_SCENARIOS" ]; then ls "$STUB_SCENARIOS" > "$FAKE_LOG/scenario-files"; else basename "$STUB_SCENARIOS" > "$FAKE_LOG/scenario-files"; fi
+fi
 exit 0
 EOF
 chmod +x "$BIN"/*
@@ -158,6 +162,20 @@ reset
 SKIP_BUILD=1 RECORDS_IMAGE='x#y&z' run; rc=$?
 check "an image name with sed or shell characters is refused" "[ $rc = 1 ] && grep -q 'not allowed in an image reference' '$LOG/out' && ! grep -q 'apply -f -' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 
+echo "# the name of the full demo cluster is never reached by a default run"
+reset
+CLUSTER=openagentix run; rc=$?
+check "the cluster openagentix (the full demo cluster) is refused without --beside-full-demo, before any call" "[ $rc = 1 ] && grep -q 'full demo' '$LOG/out' && grep -q -- '--beside-full-demo' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
+reset
+CLUSTER="" KUBE_CONTEXT=kind-openagentix run; rc=$?
+check "the same by KUBE_CONTEXT" "[ $rc = 1 ] && grep -q 'full demo' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
+reset
+CLUSTER=openagentix run --uninstall; rc=$?
+check "--uninstall and --skip-platform on that cluster are refused too" "[ $rc = 1 ] && grep -q 'full demo' '$LOG/out' && [ ! -s '$LOG/calls' ]"
+reset
+CLUSTER=openagentix run --skip-platform; rc=$?
+check "--skip-platform on that cluster is refused" "[ $rc = 1 ] && grep -q 'full demo' '$LOG/out' && [ ! -s '$LOG/calls' ]"
+
 echo "# a new cluster is made when none of that name exists"
 reset
 FAKE_NOCTX=1 run; rc=$?
@@ -188,6 +206,23 @@ check "a missing helm stops the install (it is not read as: no release), before 
 reset
 FAKE_HELM_ERR=1 run; rc=$?
 check "a helm failure that only contains the words not found is not read as: no release, the install stops before any change" "[ $rc = 1 ] && grep -q 'cannot read the values of the release' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+
+echo "# the equipment use case is installed beside this one (it is composed, not refused or dropped)"
+reset
+RT="$(cd "$HERE/../../.." && pwd)"
+bash "$RT/hack/compose-values.sh" "$RT/components/quickstart/values.yaml" "$HERE/values.yaml" "$RT/examples/use-cases/equipment/values.yaml" 2>/dev/null | yq . > "$TMP/expected-both.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"fernvale dispute desk agent","equipment.json":"Kestrel Valley service desk agent"}}}}}' "$TMP/expected-both.json" > "$LOG/release.json"
+run; rc=$?
+check "a release that holds the bank and the equipment use case is updated with both: no refusal, both agents, both scenario files" "[ $rc = 0 ] && yq -e '([.agents[].name] | sort == [\"dispute-agent\",\"service-agent\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"])' '$LOG/platform-values.yaml' >/dev/null && [ \"\$(tr '\n' ' ' < '$LOG/scenario-files')\" = 'equipment.json scenario.json ' ]" "exit $rc: $(tail -4 "$LOG/out")"
+reset
+cp "$TMP/release-ok.json" "$LOG/release.json" 2>/dev/null; jq '. * {"mcp":{"endpoints":[{"name":"records"},{"name":"dealer-records"}]}}' "$LOG/release.json" > "$LOG/release2.json" && mv "$LOG/release2.json" "$LOG/release.json"
+FAKE_NO_COMPANION_NS=1 run; rc=$?
+check "the equipment endpoint in the release but no namespace kestrel-records: refused before any change, with a pointer to the equipment install" "[ $rc = 1 ] && grep -q 'kestrel-records' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+check "the same refusal says how to get out: take the equipment use case out of the release by running the platform installer again without its values, and points at the README" "grep -q 'or take it out of the release' '$LOG/out' && grep -q 'Uninstall one of two use cases' '$LOG/out' && grep -q 'PROFILE=quickstart VALUES_FILE=' '$LOG/out'"
+reset
+cp "$TMP/release-ok.json" "$LOG/release.json" 2>/dev/null
+run; rc=$?
+check "without the equipment use case in the release the scenario stays the single file scenario.json" "[ $rc = 0 ] && [ \"\$(cat '$LOG/scenario-files')\" = 'scenario.json' ]" "exit $rc: $(tail -3 "$LOG/out")"
 
 echo "# a Secret read that fails is not a Secret that is absent"
 reset; : > "$LOG/ns"; : > "$LOG/ns_mcp"; : > "$LOG/secret_a"; : > "$LOG/secret_t"; : > "$LOG/secret_e"; : > "$LOG/secret_m"
@@ -263,6 +298,38 @@ reset
 printf 'agents:\n  - name: dispute-agent\n    model: other\n' > "$TMP/vf/clash.yaml"
 VALUES_FILE="$TMP/vf/clash.yaml" run --beside-full-demo; rc=$?
 check "an agent of your own with the same name and other content is refused by the composer, nothing installed" "[ $rc = 1 ] && grep -q 'did not compose' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+
+echo "# two use cases beside a full demo: ALSO_COMPOSE lists the other use case's values-full-demo.yaml"
+reset
+RT="$(cd "$HERE/../../.." && pwd)"
+OTHER_FD="$RT/examples/use-cases/equipment/values-full-demo.yaml"
+mkdir -p "$TMP/af"; printf 'agents:\n  - name: assistant\n    model: claude-haiku\nmcp:\n  virtual: {codeMode: {enabled: true}}\n' > "$TMP/af/one.yaml"; printf 'schedules:\n  - name: nightly\n    agent: assistant\n    schedule: "0 1 * * *"\n    prompt: hi\n' > "$TMP/af/two.yaml"
+{ yq . "$TMP/af/one.yaml"; yq . "$TMP/af/two.yaml"; } | jq -s 'reduce .[] as $x ({}; . * $x)' > "$TMP/af/user.json"
+bash "$RT/hack/compose-values.sh" -o "$TMP/af/release.yaml" "$TMP/af/user.json" "$OTHER_FD" 2>/dev/null
+yq . "$TMP/af/release.yaml" > "$TMP/af/release.json"
+cp "$TMP/af/release.json" "$LOG/release.json"
+VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "a full demo release that also holds the other use case is refused without ALSO_COMPOSE, naming what would be lost and telling to add its values-full-demo.yaml to ALSO_COMPOSE, before any change" "[ $rc = 1 ] && grep -q 'service-agent' '$LOG/out' && grep -q 'add its values-full-demo.yaml to ALSO_COMPOSE' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" ANTHROPIC_API_KEY=keep-me run --beside-full-demo; rc=$?
+check "with ALSO_COMPOSE the install passes" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+check "the composed values keep every entry of the full demo list and of the other use case, and add this one: agents, schedules, endpoints, profiles, callers, code mode" "yq -e '([.agents[].name] | sort == [\"assistant\",\"dispute-agent\",\"service-agent\"]) and ([.schedules[].name] | sort == [\"deadline-sweep\",\"fleet-sweep\",\"nightly\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"]) and ([.mcp.profiles[].name] | sort == [\"dealer\",\"disputes\"]) and ([.governance.a2a.callers[].name] | sort == [\"disputes-desk\",\"service-desk\"]) and .mcp.virtual.codeMode.enabled == true' '$LOG/platform-values.yaml' >/dev/null" "$(yq -c '[.agents[].name, .schedules[].name, .mcp.endpoints[].name]' "$LOG/platform-values.yaml" 2>&1)"
+check "the other use case's entry is composed before this one's: the other agent comes first in the agents list, then this one" "[ \"\$(yq -r '[.agents[].name] | index(\"service-agent\") < index(\"dispute-agent\")' '$LOG/platform-values.yaml')\" = true ]"
+check "your provider key stays and no scenario file is set" "grep -q 'platform-install .*PROFILE= STUB_SCENARIOS= ANTHROPIC=set' '$LOG/calls'"
+yq . "$LOG/platform-values.yaml" > "$TMP/af/release2.json"
+reset; cp "$TMP/af/release2.json" "$LOG/release.json"
+ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "a second run on the release it made passes" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+reset
+ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml" run; rc=$?
+check "ALSO_COMPOSE without --beside-full-demo is refused before any call" "[ $rc = 1 ] && grep -q 'ALSO_COMPOSE' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
+reset
+ALSO_COMPOSE="$TMP/af/missing.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
+check "an ALSO_COMPOSE file that cannot be read is refused before any change" "[ $rc = 1 ] && grep -q 'cannot read' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+printf 'agents:\n  - name: dispute-agent\n    model: other\n' > "$TMP/af/clash.yaml"
+ALSO_COMPOSE="$TMP/af/clash.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
+check "a name that clashes between the composed files (same agent name, other content) is refused by the composer, nothing installed" "[ $rc = 1 ] && grep -q 'did not compose' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 
 echo "# checks on the platform after the install"
 reset

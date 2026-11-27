@@ -34,6 +34,8 @@
 #      you report it.
 #
 # Env: CLUSTER (kind cluster name, REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  HELM  DOCKER  KIND
+#      ALSO_COMPOSE="<file> <file>" (--beside-full-demo only: the values-full-demo.yaml of other use cases installed beside the same full demo, composed after your list and before
+#      this use case's own file; without it a release that holds such a use case is refused, naming what would be lost)
 #      VALUES_FILE (--beside-full-demo only: the files of the install you have, space separated, relative to the repository root or absolute)
 #      PLATFORM_INSTALL (the platform installer, default ./install.sh in the repository root; a test sets a fake)  COMPOSE (compose-values.sh)
 #      KB_INGEST, KB_GRAPH_LOAD (the two hack scripts)  SKIP_BUILD=1 (use RECORDS_IMAGE as it is)  RECORDS_IMAGE
@@ -87,6 +89,15 @@ for arg in "$@"; do
   esac
 done
 
+# The name of the full demo cluster: a default run must never reach it. Only --beside-full-demo says "yes, this is my full demo cluster".
+if [ "$KUBE_CONTEXT" = "kind-openagentix" ] && [ "$BESIDE" != 1 ]; then
+  die "KUBE_CONTEXT is '$KUBE_CONTEXT', the name of a full demo cluster. This script does not act on it unless you give --beside-full-demo (and the VALUES_FILE list you installed the full demo with). For a cluster of its own use another name, for example CLUSTER=oa-bank-demo. Nothing was changed."
+fi
+
+if [ -n "${ALSO_COMPOSE:-}" ] && [ "$BESIDE" != 1 ]; then
+  die "ALSO_COMPOSE is set, but it only works with --beside-full-demo (it lists the values-full-demo.yaml of other use cases that are installed beside your full demo). Nothing was changed."
+fi
+
 if [ "$MODE" = uninstall ]; then
   say "removing the bank use case objects from $KUBE_CONTEXT (the chart values stay: install the platform again without values.yaml and without STUB_SCENARIOS to remove the agent, the profile, the endpoint and the scenarios)"
   "${KC[@]}" delete configmap bank-scenarios -n agentgateway-system --ignore-not-found   # made by the first version of this script (a kubectl patch); the chart now ships the scenarios
@@ -132,7 +143,7 @@ release_values() { # prints the user-supplied values of the release as JSON, or 
 release_extras() { # release_extras <json file of the values this script will hand over>: prints the paths the release has and those values lack, one per line
   local rel; rel=$(release_values) || return 1
   [ -n "$rel" ] || return 0
-  printf '%s' "$rel" | jq -r --slurpfile exp "$1" '
+  printf '%s' "$rel" | jq -r --argjson comp "${COMPANION:-0}" --slurpfile exp "$1" '
     def flat($pre):
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
       elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
@@ -140,14 +151,27 @@ release_extras() { # release_extras <json file of the values this script will ha
     # the one scenario file this script ships is named scenario.json; it is replaced without complaint only when the release holds an earlier copy of it (it names
     # the dispute desk agent). A scenario.json of another use case, and any other file, stay in the list.
     (if ((.gateway.stubModel.scenarios.files["scenario.json"] // "") | test("fernvale dispute desk agent"; "i")) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]scenario[.]json$" else "^$" end) as $mine
+    # the equipment use case ships equipment.json; when it is installed beside this one (COMPANION=1) this script passes it again, so it is not a loss
+    | (if ($comp == 1 and ((.gateway.stubModel.scenarios.files["equipment.json"] // "") | test("kestrel valley service desk agent"; "i"))) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]equipment[.]json$" else "^$" end) as $companion
     | ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
-    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine)) | not))
+    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine) or test($companion)) | not))
     | .[]'
 }
 
 # ---- 1. compose the values (local work only: nothing in the cluster has changed yet) --------------------------------------------
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 VALUES_COMPOSED="$TMP/bank-values.yaml"; VALUES_BASE="$TMP/your-values.yaml"
+SCENARIOS="$HERE/eval/scenario.json"
+# The equipment use case (examples/use-cases/equipment) can run on the same platform install. When the release already holds its endpoint (dealer-records), this
+# script composes its values and its scenario file too, instead of refusing or dropping them: the platform installer replaces the release values on every run.
+COMPANION=0
+if [ "$SKIP_PLATFORM" != 1 ] && [ "$BESIDE" != 1 ]; then
+  REL_NOW=$(release_values) || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
+  if [ -n "$REL_NOW" ] && printf '%s' "$REL_NOW" | jq -e '[.mcp.endpoints[]?.name] | index("dealer-records")' >/dev/null 2>&1; then
+    "${KC[@]}" get namespace kestrel-records >/dev/null 2>&1 || die "the release holds the equipment use case (endpoint dealer-records) but the namespace kestrel-records is missing in $KUBE_CONTEXT. Install it again with examples/use-cases/equipment/install.sh, or take it out of the release. The other use case's chart values are still in the release. To take them out, run the platform installer again without them: compose the quick start and this use case (hack/compose-values.sh -o /tmp/values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml) and run PROFILE=quickstart VALUES_FILE=/tmp/values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh. See the README, \"Uninstall one of two use cases\". Nothing was changed."
+    COMPANION=1
+  fi
+fi
 if [ "$SKIP_PLATFORM" != 1 ]; then
   if [ "$BESIDE" = 1 ]; then
     say "composing the values: your list ($VALUES_FILE) first, then examples/use-cases/bank/values-full-demo.yaml (the endpoint, the profile disputes, the agent dispute-agent, the sweep and the caller)"
@@ -168,10 +192,27 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     "$HELM" "${HELM_ARGS[@]}" "${VF_ARGS[@]}" > "$TMP/render.yours" 2>"$TMP/render.err" || { cat "$TMP/render.err" >&2; die "the chart does not render from your VALUES_FILE list as given (the reason is above). Nothing was changed."; }
     "$HELM" "${HELM_ARGS[@]}" -f "$VALUES_BASE" > "$TMP/render.merged" 2>"$TMP/render.err" || { cat "$TMP/render.err" >&2; die "the chart does not render from your merged values. Nothing was changed."; }
     cmp -s "$TMP/render.yours" "$TMP/render.merged" || die "your VALUES_FILE list does not merge into one file that renders the same (a later file of yours replaces a list the merge would join). I will not guess: add the agent by hand with your list and values-full-demo.yaml. Nothing was changed."
-    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
+    # Other use cases that are installed beside the same full demo (ALSO_COMPOSE="<file> <file>", the values-full-demo.yaml of each, relative to the repository
+    # root or absolute) are composed by entry name AFTER your list and BEFORE this use case's own file, so that the release keeps all of them: the platform
+    # installer replaces the release values on every run. A name or a security key that clashes between the files is refused, as always.
+    ALSO_FILES=()
+    for f in ${ALSO_COMPOSE:-}; do
+      [ -r "$f" ] || die "cannot read $f (ALSO_COMPOSE is read from the repository root). Nothing was changed."
+      ALSO_FILES+=("$f")
+    done
+    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO_FILES[@]+"${ALSO_FILES[@]}"} "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
   else
-    say "composing the values (components/quickstart/values.yaml and examples/use-cases/bank/values.yaml)"
-    "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+    if [ "$COMPANION" = 1 ]; then
+      say "the equipment use case is installed beside this one: composing the values of the quick start, this use case and the equipment use case, and passing both scenario files (scenario.json and equipment.json)"
+      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" "$ROOT/examples/use-cases/equipment/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+      mkdir "$TMP/scenarios"
+      cp "$HERE/eval/scenario.json" "$TMP/scenarios/scenario.json"
+      cp "$ROOT/examples/use-cases/equipment/eval/scenario.json" "$TMP/scenarios/equipment.json"
+      SCENARIOS="$TMP/scenarios"
+    else
+      say "composing the values (components/quickstart/values.yaml and examples/use-cases/bank/values.yaml)"
+      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+    fi
   fi
 fi
 
@@ -183,7 +224,7 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
   EXTRAS=$(release_extras "$EXP_FILE") || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
   if [ -n "$EXTRAS" ]; then
     if [ "$BESIDE" = 1 ]; then
-      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list does not have: $(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g'). The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files you installed with. Nothing was changed."
+      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list does not have: $(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g'). The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files you installed with. If the extra belongs to another use case that is installed beside the same full demo, add its values-full-demo.yaml to ALSO_COMPOSE, for example ALSO_COMPOSE=\"examples/use-cases/equipment/values-full-demo.yaml\". Nothing was changed."
     else
       die "the release $RELEASE in $KUBE_CONTEXT has more than the quick start and this use case: $(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g'). The platform installer would replace those values and drop them. Use a cluster of its own, or add the agent to your install with: VALUES_FILE=\"<your files>\" CLUSTER=<its cluster> $0 --beside-full-demo. Nothing was changed."
     fi
@@ -269,7 +310,7 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
   else
     say "platform install, offline: the stub model with the scenarios of eval/scenario.json (a run with them is SCRIPTED, not the behaviour of a model)"
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u GOOGLE_API_KEY -u MODEL_BASE_URL -u MODEL_NAME -u MODEL_PROVIDER -u MODEL_API_KEY \
-      CLUSTER="$CLUSTER" KUBE_CONTEXT="$KUBE_CONTEXT" PROFILE=quickstart VALUES_FILE="$VALUES_COMPOSED" STUB_SCENARIOS="$HERE/eval/scenario.json" "$PLATFORM_INSTALL"
+      CLUSTER="$CLUSTER" KUBE_CONTEXT="$KUBE_CONTEXT" PROFILE=quickstart VALUES_FILE="$VALUES_COMPOSED" STUB_SCENARIOS="$SCENARIOS" "$PLATFORM_INSTALL"
   fi
 fi
 

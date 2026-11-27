@@ -126,6 +126,8 @@ Flow of a service event:
    Only then are the order, the claim and the notice queued in the outbox, the stock taken from the dealer, and the
    slot confirmed.
 
+The use case that runs it is `examples/use-cases/equipment` (the agent, the install, the evaluation set). `GET /approvals` takes `status` and `case_id` filters, so a check can ask whether one case has a request.
+
 Rules the record enforces, whatever the agent says:
 
 | Rule | How |

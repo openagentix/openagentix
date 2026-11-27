@@ -3,6 +3,7 @@ package core
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -37,6 +38,12 @@ func IsLoopback(r *http.Request) bool {
 // Wrap refuses cross-origin browser writes and rate limits every write per host.
 func (g *RESTGuard) Wrap(next http.Handler) http.Handler {
 	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// url.URL.Query() drops a pair with a raw semicolon (or a bad escape) and its error, so a filter would silently become "no filter" and a route
+		// would list every row. A query that does not parse is refused here, before any route sees it.
+		if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
+			WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "the query string is not valid (a raw semicolon or a bad escape)"})
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && !g.writes.Allow(Host(r)) {
 			WriteJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many writes from this host; try again in a minute"})
 			return

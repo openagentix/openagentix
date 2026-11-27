@@ -108,6 +108,8 @@ jobs:
       - run: charts/openagentix/tests/run.sh
       - name: bank use case values and seed tests
         run: examples/use-cases/bank/tests/run.sh
+      - name: equipment use case values, seed and composition tests
+        run: examples/use-cases/equipment/tests/run.sh
       - name: software-org use case values, manifests, scenario and evaluation set tests
         run: examples/use-cases/software-org/tests/run.sh
 
@@ -163,6 +165,8 @@ jobs:
           examples/use-cases/bank/tests/install-test.sh
           examples/use-cases/software-org/tests/install-test.sh
           examples/use-cases/bank/tests/live-guard-test.sh
+          examples/use-cases/equipment/tests/install-test.sh
+          examples/use-cases/equipment/tests/live-guard-test.sh
       - name: reference docs tests
         run: |
           pip install --quiet pyyaml==6.0.2 jsonschema==4.26.0

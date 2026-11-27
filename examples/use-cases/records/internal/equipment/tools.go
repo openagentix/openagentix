@@ -47,44 +47,44 @@ type caseResult struct {
 	Case caseOut `json:"case"`
 }
 type caseIn struct {
-	CaseID string `json:"case_id" jsonschema:"case id like SVC-2026-0042"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 }
 type listCasesIn struct {
-	DueWithinDays int `json:"due_within_days,omitempty" jsonschema:"only cases whose response deadline is within this many days (0 means any)"`
+	DueWithinDays int `json:"due_within_days,omitempty" jsonschema:"only cases whose response deadline is within this many days, 0 to 400 (0 means any)"`
 	Limit         int `json:"limit,omitempty" jsonschema:"1 to 50, default 20"`
 }
 type listCasesOut struct {
 	Cases []caseOut `json:"cases"`
 }
 type machineIn struct {
-	Serial string `json:"serial" jsonschema:"machine serial like KH4120-00317"`
+	Serial string `json:"serial" jsonschema:"machine serial: two capital letters, two to four digits, a dash, five digits, like KH4120-00317"`
 }
 type telemetryIn struct {
-	Serial string `json:"serial"`
+	Serial string `json:"serial" jsonschema:"machine serial: two capital letters, two to four digits, a dash, five digits, like KH4120-00317"`
 	Days   int    `json:"days,omitempty" jsonschema:"1 to 30, default 14"`
 }
 type telemetryOut struct {
 	Days []DayPoint `json:"days"`
 }
 type warrantyIn struct {
-	Serial    string `json:"serial"`
-	FaultCode string `json:"fault_code,omitempty" jsonschema:"fault code like E-317; leave empty to check the machine only"`
+	Serial    string `json:"serial" jsonschema:"machine serial: two capital letters, two to four digits, a dash, five digits, like KH4120-00317"`
+	FaultCode string `json:"fault_code,omitempty" jsonschema:"fault code: E- and three digits, like E-317; leave empty to check the machine only"`
 }
 type codeIn struct {
-	Code string `json:"code" jsonschema:"fault code like E-317"`
+	Code string `json:"code" jsonschema:"fault code: E- and three digits, like E-317"`
 }
 type partIn struct {
-	PartID string `json:"part_id" jsonschema:"part id like P-10361"`
+	PartID string `json:"part_id" jsonschema:"part id: P- and five digits, like P-10361"`
 }
 type stockIn struct {
-	CaseID string `json:"case_id"`
-	PartID string `json:"part_id"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	PartID string `json:"part_id" jsonschema:"part id: P- and five digits"`
 }
 type stockOut struct {
 	Stock []StockRow `json:"stock"`
 }
 type slotsIn struct {
-	CaseID string `json:"case_id"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"1 to 50, default 20"`
 }
 type slotsOut struct {
@@ -95,31 +95,31 @@ type trendsOut struct {
 	Trends []Trend `json:"trends"`
 }
 type proactiveIn struct {
-	Serial string `json:"serial"`
-	Reason string `json:"reason" jsonschema:"why the sweep flags this machine, up to 500 characters"`
+	Serial string `json:"serial" jsonschema:"machine serial: two capital letters, two to four digits, a dash, five digits, like KH4120-00317"`
+	Reason string `json:"reason" jsonschema:"why the sweep flags this machine, 1 to 500 characters, plain text"`
 }
 type diagnosisIn struct {
-	CaseID string `json:"case_id"`
-	Cause  string `json:"cause" jsonschema:"the likely cause, up to 200 characters"`
-	Text   string `json:"text,omitempty" jsonschema:"the reasoning and the manual section, up to 1000 characters"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	Cause  string `json:"cause" jsonschema:"the likely cause, required, 1 to 200 characters, plain text (a newline and a tab are allowed, other control characters are not)"`
+	Text   string `json:"text,omitempty" jsonschema:"the reasoning and the manual section, 0 to 1000 characters, plain text"`
 }
 type workOrderIn struct {
-	CaseID  string `json:"case_id"`
-	Summary string `json:"summary" jsonschema:"what the technician must do, up to 1000 characters"`
+	CaseID  string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	Summary string `json:"summary" jsonschema:"what the technician must do, required, 1 to 1000 characters, plain text"`
 }
 type workOrderOut struct {
 	WorkOrder WorkOrder `json:"work_order"`
 }
 type partsOrderIn struct {
-	CaseID     string `json:"case_id"`
-	PartID     string `json:"part_id" jsonschema:"the part to order; a superseded part is refused, order its replacement"`
-	Qty        int    `json:"qty" jsonschema:"1 to 20"`
-	FromDealer string `json:"from_dealer" jsonschema:"dealer id like D-403 that has the quantity in stock"`
-	Body       string `json:"body" jsonschema:"the order draft text, up to 4000 characters"`
+	CaseID     string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	PartID     string `json:"part_id" jsonschema:"the part to order, P- and five digits; a superseded part is refused (the refusal names its replacement), order the replacement"`
+	Qty        int    `json:"qty" jsonschema:"whole number, 1 to 20"`
+	FromDealer string `json:"from_dealer" jsonschema:"dealer id: D- and three digits, like D-403, that has the quantity in stock"`
+	Body       string `json:"body" jsonschema:"the order draft text, required, 1 to 4000 characters, plain text"`
 }
 type bodyIn struct {
-	CaseID string `json:"case_id"`
-	Body   string `json:"body" jsonschema:"the draft text, up to 4000 characters"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	Body   string `json:"body" jsonschema:"the draft text, required, 1 to 4000 characters, plain text"`
 }
 type draftOut struct {
 	DraftID string `json:"draft_id"`
@@ -127,30 +127,30 @@ type draftOut struct {
 	Status  string `json:"status"`
 }
 type slotIn struct {
-	CaseID string `json:"case_id"`
-	SlotID string `json:"slot_id" jsonschema:"a free slot id like SLT-0003 at the case's dealer"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	SlotID string `json:"slot_id" jsonschema:"a free slot id: SLT- and four digits, like SLT-0003, at the case's dealer"`
 }
 type slotOut struct {
 	Slot Slot `json:"slot"`
 }
 type timerIn struct {
-	CaseID string `json:"case_id"`
-	Name   string `json:"name" jsonschema:"lowercase name like dealer_response or claim_window"`
-	DueAt  string `json:"due_at" jsonschema:"RFC 3339 time, in the future"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	Name   string `json:"name" jsonschema:"lowercase letters and underscores only, like dealer_response or claim_window; at most 20 timers per case"`
+	DueAt  string `json:"due_at" jsonschema:"RFC 3339 time with a zone, like 2026-12-04T10:00:00Z, after now and within 400 days"`
 }
 type timerOut struct {
 	Timer core.Timer `json:"timer"`
 }
 type escalateIn struct {
-	CaseID string `json:"case_id"`
-	Reason string `json:"reason" jsonschema:"why a person must take this, up to 500 characters"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	Reason string `json:"reason" jsonschema:"why a person must take this, required, 1 to 500 characters, plain text"`
 }
 type approvalIn struct {
-	CaseID string `json:"case_id"`
-	Kind   string `json:"kind" jsonschema:"parts_order_with_claim when the warranty check says covered, otherwise parts_order"`
+	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
+	Kind   string `json:"kind" jsonschema:"exactly one of parts_order_with_claim (the warranty check says covered) or parts_order (it does not); any other value is refused"`
 }
 type approvalGetIn struct {
-	ApprovalID string `json:"approval_id" jsonschema:"approval id like APR-0007"`
+	ApprovalID string `json:"approval_id" jsonschema:"approval id: APR- and at least four digits, like APR-0007"`
 }
 type approvalOut struct {
 	Approval approvalView `json:"approval"`

@@ -1,0 +1,27 @@
+# Hand-written facts for the Kestrel Valley service desk graph. Everything here is invented. Load with hack/kb-graph-load.sh (no model is used):
+#   hack/kb-graph-load.sh kestrel-service kestrel-fleet examples/use-cases/equipment/seed/graph/service-facts.yaml
+# The machines, parts and dealers match the synthetic data of examples/use-cases/records (equipment domain).
+source_uri: https://example.com/kestrel/service-graph
+entities:
+  - {name: Machine KH4120-00317, type: product, aliases: [KH4120-00317], description: "A KH 4120 combine with a rising coolant temperature"}
+  - {name: Machine KH4120-00310, type: product, aliases: [KH4120-00310], description: "A KH 4120 combine whose coolant sensor reading spikes and returns to normal"}
+  - {name: Model KH 4120, type: product, aliases: [KH-4120], description: "Combine harvester, warranty 24 months or 1500 hours"}
+  - {name: Part P-10006, type: product, aliases: [P-10006], description: "Early thermostat. Superseded: do not order"}
+  - {name: Part P-10361, type: product, aliases: [P-10361], description: "Thermostat that replaces P-10006"}
+  - {name: Service Bulletin SB-2026-011, type: event, description: "Coolant temperature fault E-317 on the KH 4120"}
+  - {name: Service Bulletin SB-2026-014, type: event, description: "Loose coolant sensor connector, fault E-345"}
+  - {name: Fault E-317, type: concept, aliases: [E-317], description: "Coolant temperature high"}
+  - {name: Fault E-345, type: concept, aliases: [E-345], description: "Coolant temperature sensor signal erratic. A wear item, not a warranty item"}
+  - {name: Copperton Machinery, type: organization, aliases: [D-403], description: "Dealer that holds P-10361 when the nearer dealers do not"}
+  - {name: Dealer manager, type: person, description: "Role dealer-manager: the only role that approves an order, a claim, a notice or a slot"}
+relations:
+  - {source: Machine KH4120-00317, predicate: is_of_model, target: Model KH 4120}
+  - {source: Machine KH4120-00310, predicate: is_of_model, target: Model KH 4120}
+  - {source: Machine KH4120-00317, predicate: has_fitted_part, target: Part P-10006}
+  - {source: Part P-10006, predicate: superseded_by, target: Part P-10361}
+  - {source: Service Bulletin SB-2026-011, predicate: concerns_part, target: Part P-10006}
+  - {source: Service Bulletin SB-2026-011, predicate: covers_fault, target: Fault E-317}
+  - {source: Service Bulletin SB-2026-014, predicate: covers_fault, target: Fault E-345}
+  - {source: Machine KH4120-00317, predicate: had_fault, target: Fault E-317}
+  - {source: Machine KH4120-00310, predicate: had_fault, target: Fault E-345}
+  - {source: Copperton Machinery, predicate: stocks, target: Part P-10361}

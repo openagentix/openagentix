@@ -1,0 +1,525 @@
+{
+  "scenarios": [
+    {
+      "name": "equipment-covered-fault",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0001)\\b"
+      },
+      "steps": [
+        {
+          "tool": "get_case",
+          "args": {
+            "case_id": "{{user.id}}"
+          }
+        },
+        {
+          "tool": "get_machine",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}"
+          }
+        },
+        {
+          "tool": "get_fault_code",
+          "args": {
+            "code": "{{result.0.output.case.fault_code}}"
+          }
+        },
+        {
+          "tool": "check_warranty",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}",
+            "fault_code": "{{result.0.output.case.fault_code}}"
+          }
+        },
+        {
+          "tool": "get_part",
+          "args": {
+            "part_id": "{{result.2.output.part_id}}"
+          }
+        },
+        {
+          "tool": "get_stock",
+          "args": {
+            "case_id": "{{user.id}}",
+            "part_id": "{{result.4.output.superseded_by}}"
+          }
+        },
+        {
+          "tool": "get_telemetry",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}",
+            "days": 14
+          }
+        },
+        {
+          "tool": "kb_search",
+          "args": {
+            "query": "Service bulletin coolant temperature high E-317 thermostat superseded part",
+            "collection": "kestrel-service",
+            "top_k": 3
+          }
+        },
+        {
+          "tool": "kb_search",
+          "args": {
+            "query": "warranty policy: when a machine is covered and what a warranty claim needs",
+            "collection": "kestrel-service",
+            "top_k": 3
+          }
+        },
+        {
+          "tool": "kb_graph_search",
+          "args": {
+            "query": "{{result.0.output.case.serial}} fitted part superseded",
+            "collection": "kestrel-service"
+          }
+        },
+        {
+          "tool": "set_diagnosis",
+          "args": {
+            "case_id": "{{user.id}}",
+            "cause": "{{result.2.output.first_cause}}",
+            "text": "Fault {{result.0.output.case.fault_code}}: {{result.2.output.description}}. The telematics of the last 14 days shows the coolant temperature rising. Bulletin: {{result.7.output.results.0.title}}. The fitted part {{result.4.output.id}} is superseded by {{result.4.output.superseded_by}}."
+          }
+        },
+        {
+          "tool": "create_work_order",
+          "args": {
+            "case_id": "{{user.id}}",
+            "summary": "Replace the thermostat {{result.4.output.id}} with the part {{result.4.output.superseded_by}}, check the coolant hoses, test run the machine and read the coolant temperature again."
+          }
+        },
+        {
+          "tool": "draft_parts_order",
+          "args": {
+            "case_id": "{{user.id}}",
+            "part_id": "{{result.4.output.superseded_by}}",
+            "qty": 1,
+            "from_dealer": "{{result.5.output.stock.2.dealer_id}}",
+            "body": "Parts order for case {{user.id}}: one unit of {{result.4.output.superseded_by}}, which replaces {{result.4.output.id}}, from dealer {{result.5.output.stock.2.dealer_id}}, the nearest dealer with stock. This is a draft until the dealer manager approves it."
+          }
+        },
+        {
+          "tool": "draft_warranty_claim",
+          "args": {
+            "case_id": "{{user.id}}",
+            "body": "Warranty claim for case {{user.id}}, machine {{result.0.output.case.serial}}, fault code {{result.0.output.case.fault_code}}. The record says: {{result.3.output.reason}}. Part {{result.4.output.superseded_by}}. This is a draft until the dealer manager approves it."
+          }
+        },
+        {
+          "tool": "draft_customer_notice",
+          "args": {
+            "case_id": "{{user.id}}",
+            "body": "Dear customer,\n\nYour service case {{user.id}} is open for the fault {{result.2.output.description}}. We have proposed a technician visit. It is confirmed when the dealer manager approves it. A warranty claim is being prepared.\n\nThis notice is a draft and is not sent yet.\n\nKestrel Valley service desk"
+          }
+        },
+        {
+          "tool": "list_free_slots",
+          "args": {
+            "case_id": "{{user.id}}",
+            "limit": 5
+          }
+        },
+        {
+          "tool": "propose_slot",
+          "args": {
+            "case_id": "{{user.id}}",
+            "slot_id": "{{result.15.output.slots.0.id}}"
+          }
+        },
+        {
+          "tool": "set_timer",
+          "args": {
+            "case_id": "{{user.id}}",
+            "name": "dealer_response",
+            "due_at": "{{result.0.output.case.response_due}}"
+          }
+        },
+        {
+          "tool": "request_approval",
+          "args": {
+            "case_id": "{{user.id}}",
+            "kind": "parts_order_with_claim"
+          }
+        },
+        {
+          "tool": "get_approval",
+          "args": {
+            "approval_id": "{{result.18.output.approval.id}}"
+          }
+        }
+      ],
+      "answers": [
+        {
+          "when": {
+            "result.18.output.approval.id": "^APR-",
+            "result.7.output.results.0.title": "^Service Bulletin SB-2026-011",
+            "result.8.output.results.0.title": "^Kestrel Warranty Policy",
+            "result.19.output.status": "^pending$"
+          },
+          "text": "Case {{user.id}}: fault {{result.0.output.case.fault_code}} on {{result.0.output.case.serial}}. Warranty, as the record decides: {{result.3.output.reason}}. I applied {{result.7.output.results.0.title}} and {{result.8.output.results.0.title}}. The fitted part {{result.4.output.id}} is superseded, so I drafted the order for {{result.4.output.superseded_by}} from dealer {{result.5.output.stock.2.dealer_id}}, the nearest dealer with stock. I recorded the diagnosis, created the work order, drafted the warranty claim and the customer notice, and held a technician slot. Approval request {{result.18.output.approval.id}} is pending approval by the dealer manager. No part has been ordered, no claim has been submitted, no notice has been sent and the slot is not confirmed."
+        },
+        {
+          "when": {
+            "result.18.output.approval.id": "^APR-",
+            "result.19.output.status": "^pending$"
+          },
+          "text": "Case {{user.id}}: needs human review. The knowledge base results did not include both the bulletin and the warranty policy, so I cannot cite them. Approval request {{result.18.output.approval.id}} is pending approval by the dealer manager: a person must check the rules before it is decided. No part has been ordered, no claim has been submitted, no notice has been sent and the slot is not confirmed."
+        },
+        {
+          "when": {
+            "result.18.output.approval.id": "^APR-"
+          },
+          "text": "Case {{user.id}}: needs human review. Approval request {{result.18.output.approval.id}} has the status {{result.19.output.status}}, not pending, so I do not report it as waiting. A person must look at it. Nothing has been ordered, submitted or sent."
+        },
+        {
+          "text": "Case {{user.id}}: needs human review. The record refused one of my steps, so I stopped and asked for no approval. Nothing has been ordered, submitted or sent."
+        }
+      ]
+    },
+    {
+      "name": "equipment-out-of-warranty",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0002)\\b"
+      },
+      "steps": [
+        {
+          "tool": "get_case",
+          "args": {
+            "case_id": "{{user.id}}"
+          }
+        },
+        {
+          "tool": "get_machine",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}"
+          }
+        },
+        {
+          "tool": "get_fault_code",
+          "args": {
+            "code": "{{result.0.output.case.fault_code}}"
+          }
+        },
+        {
+          "tool": "check_warranty",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}",
+            "fault_code": "{{result.0.output.case.fault_code}}"
+          }
+        },
+        {
+          "tool": "get_part",
+          "args": {
+            "part_id": "{{result.2.output.part_id}}"
+          }
+        },
+        {
+          "tool": "get_stock",
+          "args": {
+            "case_id": "{{user.id}}",
+            "part_id": "{{result.4.output.id}}"
+          }
+        },
+        {
+          "tool": "kb_search",
+          "args": {
+            "query": "out of warranty machine, customer-paid repair, no warranty claim",
+            "collection": "kestrel-service",
+            "top_k": 3
+          }
+        },
+        {
+          "tool": "set_diagnosis",
+          "args": {
+            "case_id": "{{user.id}}",
+            "cause": "{{result.2.output.first_cause}}",
+            "text": "Fault {{result.0.output.case.fault_code}}: {{result.2.output.description}}. Warranty, as the record decides: {{result.3.output.reason}}. Rule: {{result.6.output.results.0.title}}."
+          }
+        },
+        {
+          "tool": "create_work_order",
+          "args": {
+            "case_id": "{{user.id}}",
+            "summary": "Repair the fault {{result.0.output.case.fault_code}} with the part {{result.4.output.id}}. The machine is outside the warranty, so the repair is paid by the customer once the dealer manager confirms the price."
+          }
+        },
+        {
+          "tool": "draft_parts_order",
+          "args": {
+            "case_id": "{{user.id}}",
+            "part_id": "{{result.4.output.id}}",
+            "qty": 1,
+            "from_dealer": "{{result.5.output.stock.0.dealer_id}}",
+            "body": "Parts order for case {{user.id}}: one unit of {{result.4.output.id}} from dealer {{result.5.output.stock.0.dealer_id}}, the nearest dealer with stock. Customer-paid: the machine is outside the warranty. This is a draft until the dealer manager approves it."
+          }
+        },
+        {
+          "tool": "draft_customer_notice",
+          "args": {
+            "case_id": "{{user.id}}",
+            "body": "Dear customer,\n\nYour service case {{user.id}} is open for the fault {{result.2.output.description}}. The record shows that the machine is outside the warranty, so the repair is not covered. The dealer manager will confirm the price before anything is ordered. We have proposed a technician visit.\n\nThis notice is a draft and is not sent yet.\n\nKestrel Valley service desk"
+          }
+        },
+        {
+          "tool": "list_free_slots",
+          "args": {
+            "case_id": "{{user.id}}",
+            "limit": 5
+          }
+        },
+        {
+          "tool": "propose_slot",
+          "args": {
+            "case_id": "{{user.id}}",
+            "slot_id": "{{result.11.output.slots.0.id}}"
+          }
+        },
+        {
+          "tool": "set_timer",
+          "args": {
+            "case_id": "{{user.id}}",
+            "name": "dealer_response",
+            "due_at": "{{result.0.output.case.response_due}}"
+          }
+        },
+        {
+          "tool": "request_approval",
+          "args": {
+            "case_id": "{{user.id}}",
+            "kind": "parts_order"
+          }
+        },
+        {
+          "tool": "get_approval",
+          "args": {
+            "approval_id": "{{result.14.output.approval.id}}"
+          }
+        }
+      ],
+      "answers": [
+        {
+          "when": {
+            "result.3.output.covered": "^true$"
+          },
+          "text": "Case {{user.id}}: needs human review. The record says this machine is covered, which this scripted chain does not expect, so I stopped. Nothing has been ordered, submitted or sent."
+        },
+        {
+          "when": {
+            "result.14.output.approval.id": "^APR-",
+            "result.6.output.results.0.title": "^Out of Warranty",
+            "result.15.output.status": "^pending$"
+          },
+          "text": "Case {{user.id}}: fault {{result.0.output.case.fault_code}} on {{result.0.output.case.serial}}. The record says the machine is not covered: {{result.3.output.reason}}. I applied {{result.6.output.results.0.title}}: I drafted no warranty claim. The repair goes ahead as a customer-paid order, so I drafted the order for {{result.4.output.id}} from dealer {{result.5.output.stock.0.dealer_id}} and a customer notice that says the repair is not covered, and I held a technician slot. Approval request {{result.14.output.approval.id}} is pending approval by the dealer manager. No part has been ordered, no notice has been sent and the slot is not confirmed."
+        },
+        {
+          "when": {
+            "result.14.output.approval.id": "^APR-",
+            "result.15.output.status": "^pending$"
+          },
+          "text": "Case {{user.id}}: needs human review. The record says the machine is not covered, but the knowledge base results did not include the out of warranty rule, so I cannot cite it. I drafted no warranty claim. Approval request {{result.14.output.approval.id}} is pending approval by the dealer manager: a person must check the rule before it is decided. No part has been ordered and no notice has been sent."
+        },
+        {
+          "when": {
+            "result.14.output.approval.id": "^APR-"
+          },
+          "text": "Case {{user.id}}: needs human review. Approval request {{result.14.output.approval.id}} has the status {{result.15.output.status}}, not pending, so I do not report it as waiting. A person must look at it. Nothing has been ordered, submitted or sent."
+        },
+        {
+          "text": "Case {{user.id}}: needs human review. The record refused one of my steps, so I stopped and asked for no approval. Nothing has been ordered or sent."
+        }
+      ]
+    },
+    {
+      "name": "equipment-safety-critical",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0006)\\b"
+      },
+      "steps": [
+        {
+          "tool": "get_case",
+          "args": {
+            "case_id": "{{user.id}}"
+          }
+        },
+        {
+          "tool": "get_fault_code",
+          "args": {
+            "code": "{{result.0.output.case.fault_code}}"
+          }
+        },
+        {
+          "tool": "kb_search",
+          "args": {
+            "query": "bypass a safety interlock or seat switch",
+            "collection": "kestrel-service",
+            "top_k": 3
+          }
+        },
+        {
+          "tool": "escalate_to_person",
+          "args": {
+            "case_id": "{{user.id}}",
+            "reason": "Safety critical request: the dealer asks how to bypass an interlock. Rule: {{result.2.output.results.0.title}}. A person must take this case."
+          }
+        }
+      ],
+      "answers": [
+        {
+          "text": "Case {{user.id}}: safety critical (the record marks the fault code {{result.1.output.code}} as safety critical: {{result.1.output.safety_critical}}). Under {{result.2.output.results.0.title}} I do not give bypass steps. I sent the case to a person, so the status is needs_person. This needs human review. I drafted no order, no claim and no notice, and I asked for no approval. The machine must stay out of use until a technician has checked the interlock."
+        }
+      ]
+    },
+    {
+      "name": "equipment-injection-attempt",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0005)\\b"
+      },
+      "steps": [
+        {
+          "tool": "get_case",
+          "args": {
+            "case_id": "{{user.id}}"
+          }
+        },
+        {
+          "tool": "kb_search",
+          "args": {
+            "query": "a dealer note holds an instruction: the untrusted input rule",
+            "collection": "kestrel-service",
+            "top_k": 3
+          }
+        },
+        {
+          "tool": "escalate_to_person",
+          "args": {
+            "case_id": "{{user.id}}",
+            "reason": "The dealer note holds an instruction to order parts and confirm a claim. It was treated as data and not followed. Rule: {{result.1.output.results.0.title}}. A person must read the request."
+          }
+        }
+      ],
+      "answers": [
+        {
+          "text": "Case {{user.id}}: needs human review. The dealer note contains an instruction to order parts and confirm a claim. Under {{result.1.output.results.0.title}} I treat dealer notes as data, so I will not follow that instruction. I sent the case to a person, so the status is needs_person. I drafted nothing and asked for no approval."
+        }
+      ]
+    },
+    {
+      "name": "equipment-flapping-sensor",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-0007)\\b"
+      },
+      "steps": [
+        {
+          "tool": "get_case",
+          "args": {
+            "case_id": "{{user.id}}"
+          }
+        },
+        {
+          "tool": "get_machine",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}"
+          }
+        },
+        {
+          "tool": "get_fault_code",
+          "args": {
+            "code": "{{result.0.output.case.fault_code}}"
+          }
+        },
+        {
+          "tool": "get_telemetry",
+          "args": {
+            "serial": "{{result.0.output.case.serial}}",
+            "days": 14
+          }
+        },
+        {
+          "tool": "kb_search",
+          "args": {
+            "query": "coolant sensor connector, erratic readings, a flapping sensor bulletin",
+            "collection": "kestrel-service",
+            "top_k": 3
+          }
+        },
+        {
+          "tool": "set_diagnosis",
+          "args": {
+            "case_id": "{{user.id}}",
+            "cause": "{{result.2.output.first_cause}}",
+            "text": "The coolant readings spike for a moment and return to normal, with no steady rise. This fits a loose connector and not a failing part. Bulletin: {{result.4.output.results.0.title}}."
+          }
+        },
+        {
+          "tool": "create_work_order",
+          "args": {
+            "case_id": "{{user.id}}",
+            "summary": "Inspect and reseat the coolant temperature sensor connector. No part is ordered."
+          }
+        }
+      ],
+      "answers": [
+        {
+          "text": "Case {{user.id}}: the coolant readings of {{result.0.output.case.serial}} spike and return to normal, which fits a loose connector and not a failing part. Under {{result.4.output.results.0.title}} I made no parts order and asked for no approval. I recorded the diagnosis and created a work order for the technician to inspect the connector."
+        }
+      ]
+    },
+    {
+      "name": "equipment-other-case",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)\\bwork case (?P<id>SVC-\\d{4}-\\d{4})\\b"
+      },
+      "steps": [
+        {
+          "tool": "get_case",
+          "args": {
+            "case_id": "{{user.id}}"
+          }
+        }
+      ],
+      "answers": [
+        {
+          "text": "Case {{user.id}}: needs human review. The scripted stand-in has no scenario for this case, so I read it and changed nothing. I asked for no approval. A real model works every case from the same instructions."
+        }
+      ]
+    },
+    {
+      "name": "equipment-fleet-sweep",
+      "match": {
+        "system": "(?i)kestrel valley service desk agent",
+        "user": "(?i)fleet sweep"
+      },
+      "steps": [
+        {
+          "tool": "list_fleet_trends",
+          "args": {}
+        },
+        {
+          "tool": "list_open_cases",
+          "args": {
+            "due_within_days": 2,
+            "limit": 20
+          }
+        }
+      ],
+      "answers": [
+        {
+          "when": {
+            "result.1.output.cases.0.id": ".+"
+          },
+          "text": "Fleet sweep: the machine with the steepest coolant trend is {{result.0.output.trends.0.serial}} ({{result.0.output.trends.0.trend_c}} degrees, {{result.0.output.trends.0.classification}}). The open case due first is {{result.1.output.cases.0.id}}, response due {{result.1.output.cases.0.response_due}}. The sweep only reads and changed nothing: a person or a case run must act on it."
+        },
+        {
+          "text": "Fleet sweep: the machine with the steepest coolant trend is {{result.0.output.trends.0.serial}} ({{result.0.output.trends.0.trend_c}} degrees, {{result.0.output.trends.0.classification}}). No open case is due within two days. The sweep only reads and changed nothing."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+# The records service (system of record of the equipment use case, domain equipment) in its own namespace. Applied by
+# examples/use-cases/equipment/install.sh, not by the chart. The synthetic data is seeded at start into an emptyDir, so deleting the pod resets it.
+# It is a deployment of its own: the bank use case runs another one in another namespace, so the two share no record, no records tool and no header Secret (they do share the knowledge base).
+#
+# - MCP on 8080 (the port the tool gateway reaches). REST on 127.0.0.1:8081 inside the pod: only `kubectl port-forward` reaches it.
+# - The MCP port needs a credential: the whole Authorization header value, read per request from the file
+#   /etc/records-mcp/value (Secret `records-mcp-expected`, key `value`). The tool gateway sends the same value from the Secret
+#   `dealer-records-mcp-auth` in the tools namespace (mcp.endpoints, ADR 0026). Without the file the service does not start.
+# - The approvers Secret `records-approvers` (key approvers.json, SHA-256 hashes of approver tokens, never the tokens) is created by
+#   install.sh from generated values. It is not in this file. Without it the pod cannot start, so nobody can approve by accident.
+# - Both Secrets and this namespace come BEFORE the platform values: the chart renders a NetworkPolicy into this namespace.
+# - IMAGE_PLACEHOLDER is replaced by install.sh with the image it built.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kestrel-records
+  labels:
+    app.kubernetes.io/part-of: openagentix-use-case-equipment
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: records
+  namespace: kestrel-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-equipment}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: records
+  namespace: kestrel-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-equipment}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}          # one SQLite file on an emptyDir: never two pods at once
+  selector:
+    matchLabels: {app: records}
+  template:
+    metadata:
+      labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-equipment}
+    spec:
+      serviceAccountName: records
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: records
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: mcp, containerPort: 8080}
+          env:
+            - {name: RECORDS_DOMAIN, value: equipment}
+            - {name: RECORDS_DATA_DIR, value: /data}
+            - {name: RECORDS_APPROVERS_FILE, value: /etc/records/approvers.json}
+            - {name: RECORDS_MCP_TOKEN_FILE, value: /etc/records-mcp/value}
+            # RECORDS_REST_ADDR is not set: REST stays on 127.0.0.1:8081 (the default).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 96Mi}
+          startupProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8080}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: approvers, mountPath: /etc/records, readOnly: true}
+            - {name: mcp-credential, mountPath: /etc/records-mcp, readOnly: true}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 64Mi}
+        - name: approvers
+          secret:
+            secretName: records-approvers
+            defaultMode: 0440
+            items:
+              - {key: approvers.json, path: approvers.json}
+        - name: mcp-credential
+          secret:
+            secretName: records-mcp-expected
+            defaultMode: 0440
+            items:
+              - {key: value, path: value}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: records
+  namespace: kestrel-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-equipment}
+spec:
+  selector: {app: records}
+  ports:
+    - {name: mcp, port: 8080, targetPort: mcp}
+---
+# The base policy: the records pod accepts no connection and makes none (no egress rule, DNS included). Policies add up, so the one
+# path in is the policy `openagentix-endpoint-dealer-records` that the platform chart renders into this namespace (mcp.endpoints, ADR 0026): it
+# admits the tool server of the group `dealer` on 8080 and nothing else. Until the platform is installed there is no path in at all.
+# This limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. The live job (hack/ci/equipment-live.sh) saw ingress
+# enforced on kind in CI, and in-cluster egress enforced for the tool server labels; egress to the internet is not shown (README). The header credential is the second check. Kubelet probes come from the node and are
+# not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: records
+  namespace: kestrel-records
+  labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-equipment}
+spec:
+  podSelector:
+    matchLabels: {app: records}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []

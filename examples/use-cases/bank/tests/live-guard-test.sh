@@ -28,6 +28,7 @@ L="$ROOT/hack/ci/bank-live.sh"
 check "every kubectl call of the script names the context it checked (K carries --context)" "grep -q '^K=\"\$KBASE --context=\$CTX_NOW\"' '$L' && ! grep -nE '^[^#]*(\\\$KBASE|kubectl) ' '$L' | grep -v 'KBASE config current-context' | grep -v '^[0-9]*:K=' | grep -v 'obs \"kubectl' | grep -q ."
 check "the leak patterns are never written to a file, and the cleanup removes the token files" "! grep -q '> *\"\$TD/secret' '$L' && grep -q 'rm -f \"\$TD/token\" \"\$TD/tg\" \"\$TD/ts\" \"\$TD/tl\"' '$L'"
 check "the leak scan covers previous container logs, both install logs and the script's own log" "grep -q -- '--previous' '$L' && grep -q 'BANK_INSTALL_LOG2' '$L' && grep -q 'BANK_LIVE_LOG' '$L'"
+check "the identity settings are patched and restored for every tool server of the tools namespace, not for a fixed list" "grep -q '^tool_servers()' '$L' && ! grep -qE 'for v in tools \"tools-' '$L' && [ \"\$(grep -c 'for v in \$(tool_servers)' '$L')\" = 4 ]"
 check "bash -n and shellcheck" "bash -n '$ROOT/hack/ci/bank-live.sh' && { ! command -v shellcheck >/dev/null || shellcheck -S warning '$ROOT/hack/ci/bank-live.sh'; }"
 
 echo; echo "$PASS passed, $FAIL failed"
