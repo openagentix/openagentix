@@ -24,6 +24,10 @@ check "a kind context outside GitHub Actions is refused (exit 2), after reading 
 run BANK_LIVE=1 BANK_CI_CONTEXT=kind-other FAKE_CTX=kind-openagentix; rc=$?
 check "BANK_CI_CONTEXT naming another context does not allow it" "[ $rc = 2 ] && [ \"\$(wc -l < '$TMP/calls' | tr -d ' ')\" = 1 ]"
 check "the script patches the identity settings only after the agent checks, and restores them in the exit trap" "grep -n 'restore_oidc' '$ROOT/hack/ci/bank-live.sh' | head -1 | grep -q . && grep -q '^trap cleanup EXIT' '$ROOT/hack/ci/bank-live.sh'"
+L="$ROOT/hack/ci/bank-live.sh"
+check "every kubectl call of the script names the context it checked (K carries --context)" "grep -q '^K=\"\$KBASE --context=\$CTX_NOW\"' '$L' && ! grep -nE '^[^#]*(\\\$KBASE|kubectl) ' '$L' | grep -v 'KBASE config current-context' | grep -v '^[0-9]*:K=' | grep -v 'obs \"kubectl' | grep -q ."
+check "the leak patterns are never written to a file, and the cleanup removes the token files" "! grep -q '> *\"\$TD/secret' '$L' && grep -q 'rm -f \"\$TD/token\" \"\$TD/tg\" \"\$TD/ts\" \"\$TD/tl\"' '$L'"
+check "the leak scan covers previous container logs, both install logs and the script's own log" "grep -q -- '--previous' '$L' && grep -q 'BANK_INSTALL_LOG2' '$L' && grep -q 'BANK_LIVE_LOG' '$L'"
 check "bash -n and shellcheck" "bash -n '$ROOT/hack/ci/bank-live.sh' && { ! command -v shellcheck >/dev/null || shellcheck -S warning '$ROOT/hack/ci/bank-live.sh'; }"
 
 echo; echo "$PASS passed, $FAIL failed"

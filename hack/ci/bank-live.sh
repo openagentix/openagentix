@@ -28,11 +28,11 @@
 #      one, kept when BANK_OUT is set), BANK_USER_ID (default desk:eval), BANK_INSTALL_LOG (a file: checked for secret values too).
 set -u
 [ "${BANK_LIVE:-0}" = 1 ] || { echo "bank-live: set BANK_LIVE=1 to run this against the current cluster (it is opt-in)"; exit 0; }
-K=${KUBECTL:-kubectl}
+KBASE=${KUBECTL:-kubectl}
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 UC=$ROOT/examples/use-cases/bank
-CTX_NOW=$($K config current-context 2>/dev/null || true)
+CTX_NOW=$($KBASE config current-context 2>/dev/null || true)
 case "$CTX_NOW" in
   kind-*) ;;
   *) echo "bank-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind context. Nothing was changed." >&2; exit 2;;
@@ -41,6 +41,9 @@ if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${BANK_CI_CONTEXT:-}" != "$CTX_NOW" ]
   echo "bank-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and BANK_CI_CONTEXT does not name this context. This script changes the cluster; do not run it on a cluster you use. Nothing was changed." >&2
   exit 2
 fi
+# Every call below names the context that was checked, so a change of the current context during the run (another shell, another install) cannot send a
+# credit approval, a patch of the identity settings or a ClusterRoleBinding to another cluster.
+K="$KBASE --context=$CTX_NOW"
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; KNS=${KAGENT_NAMESPACE:-kagent}; GATE_NS=${GATE_NAMESPACE:-openagentix-gateway}; RNS=fernvale-records; DESK_NS=openagentix-system
 PROFILE=disputes; USER_ID=${BANK_USER_ID:-desk:eval}
 AUDIT_SETTLE=${BANK_AUDIT_SETTLE:-6s}; CASE_TIMEOUT=${BANK_CASE_TIMEOUT:-300s}
@@ -61,7 +64,8 @@ restore_oidc() {
   OIDC_PATCHED=0
 }
 cleanup() {
-  rm -f "$TD/token"   # the gate token (60 minutes) never stays on disk, even when BANK_OUT keeps the directory
+  # the gate token (60 minutes), the three tool server tokens (10 minutes) and their header dumps never stay on disk, even when BANK_OUT keeps the directory
+  rm -f "$TD/token" "$TD/tg" "$TD/ts" "$TD/tl" "$TD"/*.h "$TD"/*.h.* "$TD/secret.patterns"
   for p in $PF $REF $PFR $PFM $PFG $PFS $PFL; do kill "$p" 2>/dev/null; done
   $K delete pod egress-probe egress-control nettest -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
   $K delete pod egress-target -n default --ignore-not-found --wait=false >/dev/null 2>&1
@@ -216,18 +220,22 @@ kill $PFM 2>/dev/null; PFM=""
 echo "# the header value and the approver token are in no log, and the header value is in no object"
 HV=$($K get secret -n "$MCPNS" records-mcp-auth -o jsonpath='{.data.value}' | base64 -d); HRAW=${HV#Bearer }
 AT=$($K get secret -n "$RNS" records-approver-token -o jsonpath='{.data.token}' | base64 -d)
-printf '%s\n%s\n' "$HRAW" "$AT" > "$TD/secret.patterns"; unset HV HRAW AT
-[ "$(wc -l < "$TD/secret.patterns" | tr -d ' ')" = 2 ] && ok "two patterns to look for (the control is not empty)" || bad "the pattern file is not what was expected" "$(wc -l < "$TD/secret.patterns")"
+# the two values are kept in a shell variable and given to grep through a process substitution: they are never written to a file
+PATS=$(printf '%s\n%s' "$HRAW" "$AT"); unset HV HRAW AT
+[ "$(printf '%s\n' "$PATS" | grep -c .)" = 2 ] && ok "two patterns to look for (the control is not empty)" || bad "the pattern list is not what was expected" "$(printf '%s\n' "$PATS" | grep -c .)"
 LEAKS=0; WHERE=""
-scan() { local n; n=$(eval "$2" 2>/dev/null | grep -cF -f "$TD/secret.patterns"); if [ "$n" != 0 ]; then LEAKS=$((LEAKS+n)); WHERE="$WHERE $1($n)"; fi; }
+scan() { local n; n=$(eval "$2" 2>/dev/null | grep -cF -f <(printf '%s\n' "$PATS")); if [ "$n" != 0 ]; then LEAKS=$((LEAKS+n)); WHERE="$WHERE $1($n)"; fi; }
 for ns in "$MCPNS" toolhive-system "$RNS" "$GATE_NS" "$KNS" agentgateway-system ate-system openagentix-knowledge openagentix-system; do
-  for p in $($K get pods -n "$ns" -o name 2>/dev/null); do scan "$ns:$p" "$K logs -n $ns $p --all-containers --tail=-1"; done
+  for p in $($K get pods -n "$ns" -o name 2>/dev/null); do
+    scan "$ns:$p" "$K logs -n $ns $p --all-containers --tail=-1"
+    scan "$ns:$p (previous)" "$K logs -n $ns $p --all-containers --previous --tail=-1"
+  done
 done
 scan "objects" "$K get virtualmcpserver,mcpserverentry,mcpgroup,mcpexternalauthconfig,mcpoidcconfig,networkpolicy,configmap,agents.api.kagent.dev,agenttemplates.api.kagent.dev,remotemcpservers.kagent.dev -A -o yaml"
-[ -z "${BANK_INSTALL_LOG:-}" ] || [ ! -f "$BANK_INSTALL_LOG" ] || scan "install.log" "cat $BANK_INSTALL_LOG"
+for f in "${BANK_INSTALL_LOG:-}" "${BANK_INSTALL_LOG2:-}" "${BANK_LIVE_LOG:-}"; do [ -z "$f" ] || [ ! -f "$f" ] || scan "$f" "cat $f"; done
 scan "oa-eval report" "cat $TD/report.json"
-check "no header value and no approver token in any log, in any object, in the install log or in the report${WHERE:+: $WHERE}" "$LEAKS" 0
-rm -f "$TD/secret.patterns"
+check "no header value and no approver token in any log (current and previous container logs of ten namespaces), in any object, in the two install logs, in this script's own log so far or in the report${WHERE:+: $WHERE}" "$LEAKS" 0
+unset PATS
 
 # --- 9. isolation ---------------------------------------------------------------------------------------------------------------------------
 echo "# isolation"
@@ -239,6 +247,8 @@ check "the pod of the group's tool server holds the header Secret by reference (
 SA=$(jq -r '.items[0].spec.serviceAccountName // ""' <<<"$SHP")
 CAN=$($K auth can-i get "secret/records-mcp-auth" -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
 obs "kubectl auth can-i get secret/records-mcp-auth -n $MCPNS, as the shared tool server's ServiceAccount ($SA): '${CAN:-no answer}' (ADR 0026 A3 expects yes: the ToolHive operator gives every tool server read access to Secrets in the tools namespace; the header Secret is as safe as that namespace)"
+CANPOD=$($K auth can-i create pods -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
+check "the shared tool server's ServiceAccount cannot create pods in the tools namespace (so it cannot copy the labels that the records ingress policy admits)" "${CANPOD:-no answer}" no
 check "the records service does not listen for REST on the network: the REST port is on the pod's loopback (the pod's own spec sets no RECORDS_REST_ADDR)" "$($K get deployment records -n "$RNS" -o json | jq '[.spec.template.spec.containers[0].env[]|select(.name=="RECORDS_REST_ADDR")]|length')" 0
 $K delete pod nettest -n default --ignore-not-found >/dev/null 2>&1
 CODE=$($K run nettest -n default --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet --command -- curl -s -m 8 -o /dev/null -w '%{http_code}' "http://records.$RNS.svc.cluster.local:8080/healthz" 2>/dev/null | tail -1)
@@ -354,7 +364,7 @@ CALL=$(mcp_call "$GPORT" "$TD/tg" "$SID_G" 3 tools/call '{"name":"records_get_ca
 echo "       the group's tool server answered the call: $(printf '%s' "$CALL" | cut -c1-400)"
 check "a call of records_get_case through the group's tool server reaches the service with the header and answers a case" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" ")|test("DSP-")|tostring)' <<<"$CALL" 2>/dev/null)" "false true"
 CALL=$(mcp_call "$GPORT" "$TD/tg" "$SID_G" 4 tools/call '{"name":"records_approve","arguments":{"approval_id":"APR-0001"}}')
-check "a tool the profile does not list (records_approve) is refused" "$(jq -r '((.error!=null) or (.result.isError==true))|tostring' <<<"$CALL" 2>/dev/null)" true
+check "a tool name the records service does not have (records_approve) is refused (the service has exactly the 15 tools of the profile, so this shows an unknown name is refused, not the filter)" "$(jq -r '((.error!=null) or (.result.isError==true))|tostring' <<<"$CALL" 2>/dev/null)" true
 RES=$(mcp_call "$GPORT" "$TD/tg" "$SID_G" 5 resources/list '{}' 2>/dev/null)
 check "resources/list through the group's tool server shows no resource of a backend" "$(printf '%s' "$RES" | jq -r '[.result.resources[]?]|length' 2>/dev/null)" 0
 SID_S=$(mcp_open "$SPORT" "$TD/ts")

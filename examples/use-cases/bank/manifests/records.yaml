@@ -114,8 +114,9 @@ spec:
 # The base policy: the records pod accepts no connection and makes none (no egress rule, DNS included). Policies add up, so the one
 # path in is the policy `openagentix-endpoint-records` that the platform chart renders into this namespace (mcp.endpoints, ADR 0026): it
 # admits the tool server of the group `disputes` on 8080 and nothing else. Until the platform is installed there is no path in at all.
-# This limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy: ingress is shown on kind in CI by other live
-# checks; egress is not shown on kindnet (README). The header credential is the second check. Kubelet probes come from the node and are
+# This limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. The live job (hack/ci/bank-live.sh) saw ingress
+# enforced on kind in CI, and in-cluster egress enforced for the tool server labels in one run; egress to the internet is not shown (README).
+# The header credential is the second check. Kubelet probes come from the node and are
 # not affected.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
