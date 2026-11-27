@@ -200,26 +200,27 @@ spec:
   {{- end }}
   incomingAuth:
     type: oidc
+    {{- /* The profile filter covers tools only: the live check of ADR 0026 (slice 2) showed that a profile vMCP lists and reads the resources and prompts of every backend of its
+    group, and the same holds for any profile. So every profile vMCP, the workload variants included, authorizes with an ALLOW LIST, not a permit of every action: call_tool on
+    each of the profile's tools, as the model sees them (execute_tool_script with code mode), and list_tools. Every other action, a method that ToolHive adds later included,
+    is denied by default. A workload variant keeps its condition (pod-bound tokens of subjects of the workload namespace) on every permit. */}}
+    {{- $when := "" }}
+    {{- if $v }}{{ $when = printf " when { context.claim_sub like \"system:serviceaccount:%s:*\" && context has \"claim_kubernetes.io\" && context[\"claim_kubernetes.io\"] has pod }" $.Values.controlPlane.containerAgents.namespace }}{{ end }}
+    {{- $allow := list }}
+    {{- range $tn := (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) }}{{ $allow = append $allow (printf "permit(principal, action == Action::\"call_tool\", resource == Tool::%s)%s;" (quote $tn) $when) }}{{ end }}
+    {{- $allow = append $allow (printf "permit(principal, action == Action::\"list_tools\", resource)%s;" $when) }}
     {{- if $v }}
     oidcConfigRef: {name: openagentix-workload-sa, audience: {{ printf "%s-%s-workload" $ia.oidc.audience $p.name | quote }}}
     authzConfig:
       type: inline
       inline:
-        policies: [{{ printf "permit(principal, action, resource) when { context.claim_sub like \"system:serviceaccount:%s:*\" && context has \"claim_kubernetes.io\" && context[\"claim_kubernetes.io\"] has pod };" $.Values.controlPlane.containerAgents.namespace | quote }}]
+        policies: {{ $allow | toJson }}
     {{- else }}
     oidcConfigRef: {name: {{ $ia.oidc.name }}, audience: {{ printf "%s-%s" $ia.oidc.audience $p.name | quote }}}
     authzConfig:
       type: inline
       inline:
-        {{- /* The profile filter covers tools only (the live check of ADR 0026 slice 2 found that a profile vMCP lists and reads the resources and prompts of every backend of its
-        group). A profile on an endpoint group therefore authorizes with an ALLOW LIST, not a forbid list: call_tool on each of the profile's tools, as the model sees them,
-        and list_tools. Every other action is denied by default, a method that ToolHive adds later included. */}}
-        {{- $allow := list }}
-        {{- if and $grp (ne $grp "diagnostics") }}
-        {{- range $tn := (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) }}{{ $allow = append $allow (printf "permit(principal, action == Action::\"call_tool\", resource == Tool::%s);" (quote $tn)) }}{{ end }}
-        {{- $allow = append $allow "permit(principal, action == Action::\"list_tools\", resource);" }}
-        {{- end }}
-        policies: {{ if $allow }}{{ $allow | toJson }}{{ else }}["permit(principal, action, resource);"]{{ end }}
+        policies: {{ $allow | toJson }}
     {{- end }}
   outgoingAuth: {source: discovered}
 {{- end }}
