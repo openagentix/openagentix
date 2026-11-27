@@ -30,7 +30,7 @@ case "$*" in
   *"get secret records-approvers"*) [ -f "$FAKE_LOG/secret_a" ] && exit 0 || exit 1 ;;
   *"get secret records-approver-token"*) [ -f "$FAKE_LOG/secret_t" ] && exit 0 || exit 1 ;;
   *"get deployment stub-model"*) [ -n "${FAKE_STUB:-}" ] && exit 0 || exit 1 ;;
-  *"get configmap stub-model-scenarios"*) [ -n "${FAKE_SCENARIOS:-}" ] && exit 0 || exit 1 ;;
+  *"get configmap stub-model-scenarios"*) case "${FAKE_SCENARIOS:-}" in "") exit 1 ;; wrongkey) echo '{"data":{"other.json":"{}"}}' ;; *) echo '{"data":{"scenario.json":"{}"}}' ;; esac; exit 0 ;;
   *"delete secret"*) rm -f "$FAKE_LOG/secret_a" "$FAKE_LOG/secret_t" ;;
   *"create namespace fernvale-records"*) : > "$FAKE_LOG/ns" ;;
   *"create secret generic records-approvers"*) cat > "$FAKE_LOG/approvers.stdin"; : > "$FAKE_LOG/secret_a" ;;
@@ -118,6 +118,9 @@ reset
 FAKE_STUB=1 FAKE_SCENARIOS=1 run; rc=$?
 check "a stub model with the chart scenarios: no warning, one line that says runs are scripted" "[ $rc = 0 ] && ! grep -q WARN '$LOG/out' && grep -q 'scripted by the stub model' '$LOG/out' && ! grep -q 'patch' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 reset
+FAKE_STUB=1 FAKE_SCENARIOS=wrongkey run; rc=$?
+check "a chart ConfigMap that does not hold scenario.json: a warning that names the key, exit 0" "[ $rc = 0 ] && grep -q 'WARN: the ConfigMap stub-model-scenarios has no scenario.json' '$LOG/out'" "exit $rc: $(cat "$LOG/out")"
+reset
 run --no-scenarios; rc=$?
 check "--no-scenarios and --scenarios are gone: refused as unknown, with a pointer to STUB_SCENARIOS" "[ $rc = 1 ] && grep -q 'unknown argument: --no-scenarios' '$LOG/out' && grep -q STUB_SCENARIOS '$LOG/out'" "exit $rc: $(cat "$LOG/out")"
 reset
@@ -143,7 +146,8 @@ echo "# uninstall"
 reset
 FAKE_STUB=1 run --uninstall; rc=$?
 check "--uninstall deletes the namespace, the entry and the ServiceAccount" "[ $rc = 0 ] && grep -q 'delete namespace fernvale-records' '$LOG/calls' && grep -q 'delete -f .*tool-registration.yaml' '$LOG/calls' && grep -q 'delete serviceaccount disputes-desk' '$LOG/calls'" "exit $rc"
-check "--uninstall does not patch the stub model or touch scenarios (they belong to the chart release)" "! grep -q 'patch' '$LOG/calls' && ! grep -q 'bank-scenarios' '$LOG/calls' && ! grep -q 'stub-model' '$LOG/calls'"
+check "--uninstall does not patch the stub model or touch the chart scenarios" "! grep -q 'patch' '$LOG/calls' && ! grep -q 'stub-model-scenarios' '$LOG/calls' && ! grep -q 'deployment' '$LOG/calls'"
+check "--uninstall deletes the ConfigMap bank-scenarios of the earlier script, with --ignore-not-found" "grep -q 'delete configmap bank-scenarios -n agentgateway-system --ignore-not-found' '$LOG/calls'"
 reset
 run --uninstall; rc=$?
 check "--uninstall without a stub model does not patch" "[ $rc = 0 ] && ! grep -q 'patch deployment' '$LOG/calls'"

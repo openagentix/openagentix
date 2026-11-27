@@ -230,6 +230,7 @@ if [ -n "${STUB_SCENARIOS:-}" ]; then
   fi
   for f in "${SCEN_LIST[@]}"; do
     [[ "$(basename "$f")" =~ ^[a-z0-9][a-z0-9-]{0,62}\.json$ ]] || die "STUB_SCENARIOS: the file name \"$(basename "$f")\" is not allowed: use lowercase letters, digits and dashes, at most 63 characters, then .json. Nothing was changed."
+    case "$f" in *\\*) die "STUB_SCENARIOS: the path \"$f\" has a backslash, which Helm would read as an escape. Move the file. Nothing was changed.";; esac
     case "$f" in *,*) die "STUB_SCENARIOS: the path \"$f\" has a comma, which Helm would read as a separator. Move the file. Nothing was changed.";; esac
     [ -r "$f" ] || die "STUB_SCENARIOS: cannot read $f. Nothing was changed."
   done

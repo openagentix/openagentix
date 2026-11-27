@@ -107,6 +107,10 @@ How to read a line, for example `ci  17 in a row  (target 30, not met)  counted 
 
 The offline test is `hack/ci/green-streak-test.sh` (in `make test-shell`).
 
+## compose-values (offline)
+
+`hack/ci/compose-values-test.sh` tests `hack/compose-values.sh` (ADR 0026, E), the helper that merges values files by entry name. It checks the merge by name for each of the seven lists, the refusal of the same name with different content, every security key (refused when a later file changes it, and also when it only sets it to something other than the chart default; replaced and reported with `--later-wins`), the report, the redaction of Secret and key values, an explicit empty list, `-o`, and the quick start plus the bank values rendered with `helm template`. It is in `make test-shell` and in the `ci` workflow, and takes about two minutes because it runs the script once or twice per security key.
+
 ## Tools and pins
 
 `helm` v3.22.0 (`azure/setup-helm`), `jq` from the runner image (1.7.x), `yq` **kislyuk 3.4.3** (the Python jq wrapper that
