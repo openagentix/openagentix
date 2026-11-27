@@ -45,6 +45,18 @@ host, so a check on one form must see the other two (ADR 0026 A2). Tolerant: a U
 {{- $out | uniq | toJson -}}
 {{- end -}}
 
+{{/* JSON list of the namespaces of the endpoints with an in-cluster URL, sorted. The catalog carries it, so that the guard and the controller refuse an egress host in any of
+these namespaces in every form, whatever the shape of the namespace name (ADR 0026 review). Tolerant like oa.epHosts. */}}
+{{- define "oa.epNamespaces" -}}
+{{- $out := list -}}
+{{- range $e := (include "oa.epRaw" . | fromJsonArray) -}}
+{{- if and (kindIs "map" $e) (kindIs "string" $e.url) (regexMatch "^https?://[^./:@?#]+[.][^./:@?#]+[.]svc([.]cluster[.]local)?([:/].*)?$" $e.url) -}}
+{{- $out = append $out (regexReplaceAll "^https?://([^./:@?#]+)[.]([^./:@?#]+)[.]svc.*$" $e.url "${2}") -}}
+{{- end -}}
+{{- end -}}
+{{- $out | uniq | sortAlpha | toJson -}}
+{{- end -}}
+
 {{/* "true" when the host (lower case, no port, maybe starting with "*.") is one of the forms, or a wildcard that stands for exactly one label in front of
 a suffix of one of them. Argument: dict "host" <host> "forms" <list of forms>. */}}
 {{- define "oa.epHostNamed" -}}

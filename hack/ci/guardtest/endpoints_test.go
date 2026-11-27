@@ -114,3 +114,66 @@ func TestEgressPolicyNamingAnEndpointHostIsRefusedInEveryForm(t *testing.T) {
 		t.Errorf("the suite shrank: %d allowed and %d refused cases", allowed, denied)
 	}
 }
+
+// The guard is the backstop against a compromised controller, and it does not read the chart's refusals. The catalog carries the namespaces of the endpoints, so
+// the guard refuses an egress host in them in every form, whatever the shape of the namespace name: a namespace of letters only (billing) has the shape of a top level
+// domain, which the shape rule cannot see (ADR 0026 review of slice 2).
+func TestEgressPolicyNamingAnEndpointNamespaceIsRefusedWhateverItsShape(t *testing.T) {
+	sets := append([]string{}, endpointSets...)
+	for i, s := range sets {
+		if strings.HasPrefix(s, "mcp.endpoints[0].url=") {
+			sets[i] = "mcp.endpoints[0].url=http://records.billing.svc.cluster.local:8080/mcp"
+		}
+	}
+	r := render(t, sets...)
+	e, err := newEngine(r.Policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	A := fromGolden(t, "golden-profile-demo.json", "profile-demo", "researcher", "gateway-profile-demo")
+	b := &builder{t: t, r: r, cat: r.Catalog}
+	pol := func(origin string) m {
+		eg := find(A, "EgressPolicy")
+		put(eg, "spec/destinations", []any{m{"origin": origin}})
+		return eg
+	}
+	b.kagent("allow a public origin (the control)", "CREATE", "EgressPolicy", pol("https://api.osv.dev"), nil, allow)
+	b.kagent("allow a public name that merely contains the namespace as a label", "CREATE", "EgressPolicy", pol("https://docs.billing.dev"), nil, allow)
+	for _, o := range []string{
+		"https://records.billing", "http://records.billing:8080", "https://any.billing", "https://a.b.billing",
+		"https://records.billing.svc", "https://any.billing.svc:8080", "https://records.billing.svc.cluster.local",
+		"https://*.billing.svc", "https://*.billing.svc.cluster.local", "https://*.billing",
+	} {
+		b.kagent("deny an EgressPolicy naming the letters-only endpoint namespace as "+o, "CREATE", "EgressPolicy", pol(o), nil, deny)
+	}
+	allowed, denied := runCases(t, e, b.out)
+	t.Logf("endpoint namespace cases: %d allowed, %d refused", allowed, denied)
+	if allowed < 2 || denied < 10 {
+		t.Errorf("the suite shrank: %d allowed and %d refused cases", allowed, denied)
+	}
+	// with the namespace not in the catalog, the same short form is allowed: the control that the new list is what refuses it
+	r0 := render(t, "mcp.endpoints=null")
+	e0, err := newEngine(r0.Policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b0 := &builder{t: t, r: r0, cat: r0.Catalog}
+	b0.kagent("allow records.billing when no endpoint is in that namespace (the known limit of the shape rule)", "CREATE", "EgressPolicy", pol("https://records.billing"), nil, allow)
+	runCases(t, e0, b0.out)
+}
+
+func TestEgressPolicyNamingTheEndpointNamespaceAsWildcardIsRefused(t *testing.T) {
+	r := render(t, endpointSets...)
+	e, err := newEngine(r.Policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	A := fromGolden(t, "golden-profile-demo.json", "profile-demo", "researcher", "gateway-profile-demo")
+	b := &builder{t: t, r: r, cat: r.Catalog}
+	for _, o := range []string{"https://*.fernvale-records", "https://x.fernvale-records", "https://*.fernvale-records.svc"} {
+		eg := find(A, "EgressPolicy")
+		put(eg, "spec/destinations", []any{m{"origin": o}})
+		b.kagent("deny an EgressPolicy naming the endpoint namespace as "+o, "CREATE", "EgressPolicy", eg, nil, deny)
+	}
+	runCases(t, e, b.out)
+}

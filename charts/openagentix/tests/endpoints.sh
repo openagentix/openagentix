@@ -76,7 +76,8 @@ eq "the shared vMCP keeps its filter-free aggregation" "$(q "$D" '.[]|select(.ki
 SH='.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools")'
 eq "shared vMCP: a Cedar forbid for each endpoint tool a profile lists, in front of the permit" "$(q "$D" "$SH|.spec.incomingAuth.authzConfig.inline.policies|tojson")" '["forbid(principal, action == Action::\"call_tool\", resource == Tool::\"records_get_case\");","forbid(principal, action == Action::\"call_tool\", resource == Tool::\"records_set_route\");","permit(principal, action, resource);"]'
 eq "shared vMCP: with toolAccess the forbids are still in front of the permits" "$(q "$(docs "${EA[@]}" --set 'mcp.virtual.incomingAuth.toolAccess[0].atespace=kagent' --set 'mcp.virtual.incomingAuth.toolAccess[0].tools={fetch_fetch}')" "$SH|.spec.incomingAuth.authzConfig.inline.policies|[(.[0:2]|map(startswith(\"forbid\"))|all|tostring),(.[2]|startswith(\"permit\")|tostring)]|join(\" \")")" "true true"
-eq "profile disputes: Cedar forbids read_resource and get_prompt in front of the permit (the profile filter covers tools only: the live check found that a profile vMCP lists and reads the resources and prompts of a backend its profile does not list)" "$(q "$D" "$DIS|.spec.incomingAuth.authzConfig.inline.policies|tojson")" '["forbid(principal, action == Action::\"read_resource\", resource);","forbid(principal, action == Action::\"get_prompt\", resource);","permit(principal, action, resource);"]'
+eq "profile disputes: an ALLOW LIST on the profile vMCP: permit call_tool on each of the profile's tools (as the model sees them) and list_tools, nothing else (ADR 0026 review: the profile filter covers tools only, so every other method is denied by default)" "$(q "$D" "$DIS|.spec.incomingAuth.authzConfig.inline.policies|tojson")" '["permit(principal, action == Action::\"call_tool\", resource == Tool::\"delivery-disputes_notify_send\");","permit(principal, action == Action::\"call_tool\", resource == Tool::\"knowledge-disputes_kb_search\");","permit(principal, action == Action::\"call_tool\", resource == Tool::\"records_get_case\");","permit(principal, action == Action::\"call_tool\", resource == Tool::\"records_set_route\");","permit(principal, action == Action::\"list_tools\", resource);"]'
+eq "profile disputes: no forbid, no permit of every action, no permit of resources or prompts" "$(q "$D" "$DIS|.spec.incomingAuth.authzConfig.inline.policies|map(select(startswith(\"forbid\") or test(\"^permit\\\\(principal, action, resource\\\\)\") or test(\"resource|prompt\";\"i\") and (test(\"Tool::\")|not) and (test(\"list_tools\")|not)))|length")" 0
 eq "profile lookup on the shared group keeps its single permit (the forbids are for endpoint groups)" "$(q "$D" '.[]|select(.kind=="VirtualMCPServer" and .metadata.name=="tools-lookup")|.spec.incomingAuth.authzConfig.inline.policies|tojson')" '["permit(principal, action, resource);"]'
 eq "audit of the profile on the group: enabled, request and response data false" "$(q "$D" "$DIS|.spec.config.audit|[(.enabled|tostring),(.includeRequestData|tostring),(.includeResponseData|tostring)]|join(\" \")")" "true false false"
 DC=$(docs "${EA[@]}" --set observability.enabled=true --set observability.bundled.enabled=true --set observability.capture.content=true)
@@ -94,6 +95,9 @@ NPE='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-vmcp-egr
 eq "egress policy: in the tools namespace, Egress only, selects the vMCPs of the group by name" "$(q "$D" "$NPE|[.metadata.namespace,(.spec.policyTypes|join(\",\")),(.spec.podSelector|tojson)]|join(\" \")")" 'mcp-tools Egress {"matchExpressions":[{"key":"toolhive-name","operator":"In","values":["tools-disputes"]}],"matchLabels":{"app":"virtualmcpserver"}}'
 eq "egress policy: DNS, the endpoint pods, kb, notify, the identity provider namespace, the API server: six rules, each with a destination" "$(q "$D" "$NPE|[(.spec.egress|length|tostring),([.spec.egress[]|has(\"to\")]|all|tostring)]|join(\" \")")" "6 true"
 eq "egress policy: the endpoint rule names the namespace, the pod selector and the pod port" "$(q "$D" "$NPE|.spec.egress[]|select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"records-ns\")|[(.to|tojson),(.ports|tojson)]|join(\" \")")" '[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"records-ns"}},"podSelector":{"matchLabels":{"app":"records"}}}] [{"protocol":"TCP","port":8080}]'
+eq "egress policy: the identity provider rule names the Substrate namespace, the provider's pod labels and its pod port (values networkPolicy.substrate.idp)" "$(q "$D" "$NPE|.spec.egress[]|select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"ate-system\")|[(.to|tojson),(.ports|tojson)]|join(\" \")")" '[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ate-system"}},"podSelector":{"matchLabels":{"app":"ate-idp-server"}}}] [{"protocol":"TCP","port":8443}]'
+eq "networkPolicy.substrate.idp defaults: the labels and pod port of the Substrate chart 1.0.1 (ate-idp-server, 8443)" "$(yq -c '.networkPolicy.substrate.idp' "$CHART/values.yaml")" '{"podLabels":{"app":"ate-idp-server"},"port":8443}'
+eq "the identity provider values are used: another label and port show in the rule" "$(q "$(docs "${EA[@]}" --set networkPolicy.substrate.idp.podLabels.app=idp --set networkPolicy.substrate.idp.port=9443)" "$NPE|.spec.egress[]|select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"ate-system\")|[.to[0].podSelector.matchLabels.app,(.ports[0].port|tostring)]|join(\" \")")" "idp 9443"
 eq "egress policy: the API server rule uses controlPlane.apiServerCIDRs and the ports" "$(q "$D" "$NPE|.spec.egress[]|select(.to[0].ipBlock!=null)|[(.to|tojson),(.ports|map(.port)|tojson)]|join(\" \")")" '[{"ipBlock":{"cidr":"172.18.0.0/24"}}] [443,6443]'
 eq "egress policy: kb and notify by namespace and pod label, port 8080 (the mirrors)" "$(q "$D" "$NPE|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app==\"kb\" or .to[0].podSelector.matchLabels.app==\"notify\")|.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]+\"/\"+.to[0].podSelector.matchLabels.app+\":\"+(.ports[0].port|tostring)]|sort|join(\" \")")" "openagentix-knowledge/kb:8080 openagentix-notify/notify:8080"
 eq "egress policy: no rule without a destination (no allow-all)" "$(q "$D" "$NPE|[.spec.egress[]|select(has(\"to\")|not)]|length")" 0
@@ -105,6 +109,13 @@ eq "no egress policy and no endpoint policy exist for a group that is not there 
 eq "the kb and notify ingress policies admit the profile vMCP of the group (as every profile vMCP)" "$(q "$D" '[.[]|select(.kind=="NetworkPolicy" and (.metadata.name=="kb-ingress" or .metadata.name=="notify-ingress"))|[.spec.ingress[0].from[]|.podSelector.matchLabels["toolhive-name"]]|index("tools-disputes")!=null]|all')" true
 DOBS=$(docs "${EA[@]}" --set observability.enabled=true --set observability.bundled.enabled=true)
 eq "with observability the egress policy also admits the telemetry endpoint (jaeger, 4318)" "$(q "$DOBS" "$NPE|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app==\"jaeger\")|(.ports|tojson)]|join(\" \")")" '[{"protocol":"TCP","port":4318}]'
+OBX=(--set observability.enabled=true --set observability.bundled.enabled=false)
+EGN='[.spec.egress[]|(.to[0]|tojson)+" "+(.ports//[]|map(.port)|tojson)]|map(select(test("collector|203|0.0.0.0")))|join(";")'
+eq "telemetry to a named collector outside the cluster: no rule at all (a policy cannot name a host, and a rule for every public address would undo the policy)" "$(q "$(docs "${EA[@]}" "${OBX[@]}" --set observability.otlp.endpoint=https://collector.example.com)" "$NPE|$EGN")" ""
+eq "... and the other six rules are unchanged" "$(q "$(docs "${EA[@]}" "${OBX[@]}" --set observability.otlp.endpoint=https://collector.example.com)" "$NPE|.spec.egress|length")" 6
+eq "telemetry to an address literal: that address only, the port of the URL (443 for https without a port)" "$(q "$(docs "${EA[@]}" "${OBX[@]}" --set observability.otlp.endpoint=https://203.0.113.5)" "$NPE|$EGN")" '{"ipBlock":{"cidr":"203.0.113.5/32"}} [443]'
+eq "... 80 for http without a port, and an explicit port is kept" "$(q "$(docs "${EA[@]}" "${OBX[@]}" --set observability.otlp.endpoint=http://203.0.113.5)" "$NPE|$EGN")/$(q "$(docs "${EA[@]}" "${OBX[@]}" --set observability.otlp.endpoint=http://203.0.113.5:4318)" "$NPE|$EGN")" '{"ipBlock":{"cidr":"203.0.113.5/32"}} [80]/{"ipBlock":{"cidr":"203.0.113.5/32"}} [4318]'
+eq "telemetry to an in-cluster collector: its namespace and port" "$(q "$(docs "${EA[@]}" "${OBX[@]}" --set observability.otlp.endpoint=http://collector.mon.svc.cluster.local:4318)" "$NPE|[.spec.egress[]|select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"mon\")|(.ports|map(.port)|tojson)]|join(\",\")")" "[4318]"
 
 echo "# endpoints: the catalog and definitions"
 CATP='.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|[.tools.toolhive.profiles[]|.name]|sort|join(",")'
@@ -112,13 +123,16 @@ DCP=$(docs "${EA[@]}" --set controlPlane.enabled=true)
 eq "catalog: the profile with an endpoint tool is absent, the shared-group profile is there" "$(q "$DCP" "$CATP")" lookup
 DCS=$(docs "${EA[@]}" --set controlPlane.enabled=true --set 'controlPlane.policy.allowedProfiles={*}')
 eq "catalog with allowedProfiles [*]: still absent" "$(q "$DCS" "$CATP")" lookup
+CATNS='.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-catalog")|.data["catalog.json"]|fromjson|.namespaces'
+eq "the catalog names the namespaces of the endpoints (the guard and the controller refuse their hosts in every form, whatever the shape of the namespace name)" "$(q "$DCP" "$CATNS|.endpoints|tojson")" '["records-ns"]'
+eq "the catalog has no endpoints key without an endpoint (byte-identical catalog)" "$(q "$(docs --set controlPlane.enabled=true)" "$CATNS|has(\"endpoints\")")" false
 eq "the AgentTemplate guard names neither the server of the profile nor an endpoint tool" "$(q "$DCS" '[.[]|select(.kind=="ValidatingAdmissionPolicy")|tojson]|join(" ")' | /usr/bin/grep -c 'toolhive-vmcp-disputes\|records_get_case')" 0
-er "naming the profile in controlPlane.policy.allowedProfiles is refused, with the fix" 'mcp.endpoints' "${EA[@]}" --set controlPlane.enabled=true --set 'controlPlane.policy.allowedProfiles={disputes}'
+er "naming the profile in controlPlane.policy.allowedProfiles is refused, with the fix" 'controlPlane.policy.allowedProfiles names the profile "disputes", which lists a tool of mcp.endpoints' "${EA[@]}" --set controlPlane.enabled=true --set 'controlPlane.policy.allowedProfiles={disputes}'
 CAV=(--set controlPlane.enabled=true --set controlPlane.containerAgents.enabled=true --set governance.a2a.enabled=true --set 'controlPlane.policy.allowedRuntimes={builtin,container}' --set 'controlPlane.policy.runtimes.container.images={registry.local/oa/}')
-er "naming the profile in containerAgents.toolProfiles is refused" 'containerAgents.toolProfiles' "${EA[@]}" "${CAV[@]}" --set 'controlPlane.containerAgents.toolProfiles={disputes}'
+er "naming the profile in containerAgents.toolProfiles is refused" 'controlPlane.containerAgents.toolProfiles names the profile "disputes"' "${EA[@]}" "${CAV[@]}" --set 'controlPlane.containerAgents.toolProfiles={disputes}'
 okr "a container agent profile without endpoint tools is not affected" "${EA[@]}" "${CAV[@]}" --set 'controlPlane.containerAgents.toolProfiles={lookup}'
 ev '.mcp.endpoints[0].allowDefinitions=true'
-er "allowDefinitions on an endpoint with a group of its own is refused" 'allowDefinitions' -f "$EX2"
+er "allowDefinitions on an endpoint with a group of its own is refused" 'allowDefinitions: true is not accepted' -f "$EX2"
 
 echo "# endpoints: agents on the profile"
 AG='{name:"disputeagent", model:"claude-haiku", systemPrompt:"You review disputes.", toolProfile:"disputes", knowledge:true, notify:{enabled:true}, tools:[{tools:["records_get_case"]}]}'
@@ -137,99 +151,99 @@ rm -f "$EX3"
 
 echo "# endpoints: the refusals (each fails the render with a sentence that names the value)"
 ev '.mcp.endpoints[0].url="http://records:8080/mcp"'
-er "a one-label host is refused" 'mcp.endpoints[records].url' -f "$EX2"
+er "a one-label host is refused" '.url "http://records:8080/mcp" must be http(s)://' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://records.records-ns:8080/mcp"'
-er "the short form <service>.<namespace> is refused as a URL (write .svc or .svc.cluster.local)" 'mcp.endpoints[records].url' -f "$EX2"
+er "the short form <service>.<namespace> is refused as a URL (write .svc or .svc.cluster.local)" '.url "http://records.records-ns:8080/mcp" must be http(s)://' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://records.records-ns.svc:8080/mcp"'
 okr "the .svc form is accepted" -f "$EX2"
 ev '.mcp.endpoints[0].url="https://records.records-ns.svc.cluster.local/mcp"'
 okr "https and no port are accepted" -f "$EX2"
 ev '.mcp.endpoints[0].url="https://api.example.com/mcp"'
-er "an internet URL is refused (not in this slice)" 'outside the cluster' -f "$EX2"
+er "an internet URL is refused (not in this slice)" '.url "https://api.example.com/mcp" is outside the cluster' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://10.0.0.5:8080/mcp"'
-er "an IPv4 literal is refused" 'address' -f "$EX2"
+er "an IPv4 literal is refused" 'names an address (an IPv4 or IPv6 literal)' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://[::1]:8080/mcp"'
-er "an IPv6 literal is refused" 'address' -f "$EX2"
+er "an IPv6 literal is refused" 'names an address (an IPv4 or IPv6 literal)' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://user:pw@records.records-ns.svc.cluster.local:8080/mcp"'
-er "a user name and password in the URL are refused" 'user name' -f "$EX2"
+er "a user name and password in the URL are refused" '.url may not hold a user name or password' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://records.records-ns.svc.cluster.local:8080/mcp?x=1"'
-er "a query is refused" 'query' -f "$EX2"
+er "a query is refused" '.url may not hold a query' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://records.records-ns.svc.cluster.local:8080/mcp#a"'
-er "a fragment is refused" 'fragment' -f "$EX2"
+er "a fragment is refused" '.url may not hold a fragment' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://records.records-ns.svc.cluster.local:99999/mcp"'
-er "a port above 65535 is refused" 'port' -f "$EX2"
+er "a port above 65535 is refused" '.url has the port 99999' -f "$EX2"
 ev '.mcp.endpoints[0].url="ftp://records.records-ns.svc.cluster.local/mcp"'
-er "a scheme other than http and https is refused" 'mcp.endpoints[records].url' -f "$EX2"
+er "a scheme other than http and https is refused" '.url must start with http:// or https:// (got "ftp://' -f "$EX2"
 # the namespaces: every value of values.yaml whose key ends in "namespace" (an empty value is the release namespace), and the fixed ones
 NSV=$(yq -r '[.. | objects | to_entries[] | select(.key|test("namespace$";"i")) | .value | strings | if .=="" then "openagentix-system" else . end] | unique | .[]' "$CHART/values.yaml")
 eq "the walk of values.yaml finds the namespace values (the test is not empty)" "$([ "$(printf '%s\n' "$NSV" | wc -l | tr -d ' ')" -ge 15 ] && echo yes || echo no)" yes
 for NSX in $NSV default kube-system kube-public kube-node-lease openagentix-anything; do
   ev ".mcp.endpoints[0].url=\"http://records.$NSX.svc.cluster.local:8080/mcp\""
-  er "an endpoint in the namespace $NSX is refused as a platform namespace" 'platform or system namespace' -f "$EX2"
+  er "an endpoint in the namespace $NSX is refused as a platform namespace" "is in the namespace \"$NSX\", a platform or system namespace" -f "$EX2"
 done
-er "a namespace value that is new in the values (zzz.extraNamespace) is refused at once: the refusal list is built from the values" 'platform or system namespace' -f "$EX" --set zzz.extraNamespace=records-ns
+er "a namespace value that is new in the values (zzz.extraNamespace) is refused at once: the refusal list is built from the values" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX" --set zzz.extraNamespace=records-ns
 ev '.mcp.endpoints[0].url="http://kubernetes.default.svc.cluster.local:443/mcp"'
-er "the Kubernetes API service is refused by name" 'Kubernetes API service' -f "$EX2"
+er "the Kubernetes API service is refused by name" '.url is the Kubernetes API service' -f "$EX2"
 ev '.mcp.endpoints[0].ingress.podSelector={}'
-er "an empty podSelector is refused" 'podSelector' -f "$EX2"
+er "an empty podSelector is refused" '.ingress.podSelector must be a non-empty map' -f "$EX2"
 ev 'del(.mcp.endpoints[0].ingress.podSelector)'
-er "a missing podSelector is refused" 'podSelector' -f "$EX2"
+er "a missing podSelector is refused" '.ingress.podSelector must be a non-empty map' -f "$EX2"
 ev 'del(.mcp.endpoints[0].ingress.port)'
-er "a missing port is refused" 'ingress.port' -f "$EX2"
+er "a missing port is refused" '.ingress.port is required' -f "$EX2"
 ev '.mcp.endpoints[0].ingress.port=0'
-er "port 0 is refused" 'ingress.port' -f "$EX2"
+er "port 0 is refused" '.ingress.port is required' -f "$EX2"
 ev 'del(.mcp.endpoints[0].ingress)'
-er "an in-cluster endpoint without ingress is refused" 'ingress' -f "$EX2"
+er "an in-cluster endpoint without ingress is refused" '.ingress is required for an in-cluster endpoint' -f "$EX2"
 ev '.mcp.endpoints[0].ingress.podSelector={app:{x:1}}'
-er "a podSelector value that is not a string is refused" 'podSelector' -f "$EX2"
-er "networkPolicy.enabled=false is refused with an endpoint" 'networkPolicy.enabled' -f "$EX" --set networkPolicy.enabled=false
-er "an empty controlPlane.apiServerCIDRs is refused with an endpoint (the fallback would open the API server to any address)" 'controlPlane.apiServerCIDRs' -f "$EX" --set-json 'controlPlane.apiServerCIDRs=[]'
-er "mcp.enabled=false with endpoints is refused" 'mcp.enabled' -f "$EX" --set mcp.enabled=false --set 'mcp.profiles=null'
+er "a podSelector value that is not a string is refused" '.ingress.podSelector label "app" needs a non-empty string value' -f "$EX2"
+er "networkPolicy.enabled=false is refused with an endpoint" 'needs networkPolicy.enabled=true' -f "$EX" --set networkPolicy.enabled=false
+er "an empty controlPlane.apiServerCIDRs is refused with an endpoint (the fallback would open the API server to any address)" 'needs controlPlane.apiServerCIDRs' -f "$EX" --set-json 'controlPlane.apiServerCIDRs=[]'
+er "mcp.enabled=false with endpoints is refused" 'needs mcp.enabled=true' -f "$EX" --set mcp.enabled=false --set 'mcp.profiles=null'
 er "mcp.endpoints that is not a list is refused" 'mcp.endpoints must be a list' --set mcp.endpoints=x
 ev '.mcp.endpoints[0].urll="x"'
-er "an unknown key in an endpoint is refused" 'urll' -f "$EX2"
+er "an unknown key in an endpoint is refused" 'unknown key "urll"' -f "$EX2"
 for BADN in 'Records' 'a--b' '-a' "$(printf 'a%.0s' $(seq 1 31))" 'a_b'; do
   ev ".mcp.endpoints[0].name=\"$BADN\" | .mcp.profiles[0].tools={\"$BADN\":[\"get_case\"]}"
-  er "the endpoint name '$(printf '%s' "$BADN" | cut -c1-12)' is refused" 'mcp.endpoints[' -f "$EX2"
+  er "the endpoint name '$(printf '%s' "$BADN" | cut -c1-12)' is refused" 'name must be lower case letters, digits and single dashes, at most 30' -f "$EX2"
 done
 ev '.mcp.endpoints += [.mcp.endpoints[0]]'
-er "a duplicate endpoint name is refused" 'used twice' -f "$EX2"
+er "a duplicate endpoint name is refused" 'the name "records" is used twice' -f "$EX2"
 for TAKEN in fetch osv knowledge delivery knowledge-disputes delivery-disputes cluster-read db-read; do
   ev ".mcp.endpoints[0].name=\"$TAKEN\" | .mcp.profiles[0].tools={\"$TAKEN\":[\"get_case\"]}"
   er "the endpoint name $TAKEN is refused (it is taken or reserved)" 'is already' -f "$EX2"
 done
 for BADG in tools diagnostics Disputes a--b -x "$(printf 'a%.0s' $(seq 1 21))"; do
   ev ".mcp.endpoints[0].group=\"$BADG\""
-  er "the group name '$(printf '%s' "$BADG" | cut -c1-12)' is refused" 'mcp.endpoints[records].group' -f "$EX2"
+  er "the group name '$(printf '%s' "$BADG" | cut -c1-12)' is refused" ".group \"$BADG\" is not valid" -f "$EX2"
 done
 ev '.mcp.endpoints[0].group=""'
-er "an empty group without allowUnauthenticated is refused (the shared group is opt-in)" 'allowUnauthenticated' -f "$EX2"
+er "an empty group without allowUnauthenticated is refused (the shared group is opt-in)" '.group is empty: set group' -f "$EX2"
 ev '.mcp.endpoints[0].group="" | .mcp.endpoints[0].allowUnauthenticated=true | del(.mcp.endpoints[0].auth)'
-er "the shared group mode is not in this slice: allowUnauthenticated is refused with that sentence" 'not available' -f "$EX2"
+er "the shared group mode is not in this slice: allowUnauthenticated is refused with that sentence" 'is not available in this release (ADR 0026 slice 6)' -f "$EX2"
 ev 'del(.mcp.endpoints[0].auth)'
-er "an in-cluster endpoint without a credential is refused" 'auth' -f "$EX2"
+er "an in-cluster endpoint without a credential is refused" '.auth is required' -f "$EX2"
 ev '.mcp.endpoints[0].transport="websocket"'
-er "an unknown transport is refused" 'transport' -f "$EX2"
+er "an unknown transport is refused" '.transport must be streamable-http' -f "$EX2"
 ev '.mcp.endpoints[0].transport="sse"'
 okr "transport sse is accepted" -f "$EX2"
 for HN in Host Content-Length content-type Transfer-Encoding Connection Cookie Proxy-Authorization Mcp-Session-Id Mcp-Protocol-Version Metadata-Flavor Metadata X-aws-ec2-metadata-token x-AWS-ec2-metadata-token; do
   ev ".mcp.endpoints[0].auth.header.name=\"$HN\""
-  er "the header name $HN is refused" 'header name' -f "$EX2"
+  er "the header name $HN is refused" 'is a refused header name' -f "$EX2"
 done
 for HN in 'bad name' 'a_b' "$(printf 'a%.0s' $(seq 1 65))" ''; do
   ev ".mcp.endpoints[0].auth.header.name=\"$HN\""
-  er "the header name '$(printf '%s' "$HN" | cut -c1-12)' is refused (not a token of letters, digits, dashes, at most 64)" 'header name' -f "$EX2"
+  er "the header name '$(printf '%s' "$HN" | cut -c1-12)' is refused (not a token of letters, digits, dashes, at most 64)" 'is not a valid header name' -f "$EX2"
 done
 ev '.mcp.endpoints[0].auth.header.name="X-Api-Key"'
 okr "a custom header name is accepted" -f "$EX2"
 ev 'del(.mcp.endpoints[0].auth.header.secret.key)'
-er "a Secret reference without a key is refused" 'auth.header.secret' -f "$EX2"
+er "a Secret reference without a key is refused" '.auth.header.secret must be {name:' -f "$EX2"
 ev '.mcp.endpoints[0].auth.header.secret.name="Bad_Name"'
-er "a Secret name that is not a DNS name is refused" 'auth.header.secret' -f "$EX2"
+er "a Secret name that is not a DNS name is refused" '.auth.header.secret must be {name:' -f "$EX2"
 ev '.mcp.endpoints[0].auth.header.value="x"'
-er "a header value in the values is refused (only a Secret reference is possible)" 'auth.header' -f "$EX2"
+er "a header value in the values is refused (only a Secret reference is possible)" '.auth.header: only name and secret are accepted, got "value"' -f "$EX2"
 ev '.mcp.endpoints[0].auth.bearer={token:"x"}'
-er "an auth type other than header is refused" 'bearer' -f "$EX2"
+er "an auth type other than header is refused" '.auth: only the key header is accepted, got "bearer"' -f "$EX2"
 ev '.mcp.profiles[0].codeMode=true'
 er "code mode on a profile that lists an endpoint tool is refused" 'codeMode must be false' -f "$EX2"
 ev '.mcp.profiles[0].tools.records=["get.case"]'
@@ -248,18 +262,18 @@ ev '.mcp.profiles[0].tools.fetch=["fetch"]'
 er "... also for fetch" 'mcp.servers' -f "$EX2"
 ev '.diagnostics={enabled:true,apiServerCIDRs:["172.18.0.0/24"],cluster:{enabled:true,statusNamespaces:["kagent"]}} | .mcp.profiles[0].tools["cluster-read"]=["pods_get"]'
 eq "a profile that lists an endpoint and a diagnostics tool is refused (two groups)" "$([ -n "$(render_err -f "$EX2")" ] && echo refused || echo rendered)" refused
-er "mcp.endpointEntriesHeld naming an endpoint of a group of its own is refused" 'endpointEntriesHeld' -f "$EX" --set 'mcp.endpointEntriesHeld={records}'
-er "mcp.endpointEntriesHeld naming something that is not an endpoint is refused" 'endpointEntriesHeld' -f "$EX" --set 'mcp.endpointEntriesHeld={nosuch}'
-er "mcp.endpointEntriesHeld that is not a list is refused" 'endpointEntriesHeld' -f "$EX" --set mcp.endpointEntriesHeld=records
+er "mcp.endpointEntriesHeld naming an endpoint of a group of its own is refused" 'an endpoint with a group of its own: only an endpoint' -f "$EX" --set 'mcp.endpointEntriesHeld={records}'
+er "mcp.endpointEntriesHeld naming something that is not an endpoint is refused" 'which is not an entry of mcp.endpoints' -f "$EX" --set 'mcp.endpointEntriesHeld={nosuch}'
+er "mcp.endpointEntriesHeld that is not a list is refused" 'must be a list of endpoint names' -f "$EX" --set mcp.endpointEntriesHeld=records
 
 echo "# endpoints: agents and definitions cannot reach the endpoint around the profile"
 for FORM in records.records-ns records.records-ns.svc records.records-ns.svc.cluster.local '*.records-ns.svc' '*.records-ns.svc.cluster.local'; do
   yq -y "{agents: (.agents|.[0].egress={allow:[\"http://$FORM\"]})}" "$CHART/values.yaml" > "$EX2"
-  er "agents[].egress.allow naming the endpoint host as $FORM is refused" 'mcp.endpoints' -f "$EX2" -f "$EX"
-  er "controlPlane.policy.egress.allowedOrigins naming it as $FORM is refused" 'mcp.endpoints' -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.allowedOrigins={http://$FORM}"
+  er "agents[].egress.allow naming the endpoint host as $FORM is refused" 'names the host of an entry of mcp.endpoints (in any form' -f "$EX2" -f "$EX"
+  er "controlPlane.policy.egress.allowedOrigins naming it as $FORM is refused" 'names the host of an entry of mcp.endpoints (in any form' -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.allowedOrigins={http://$FORM}"
 done
 for FORM in records.records-ns:8080 records.records-ns.svc:8080 records.records-ns.svc.cluster.local:8080; do
-  er "controlPlane.policy.egress.inClusterDestinations naming it as $FORM is refused" 'mcp.endpoints' -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.inClusterDestinations={$FORM}"
+  er "controlPlane.policy.egress.inClusterDestinations naming it as $FORM is refused" 'names the host of an entry of mcp.endpoints (in any form' -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.inClusterDestinations={$FORM}"
 done
 yq -y '{agents: (.agents|.[0].egress={allow:["http://other.records-ns.svc.cluster.local"]})}' "$CHART/values.yaml" > "$EX2"
 okr "another service of the same namespace is not named by this rule (it is only the endpoint host)" -f "$EX2" -f "$EX"

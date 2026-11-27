@@ -47,6 +47,8 @@ type Namespaces struct {
 	Agents  string `json:"agents"`  // where definitions live and objects are written
 	Gateway string `json:"gateway"` // where the controller's key ConfigMap lives
 	Tools   string `json:"tools"`   // the tool servers' namespace: egress into it is refused
+	// Endpoints are the namespaces of the endpoints of mcp.endpoints (ADR 0026): egress into them is refused in every form, so that the guard does not depend on the shape of the name
+	Endpoints []string `json:"endpoints,omitempty"`
 }
 
 // Feature is knowledge or notify: an optional service that adds tools and a prompt to an agent.
@@ -420,6 +422,11 @@ func ForbiddenEgressHost(host string, ns Namespaces) (string, bool) {
 				return fmt.Sprintf("inside the tools namespace %q: that would reach a tool server around its profile", n.name), true
 			}
 			return fmt.Sprintf("inside the %s namespace %q: that would reach a platform service around its own controls", n.what, n.name), true
+		}
+	}
+	for _, n := range ns.Endpoints {
+		if HostInNamespace(host, n) {
+			return fmt.Sprintf("inside the namespace %q of an endpoint of mcp.endpoints: that would reach the endpoint around its tool profile", n), true
 		}
 	}
 	if host == "kubernetes" || host == "kubernetes.default" || strings.HasPrefix(host, "kubernetes.default.") {

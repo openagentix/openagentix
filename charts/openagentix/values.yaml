@@ -32,7 +32,13 @@ networkPolicy:
     # Agent sandboxes do not call services themselves: their traffic leaves through this proxy, so the proxy
     # is the source address vMCP and the kagent controller see for every agent.
     egressPodLabels: {app: atenet-egress}
-  controllerPodLabels:                   # the kagent controller (labels set by the kagent chart)
+    # The identity provider of Substrate (ate-idp-server): the vMCPs of a group of mcp.endpoints fetch the keys that check the callers' tokens from it, so their
+    # egress policy admits exactly these pods on this pod port (a policy sees the pod port, not the Service port 443). The defaults are what the Substrate chart
+    # 1.0.1 deploys (label app: ate-idp-server, container port 8443, read from its manifests). Change them if your Substrate version differs.
+    idp:
+      podLabels: {app: ate-idp-server}
+      port: 8443
+  controllerPodLabels:                  # the kagent controller (labels set by the kagent chart)
     app.kubernetes.io/component: controller
     app.kubernetes.io/name: kagent
   # Additional callers of the controller's A2A port, e.g. a chat gateway in its own namespace. Each entry:

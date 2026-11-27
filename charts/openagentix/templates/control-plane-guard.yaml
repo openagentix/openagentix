@@ -375,7 +375,7 @@ spec:
         variables.del || (has(variables.cur.spec.destinations) && variables.cur.spec.destinations.all(d, has(d.origin) && type(d.origin) == string && size(d.origin) <= 270 && d.origin.matches({{ $originRE | toJson }}) &&
           [d.origin.split('://')[1]].all(authority, [authority.split(':')[0]].all(h0, [h0.startsWith('*.') ? h0.substring(2) : h0].all(host,
             [authority.contains(':') ? authority : authority + (d.origin.startsWith('https://') ? ':443' : ':80')].all(hp,
-              !{{ list $cat.namespaces.tools $cat.namespaces.agents $cat.namespaces.gateway "kube-system" | toJson }}.exists(n, host.endsWith('.' + n) || host.endsWith('.' + n + '.svc') || host.endsWith('.' + n + '.svc.cluster.local')) &&
+              !{{ concat (list $cat.namespaces.tools $cat.namespaces.agents $cat.namespaces.gateway "kube-system") ($cat.namespaces.endpoints | default list) | toJson }}.exists(n, host.endsWith('.' + n) || host.endsWith('.' + n + '.svc') || host.endsWith('.' + n + '.svc.cluster.local')) &&
               host != 'kubernetes' && host != 'kubernetes.default' && !host.startsWith('kubernetes.default.') &&
               ((host.contains('.') && !host.matches('^[0-9.]+$') && !host.contains('.svc.') && !({{ $internalSuffixes | toJson }}.exists(s, host.endsWith('.' + s))) && host.matches('[.]([a-z]{2,63}|xn--[a-z0-9-]{1,59})$')) ||
                hp in {{ $inCluster | toJson }})))))))

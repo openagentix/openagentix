@@ -211,10 +211,15 @@ spec:
     authzConfig:
       type: inline
       inline:
-        {{- /* The profile filter covers tools only. The live check of ADR 0026 (slice 2) found that a profile vMCP lists and reads the resources and prompts of a backend of its
-        group that its profile does not list. A profile on an endpoint group offers tools only: a forbid on resource reads and prompt gets (the lists are filtered by the same
-        actions) stands in front of the permit. */}}
-        policies: {{ if and $grp (ne $grp "diagnostics") }}{{ list "forbid(principal, action == Action::\"read_resource\", resource);" "forbid(principal, action == Action::\"get_prompt\", resource);" "permit(principal, action, resource);" | toJson }}{{ else }}["permit(principal, action, resource);"]{{ end }}
+        {{- /* The profile filter covers tools only (the live check of ADR 0026 slice 2 found that a profile vMCP lists and reads the resources and prompts of every backend of its
+        group). A profile on an endpoint group therefore authorizes with an ALLOW LIST, not a forbid list: call_tool on each of the profile's tools, as the model sees them,
+        and list_tools. Every other action is denied by default, a method that ToolHive adds later included. */}}
+        {{- $allow := list }}
+        {{- if and $grp (ne $grp "diagnostics") }}
+        {{- range $tn := (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) }}{{ $allow = append $allow (printf "permit(principal, action == Action::\"call_tool\", resource == Tool::%s);" (quote $tn)) }}{{ end }}
+        {{- $allow = append $allow "permit(principal, action == Action::\"list_tools\", resource);" }}
+        {{- end }}
+        policies: {{ if $allow }}{{ $allow | toJson }}{{ else }}["permit(principal, action, resource);"]{{ end }}
     {{- end }}
   outgoingAuth: {source: discovered}
 {{- end }}

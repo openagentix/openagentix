@@ -38,13 +38,13 @@ cleanup() {
   kill $PF $PF2 $PF3 $PF4 2>/dev/null
   [ -z "$TD" ] || rm -rf "$TD"
   $K delete virtualmcpserver tools-ovr tools-ovr2 tools-ovr3 probe-redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
-  $K delete mcpserverentry redir -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
+  $K delete mcpserverentry redir redirx -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpexternalauthconfig redir-noauth -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete mcpgroup probe -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete networkpolicy ci-probe-ingress -n "$ENS" --ignore-not-found >/dev/null 2>&1
-  $K delete deployment,service redir sink -n "$ENS" --ignore-not-found >/dev/null 2>&1
-  $K delete secret redir-auth -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
-  $K delete secret sink-expected -n "$ENS" --ignore-not-found >/dev/null 2>&1
+  $K delete deployment,service redir sink redirx sinkx -n "$ENS" --ignore-not-found >/dev/null 2>&1
+  $K delete secret redir-auth redirx-auth -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
+  $K delete secret sink-expected sinkx-expected -n "$ENS" --ignore-not-found >/dev/null 2>&1
   $K delete clusterrolebinding ci-jwks-anonymous --ignore-not-found >/dev/null 2>&1
   $K delete configmap ci-apiserver-ca -n "$MCPNS" --ignore-not-found >/dev/null 2>&1
   $K delete pod nettest -n default --ignore-not-found --wait=false >/dev/null 2>&1
@@ -175,6 +175,24 @@ check "resources/read of a resource of the endpoint other is refused (no content
 PG=$(mcp_call $GPORT "$TD/group" "$SID_G" 23 prompts/get '{"name":"other_greet-other"}' 2>/dev/null)
 check "prompts/get of a prompt of the endpoint other is refused (no messages)" "$(printf '%s' "$PG" | jq -r '([.result.messages[]?]|length>0)|not' 2>/dev/null)" true
 obs "resources/read answered: $(printf '%s' "$RD" | cut -c1-200); prompts/get answered: $(printf '%s' "$PG" | cut -c1-200)"
+# The policy of such a profile is an allow list (call_tool on its tools, list_tools), so every other action is denied by default. These are the other methods of the
+# protocol that carry content or change state on a backend. Each is called through the profile vMCP; a method that answers with content of a backend is a failure.
+RT=$(mcp_call $GPORT "$TD/group" "$SID_G" 24 resources/templates/list '{}' 2>/dev/null)
+CC=$(mcp_call $GPORT "$TD/group" "$SID_G" 25 completion/complete '{"ref":{"type":"ref/prompt","name":"other_greet-other"},"argument":{"name":"x","value":"a"}}' 2>/dev/null)
+CR=$(mcp_call $GPORT "$TD/group" "$SID_G" 26 completion/complete '{"ref":{"type":"ref/resource","uri":"echo://other/notes/{id}"},"argument":{"name":"id","value":"a"}}' 2>/dev/null)
+SB=$(mcp_call $GPORT "$TD/group" "$SID_G" 27 resources/subscribe '{"uri":"echo://other/note"}' 2>/dev/null)
+LV=$(mcp_call $GPORT "$TD/group" "$SID_G" 28 logging/setLevel '{"level":"debug"}' 2>/dev/null)
+obs "resources/templates/list answered: $(printf '%s' "$RT" | cut -c1-200)"
+obs "completion/complete (prompt) answered: $(printf '%s' "$CC" | cut -c1-200)"
+obs "completion/complete (resource template) answered: $(printf '%s' "$CR" | cut -c1-200)"
+obs "resources/subscribe answered: $(printf '%s' "$SB" | cut -c1-200)"
+obs "logging/setLevel answered: $(printf '%s' "$LV" | cut -c1-200)"
+check "resources/templates/list through the group's vMCP shows no template of any backend" "$(printf '%s' "$RT" | jq -r '[.result.resourceTemplates[]?]|length' 2>/dev/null)" 0
+check "completion/complete for a prompt of the endpoint other returns no value" "$(printf '%s' "$CC" | jq -r '[.result.completion.values[]?]|length' 2>/dev/null)" 0
+check "completion/complete for a resource template of the endpoint other returns no value" "$(printf '%s' "$CR" | jq -r '[.result.completion.values[]?]|length' 2>/dev/null)" 0
+check "resources/subscribe for a resource of the endpoint other is not accepted (an error)" "$(printf '%s' "$SB" | jq -r '(.error != null)' 2>/dev/null)" true
+check "no answer of these methods holds a name or a text of a backend resource or prompt (texts of the test server: 'the note of', 'completion-of', 'a template of', 'a prompt of')" "$(printf '%s%s%s%s%s' "$RT" "$CC" "$CR" "$SB" "$LV" | grep -c 'the note of\|completion-of\|a template of\|a prompt of')" 0
+obs "NOT VERIFIED: server-to-client requests of a backend (sampling, elicitation) and list_changed notifications: the test endpoint answers one JSON message per POST and cannot start a request of its own, so whether a vMCP relays them to its caller was not tested"
 kill $PF2 $PF3 2>/dev/null; PF2=""; PF3=""
 
 echo "# SPIKE (observations): the field overrides of the VirtualMCPServer aggregation (a tool's name and description)"
@@ -212,14 +230,19 @@ ovr_probe tools-ovr "A (the profile's filter [echo] and overrides echo -> rename
 ovr_probe tools-ovr3 "C (the profile's filter on the NEW name [renamed_echo] and overrides echo -> renamed_echo)" '.config.aggregation.tools=[{workload:"echo",filter:["renamed_echo"],overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}]' "$((XPORT + 2))"
 ovr_probe tools-ovr2 "B (no filter, no deny default, overrides echo -> renamed_echo)" '.config.aggregation|=(del(.defaultToolVisibility)|.tools=[{workload:"echo",overrides:{echo:{name:"renamed_echo",description:"renamed by the CI probe"}}}])' "$((XPORT + 1))"
 
-echo "# SPIKE (observations): a redirect from a backend (the header is the Authorization header of the entry)"
-RV="Bearer $(openssl rand -hex 24)"
-$K create secret generic redir-auth -n "$MCPNS" --from-file=value=<(printf '%s' "$RV") --dry-run=client -o yaml | $K apply -f - >/dev/null 2>&1
-$K create secret generic sink-expected -n "$ENS" --from-file=expected=<(printf '%s' "not-redir-$(openssl rand -hex 8)") --from-file=redir=<(printf '%s' "$RV") --dry-run=client -o yaml | $K apply -f - >/dev/null 2>&1
-unset RV
-for spec in "sink|echo|/etc/echo/auth/expected|redir=/etc/echo/auth/redir||" "redir|redirect||||http://sink.$ENS.svc.cluster.local:8080/mcp"; do
-  IFS='|' read -r NM MODE EXP OTH _ TO <<<"$spec"
-  $K apply -f - >/dev/null 2>&1 <<YAML
+echo "# SPIKE (observations): a redirect from a backend, and which header goes with it"
+# Two pairs, each a redirecting server and the target it points at. redir answers 307 and its entry sends the header Authorization; redirx answers 302 (which
+# a client may follow by switching a POST to a GET) and its entry sends a custom header X-Api-Key (a client usually keeps a custom header on a redirect to
+# another host and drops Authorization). The target of each logs what it received (the value is labelled, never printed).
+for pair in redir:Authorization:307:sink redirx:X-Api-Key:302:sinkx; do
+  IFS=: read -r RN RH RC SN <<<"$pair"
+  RV="Bearer $(openssl rand -hex 24)"
+  $K create secret generic "$RN-auth" -n "$MCPNS" --from-file=value=<(printf '%s' "$RV") --dry-run=client -o yaml | $K apply -f - >/dev/null 2>&1
+  $K create secret generic "$SN-expected" -n "$ENS" --from-file=expected=<(printf '%s' "not-$RN-$(openssl rand -hex 8)") --from-file="$RN"=<(printf '%s' "$RV") --dry-run=client -o yaml | $K apply -f - >/dev/null 2>&1
+  unset RV
+  for spec in "$SN|echo|/etc/echo/auth/expected|$RN=/etc/echo/auth/$RN|$RH||307|$SN-expected" "$RN|redirect|||$RH|http://$SN.$ENS.svc.cluster.local:8080/mcp|$RC|$SN-expected"; do
+    IFS='|' read -r NM MODE EXP OTH HDR TO CODE SEC <<<"$spec"
+    $K apply -f - >/dev/null 2>&1 <<YAML
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: $NM, namespace: $ENS, labels: {app: $NM}}
@@ -238,9 +261,11 @@ spec:
           env:
             - {name: ECHO_NAME, value: $NM}
             - {name: ECHO_MODE, value: $MODE}
+            - {name: ECHO_HEADER, value: $HDR}
             - {name: ECHO_EXPECTED_FILE, value: "$EXP"}
             - {name: ECHO_OTHER_FILES, value: "$OTH"}
             - {name: ECHO_REDIRECT_TO, value: "$TO"}
+            - {name: ECHO_REDIRECT_CODE, value: "$CODE"}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
           ports: [{name: http, containerPort: 8080}]
           readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 3}
@@ -250,7 +275,7 @@ spec:
             - {name: auth, mountPath: /etc/echo/auth, readOnly: true}
       volumes:
         - {name: src, configMap: {name: echo-mcp-src}}
-        - {name: auth, secret: {secretName: sink-expected, defaultMode: 0440}}
+        - {name: auth, secret: {secretName: $SEC, defaultMode: 0440}}
 ---
 apiVersion: v1
 kind: Service
@@ -259,8 +284,9 @@ spec:
   selector: {app: $NM}
   ports: [{name: http, port: 8080, targetPort: http}]
 YAML
+  done
 done
-$K rollout status deployment/sink -n "$ENS" --timeout=120s >/dev/null 2>&1; $K rollout status deployment/redir -n "$ENS" --timeout=120s >/dev/null 2>&1
+for d in sink redir sinkx redirx; do $K rollout status "deployment/$d" -n "$ENS" --timeout=120s >/dev/null 2>&1; done
 $K apply -f - >/dev/null 2>&1 <<YAML
 apiVersion: toolhive.stacklok.dev/v1beta1
 kind: MCPGroup
@@ -286,6 +312,19 @@ spec:
       - {headerName: Authorization, valueSecretRef: {name: redir-auth, key: value}}
 ---
 apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: redirx, namespace: $MCPNS}
+spec:
+  groupRef: {name: probe}
+  remoteUrl: http://redirx.$ENS.svc.cluster.local:8080/mcp
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: redir-noauth}
+  headerForward:
+    addHeadersFromSecret:
+      - {headerName: X-Api-Key, valueSecretRef: {name: redirx-auth, key: value}}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
 kind: VirtualMCPServer
 metadata: {name: probe-redir, namespace: $MCPNS}
 spec:
@@ -296,11 +335,16 @@ spec:
   outgoingAuth: {source: discovered}
 YAML
 $K rollout status deployment/probe-redir -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || true
-sleep 20
-obs "the vMCP probe-redir, backend redir: $($K get virtualmcpserver probe-redir -n "$MCPNS" -o json 2>/dev/null | jq -c '[.status.discoveredBackends[]?|{name,status,message:(.message|tostring|.[0:120])}]' 2>/dev/null)"
-obs "requests that reached the redirecting server (redir), by what its Authorization header was (other = a value this server does not know, none = no header): $($K logs -n "$ENS" deploy/redir --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request")|.presented]|group_by(.)|map(.[0]+"="+(length|tostring))|join(", ")' 2>/dev/null)"
-obs "requests that reached the redirect target (sink), by what the Authorization header was (redir = the value the vMCP sends to redir): $($K logs -n "$ENS" deploy/sink --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request")|.presented]|group_by(.)|map(.[0]+"="+(length|tostring))|join(", ")' 2>/dev/null)"
-obs "a custom header on a redirect: not tested (an entry of mcp.endpoints has one header; the field headerForward is not rendered with more)"
+sleep 25
+obs "the vMCP probe-redir, its backends: $($K get virtualmcpserver probe-redir -n "$MCPNS" -o json 2>/dev/null | jq -c '[.status.discoveredBackends[]?|{name,status,message:(.message|tostring|.[0:100])}]' 2>/dev/null)"
+by() { $K logs -n "$ENS" "deploy/$1" --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request")|.presented]|group_by(.)|map(.[0]+"="+(length|tostring))|join(", ")' 2>/dev/null; }
+obs "307 with Authorization: requests at the redirecting server redir by its header (other = a value it does not know, none = no header): $(by redir)"
+obs "307 with Authorization: requests at the target sink by its header (redir = the value the vMCP sends to redir): $(by sink)"
+obs "302 with X-Api-Key: requests at the redirecting server redirx by its header: $(by redirx)"
+obs "302 with X-Api-Key: requests at the target sinkx by its header (redirx = the value the vMCP sends to redirx)): $(by sinkx)"
+# the one that must hold: the custom header never reaches a target on another host
+check "a custom header (X-Api-Key) on a 302 redirect does not reach the redirect target (the target saw no request with the value of the redirecting entry)" "$($K logs -n "$ENS" deploy/sinkx --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request" and .presented=="redirx")]|length' 2>/dev/null)" 0
+check "an Authorization header on a 307 redirect does not reach the redirect target" "$($K logs -n "$ENS" deploy/sink --tail=500 2>/dev/null | jq -rs '[.[]|select(.event=="request" and .presented=="redir")]|length' 2>/dev/null)" 0
 
 echo
 echo "endpoints-live: passed=$PASS failed=$FAIL"

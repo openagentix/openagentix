@@ -513,6 +513,7 @@ the users from the render and fails if one is missing. */ -}}
     "skills" $skills
     "gateUrl" $gate
     "reservedNames" $reserved -}}
+{{- if include "oa.epOn" . }}{{ $_ := set $cat.namespaces "endpoints" (include "oa.epNamespaces" . | fromJsonArray) }}{{ end -}}
 {{- if include "oa.caOn" . -}}
 {{- $ca := .Values.controlPlane.containerAgents -}}
 {{- $gp := int $ca.gatewayPodPort | default (int .Values.gateway.port) -}}

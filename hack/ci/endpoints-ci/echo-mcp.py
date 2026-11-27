@@ -5,7 +5,11 @@ Stateless streamable HTTP: POST /mcp carries one JSON-RPC message and gets one J
 the value in the file ECHO_EXPECTED_FILE, else the answer is 401 and nothing else happens. The value is never logged. The log has one JSON line per request with
 the path and who the presented header belongs to: "self" (this server's value), a label from ECHO_OTHER_FILES ("label=path,label=path"), "other" or "none".
 
-ECHO_MODE=redirect: every POST answers 307 with Location ECHO_REDIRECT_TO, before any check (a probe for what the gateway does with a redirect).
+ECHO_MODE=redirect: every POST answers ECHO_REDIRECT_CODE (default 307) with Location ECHO_REDIRECT_TO, before any check (a probe for what the gateway does with a
+redirect and which headers it keeps).
+
+Besides tools the server has a resource, a resource template, a prompt, completions, subscriptions and a log level, so that the live check can see which of these methods a
+profile vMCP lets through. It cannot start a request of its own (sampling, elicitation): it answers one JSON message per POST.
 """
 import hmac
 import json
@@ -16,6 +20,7 @@ NAME = os.environ.get("ECHO_NAME", "echo")
 MODE = os.environ.get("ECHO_MODE", "echo")
 HEADER = os.environ.get("ECHO_HEADER", "Authorization")
 TARGET = os.environ.get("ECHO_REDIRECT_TO", "")
+REDIRECT_CODE = int(os.environ.get("ECHO_REDIRECT_CODE", "307"))
 
 
 def read(path):
@@ -75,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
         presented = who(self.headers.get(HEADER, ""))
         log(event="request", server=NAME, path=self.path, header=HEADER, presented=presented)
         if MODE == "redirect":
-            return self.send(307, b"", {"Location": TARGET})
+            return self.send(REDIRECT_CODE, b"", {"Location": TARGET})
         if self.path != "/mcp":
             return self.send(404)
         if presented != "self":
@@ -89,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(202)
         result = None
         if method == "initialize":
-            result = {"protocolVersion": params.get("protocolVersion", "2025-03-26"), "capabilities": {"tools": {"listChanged": False}, "resources": {}, "prompts": {}}, "serverInfo": {"name": NAME, "version": "ci"}}
+            result = {"protocolVersion": params.get("protocolVersion", "2025-03-26"), "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": True, "listChanged": True}, "prompts": {"listChanged": True}, "completions": {}, "logging": {}}, "serverInfo": {"name": NAME, "version": "ci"}}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
@@ -104,6 +109,12 @@ class Handler(BaseHTTPRequestHandler):
             result = {"resources": [{"uri": "echo://%s/note" % NAME, "name": "note of " + NAME}]}
         elif method == "resources/read":
             result = {"contents": [{"uri": params.get("uri", ""), "text": "the note of " + NAME}]}
+        elif method == "resources/templates/list":
+            result = {"resourceTemplates": [{"uriTemplate": "echo://%s/notes/{id}" % NAME, "name": "notes of " + NAME, "description": "a template of " + NAME}]}
+        elif method == "completion/complete":
+            result = {"completion": {"values": ["completion-of-" + NAME], "total": 1, "hasMore": False}}
+        elif method in ("resources/subscribe", "resources/unsubscribe", "logging/setLevel"):
+            result = {}
         elif method == "prompts/list":
             result = {"prompts": [{"name": "greet-" + NAME, "description": "a prompt of " + NAME}]}
         elif method == "prompts/get":

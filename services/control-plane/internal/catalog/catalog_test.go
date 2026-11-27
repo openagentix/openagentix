@@ -444,6 +444,25 @@ func TestPolicyRefusesPlatformNamespacesAndTheKubernetesAPIInClusterDestinations
 	}
 }
 
+// The namespaces of the endpoints of mcp.endpoints are never listable as an egress host, in every form, whatever the shape of the namespace name: a namespace of
+// letters only (billing) has the shape of a top level domain, so the shape rule cannot see it (ADR 0026 review of slice 2).
+func TestForbiddenEgressHostRefusesTheNamespacesOfEndpoints(t *testing.T) {
+	ns := Namespaces{Agents: "kagent", Gateway: "gw", Tools: "mcp-tools", Endpoints: []string{"billing", "records-ns"}}
+	for _, h := range []string{"records.billing", "records.billing.svc", "records.billing.svc.cluster.local", "x.records-ns", "a.records-ns.svc.cluster.local"} {
+		if _, bad := ForbiddenEgressHost(h, ns); !bad {
+			t.Errorf("%s is inside the namespace of an endpoint and must be forbidden", h)
+		}
+	}
+	for _, h := range []string{"billing.example.com", "docs.billing.dev", "api.osv.dev", "x.records-ns.dev", "billing"} {
+		if why, bad := ForbiddenEgressHost(h, ns); bad {
+			t.Errorf("%s is not inside an endpoint namespace but was forbidden: %s", h, why)
+		}
+	}
+	if _, bad := ForbiddenEgressHost("records.billing", Namespaces{Agents: "kagent", Gateway: "gw", Tools: "mcp-tools"}); bad {
+		t.Errorf("with no endpoint namespace the letters-only short form is not caught (the known limit of the shape rule)")
+	}
+}
+
 // The short form of a cluster name, <service>.<namespace>, is told from a public name by its last label (ADR 0026, slice 2): a namespace with a dash
 // or a digit cannot be a top level domain. All three forms of one in-cluster host are internal, and public names stay public.
 func TestInternalEgressHostShortFormOfAClusterName(t *testing.T) {
