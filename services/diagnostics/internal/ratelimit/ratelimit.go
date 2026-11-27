@@ -23,20 +23,32 @@ func New(perMinute int, now func() time.Time) *Limiter {
 	return &Limiter{now: now, capacity: float64(perMinute), tokens: float64(perMinute), last: now()}
 }
 
-// Allow takes one token if there is one.
-func (l *Limiter) Allow() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Limiter) refill() {
 	t := l.now()
 	if el := t.Sub(l.last); el > 0 {
 		l.tokens = min(l.capacity, l.tokens+l.capacity*float64(el)/float64(time.Minute))
 	}
 	l.last = t
+}
+
+// Allow takes one token if there is one.
+func (l *Limiter) Allow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refill()
 	if l.tokens < 1 {
 		return false
 	}
 	l.tokens--
 	return true
+}
+
+// Available says whether Allow would succeed, without taking a token.
+func (l *Limiter) Available() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refill()
+	return l.tokens >= 1
 }
 
 // Refund gives one token back, for a call that took one and was then refused elsewhere.

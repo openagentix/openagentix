@@ -2,6 +2,7 @@ package clusterread
 
 import (
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ const (
 	maxName  = 253
 	maxArg   = 512
 	maxLine  = 2048
-	preCut   = 4096
+	preCut   = 65536 // a guard on memory only: text is redacted before it is cut
 	maxShort = 128
 )
 
@@ -47,6 +48,20 @@ func (b *builder) s(v string, max int) string {
 
 func (b *builder) text(v string) string {
 	return b.s(strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(v), maxText)
+}
+
+var identRe = regexp.MustCompile(`^[A-Za-z0-9_.:/-]{1,128}$`)
+
+// ident is for reasons, types and kinds, which anyone who can create an Event or a custom
+// controller can set. Only a plain identifier passes; anything else becomes "[invalid]".
+func (b *builder) ident(v string) string {
+	if v == "" {
+		return ""
+	}
+	if !identRe.MatchString(v) {
+		return "[invalid]"
+	}
+	return b.s(v, maxShort)
 }
 
 func (b *builder) name(v string) string  { return b.s(v, maxName) }
@@ -93,7 +108,7 @@ func (b *builder) annotationNames(m map[string]string) []string {
 func (b *builder) owners(refs []metav1.OwnerReference) []map[string]any {
 	var out []map[string]any
 	for _, r := range refs {
-		out = append(out, map[string]any{"kind": b.short(r.Kind), "name": b.name(r.Name), "controller": r.Controller != nil && *r.Controller})
+		out = append(out, map[string]any{"kind": b.ident(r.Kind), "name": b.name(r.Name), "controller": r.Controller != nil && *r.Controller})
 	}
 	return out
 }
@@ -101,11 +116,11 @@ func (b *builder) owners(refs []metav1.OwnerReference) []map[string]any {
 func ownerString(refs []metav1.OwnerReference, b *builder) string {
 	for _, r := range refs {
 		if r.Controller != nil && *r.Controller {
-			return b.short(r.Kind) + "/" + b.name(r.Name)
+			return b.ident(r.Kind) + "/" + b.name(r.Name)
 		}
 	}
 	if len(refs) > 0 {
-		return b.short(refs[0].Kind) + "/" + b.name(refs[0].Name)
+		return b.ident(refs[0].Kind) + "/" + b.name(refs[0].Name)
 	}
 	return ""
 }
@@ -123,7 +138,7 @@ func (b *builder) withText(m map[string]any, msg string) map[string]any {
 func (b *builder) podConditions(cs []corev1.PodCondition) []map[string]any {
 	var out []map[string]any
 	for _, c := range cs {
-		out = append(out, b.withText(map[string]any{"type": b.short(string(c.Type)), "status": b.short(string(c.Status)), "reason": b.short(c.Reason)}, c.Message))
+		out = append(out, b.withText(map[string]any{"type": b.ident(string(c.Type)), "status": b.ident(string(c.Status)), "reason": b.ident(c.Reason)}, c.Message))
 	}
 	return out
 }
@@ -149,9 +164,9 @@ func (b *builder) podRow(p *corev1.Pod) map[string]any {
 		restarts += cs.RestartCount
 	}
 	row := map[string]any{
-		"name": b.name(p.Name), "phase": b.short(string(p.Status.Phase)),
+		"name": b.name(p.Name), "phase": b.ident(string(p.Status.Phase)),
 		"ready": strconv.Itoa(ready) + "/" + strconv.Itoa(len(p.Spec.Containers)), "restarts": restarts,
-		"reason": b.short(reason), "node": b.name(p.Spec.NodeName), "age_seconds": b.age(p.CreationTimestamp), "owner": ownerString(p.OwnerReferences, b),
+		"reason": b.ident(reason), "node": b.name(p.Spec.NodeName), "age_seconds": b.age(p.CreationTimestamp), "owner": ownerString(p.OwnerReferences, b),
 	}
 	return row
 }
@@ -159,7 +174,7 @@ func (b *builder) podRow(p *corev1.Pod) map[string]any {
 func (b *builder) pod(p *corev1.Pod) map[string]any {
 	out := map[string]any{
 		"name": b.name(p.Name), "namespace": b.name(p.Namespace), "labels": b.strMap(p.Labels), "owner_references": b.owners(p.OwnerReferences),
-		"node": b.name(p.Spec.NodeName), "phase": b.short(string(p.Status.Phase)), "qos_class": b.short(string(p.Status.QOSClass)),
+		"node": b.name(p.Spec.NodeName), "phase": b.ident(string(p.Status.Phase)), "qos_class": b.ident(string(p.Status.QOSClass)),
 		"start_time": b.startTime(p.Status.StartTime), "conditions": b.podConditions(p.Status.Conditions),
 		"annotation_names": b.annotationNames(p.Annotations),
 	}
@@ -419,10 +434,16 @@ func (b *builder) state(s corev1.ContainerState) map[string]any {
 	case s.Running != nil:
 		return map[string]any{"state": "running", "started_at": b.when(s.Running.StartedAt)}
 	case s.Waiting != nil:
-		return b.withText(map[string]any{"state": "waiting", "reason": b.short(s.Waiting.Reason)}, s.Waiting.Message)
+		m := map[string]any{"state": "waiting", "reason": b.ident(s.Waiting.Reason)}
+		// In a status namespace the message is kept only for reasons whose text the kubelet builds
+		// from cluster facts. A failed hook or start puts the command and its output there.
+		if !b.status || waitingMessageReasons[s.Waiting.Reason] {
+			b.withText(m, s.Waiting.Message)
+		}
+		return m
 	case s.Terminated != nil:
 		t := s.Terminated
-		m := map[string]any{"state": "terminated", "reason": b.short(t.Reason), "exit_code": t.ExitCode, "signal": t.Signal,
+		m := map[string]any{"state": "terminated", "reason": b.ident(t.Reason), "exit_code": t.ExitCode, "signal": t.Signal,
 			"started_at": b.when(t.StartedAt), "finished_at": b.when(t.FinishedAt)}
 		if !b.status {
 			b.withText(m, t.Message)
@@ -433,6 +454,12 @@ func (b *builder) state(s corev1.ContainerState) map[string]any {
 }
 
 // ---- events ----
+
+// waitingMessageReasons are the reasons whose waiting message stays in status namespaces.
+var waitingMessageReasons = map[string]bool{
+	"CrashLoopBackOff": true, "ImagePullBackOff": true, "ErrImagePull": true, "CreateContainerConfigError": true,
+	"InvalidImageName": true, "ErrImageNeverPull": true, "ContainerCreating": true, "PodInitializing": true,
+}
 
 // containerOutputReasons are event reasons whose message the kubelet fills
 // with output of a probe or a hook.
@@ -456,7 +483,7 @@ func (b *builder) event(e *corev1.Event) map[string]any {
 		count = e.Series.Count
 	}
 	m := map[string]any{
-		"type": b.short(e.Type), "reason": b.short(e.Reason), "object": b.short(e.InvolvedObject.Kind) + "/" + b.name(e.InvolvedObject.Name),
+		"type": b.ident(e.Type), "reason": b.ident(e.Reason), "object": b.ident(e.InvolvedObject.Kind) + "/" + b.name(e.InvolvedObject.Name),
 		"count": count, "last_time": b.when(metav1.NewTime(eventTime(e))),
 	}
 	if !e.FirstTimestamp.IsZero() {
@@ -545,7 +572,7 @@ func fromReplicaSet(r *appsv1.ReplicaSet) workload {
 func (b *builder) workloadRow(w workload) map[string]any {
 	var conds []map[string]any
 	for _, c := range w.conditions {
-		conds = append(conds, b.withText(map[string]any{"type": b.short(c.typ), "status": b.short(c.status), "reason": b.short(c.reason)}, c.msg))
+		conds = append(conds, b.withText(map[string]any{"type": b.ident(c.typ), "status": b.ident(c.status), "reason": b.ident(c.reason)}, c.msg))
 	}
 	return map[string]any{
 		"name": b.name(w.meta.Name), "kind": w.kind, "desired": w.desired, "ready": w.ready, "updated": w.updated, "available": w.available,
@@ -603,7 +630,7 @@ func (b *builder) node(n *corev1.Node, full bool) map[string]any {
 			pressure["network_unavailable"] = is
 		}
 		if full {
-			conds = append(conds, b.withText(map[string]any{"type": b.short(string(c.Type)), "status": b.short(string(c.Status)), "reason": b.short(c.Reason)}, c.Message))
+			conds = append(conds, b.withText(map[string]any{"type": b.ident(string(c.Type)), "status": b.ident(string(c.Status)), "reason": b.ident(c.Reason)}, c.Message))
 		}
 	}
 	var taints []map[string]any

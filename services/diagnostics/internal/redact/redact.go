@@ -32,39 +32,85 @@ const (
 type rule struct {
 	re    *regexp.Regexp
 	group int
-	// keep, if set, decides from the matched text whether to leave it alone.
-	keep func(string) bool
+	// keep, if set, decides from the whole match and the captured value whether to leave it alone.
+	keep func(match, val string) bool
+}
+
+const (
+	kc    = `[A-Za-z0-9_.\-]*`
+	sep   = `(?:\s*[:=]\s*|\t+|%3[dD])`
+	value = `("[^"]*"|'[^']*'|[^\s;&"'}\]]+)`
+)
+
+var numberRe = regexp.MustCompile(`^[0-9.]+$`)
+
+// keepPair leaves counters (input_tokens=1234) and references to a Secret by name (secretName: db-creds).
+func keepPair(match, val string) bool {
+	key := strings.ToLower(match)
+	if i := strings.IndexAny(key, ":=%\t"); i >= 0 {
+		key = key[:i]
+	}
+	key = strings.Trim(key, " \"'")
+	if numberRe.MatchString(val) && strings.Contains(key, "tokens") {
+		return true
+	}
+	for _, ref := range []string{"secretname", "secret_name", "secretref", "secret_ref", "secretkeyref", "secretkey_ref"} {
+		if strings.HasSuffix(key, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func keepWord(_, val string) bool {
+	switch strings.ToLower(strings.Trim(val, `"'`)) {
+	case "true", "false", "ok", "yes", "no", "null", "none":
+		return true
+	}
+	return false
 }
 
 var plainRules = []rule{
-	{re: regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)`), group: 0},
+	{re: regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|\z)`), group: 0},
 	{re: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*`), group: 0},
 	{re: regexp.MustCompile(`\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA|AIPA)[A-Z0-9]{16}\b`), group: 0},
 	{re: regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`), group: 0},
 	// structured header pairs, JSON and YAML
 	{re: regexp.MustCompile(`(?i)("name"\s*:\s*"(?:` + hdrNames + `)"\s*,\s*"value"\s*:\s*)("[^"]*")`), group: 2},
+	{re: regexp.MustCompile(`(?i)("(?:` + hdrNames + `)"\s*:\s*)("(?:[^"\\]|\\.)*")`), group: 2},
 	{re: regexp.MustCompile(`(?i)(name:\s*"?(?:` + hdrNames + `)"?\s*\n\s*value:\s*)([^\n]+)`), group: 2},
+	// environment variable pairs: JSON in both orders, YAML on two lines, JSON escaped inside a string
+	{re: regexp.MustCompile(`(?i)("name"\s*:\s*"` + kc + `(?:` + pairWords + `)` + kc + `"\s*,\s*"value"\s*:\s*)("[^"]*")`), group: 2},
+	{re: regexp.MustCompile(`(?i)("value"\s*:\s*)("[^"]*")(\s*,\s*"name"\s*:\s*"` + kc + `(?:` + pairWords + `)` + kc + `")`), group: 2},
+	{re: regexp.MustCompile(`(?i)(name:[ \t]*["']?` + kc + `(?:` + pairWords + `)` + kc + `["']?[ \t]*\n[ \t]*value:[ \t]*)([^\n]+)`), group: 2},
+	{re: regexp.MustCompile(`(?i)(\\"` + kc + `(?:` + pairWords + `)` + kc + `\\"\s*:\s*\\")((?:[^\\"]|\\[^"])*)`), group: 2},
 	// header lines
 	{re: regexp.MustCompile(`(?i)\b(` + hdrNames + `)(\s*:\s*)([^\r\n]+)`), group: 3},
 	// Bearer and Basic credentials in free text
-	{re: regexp.MustCompile(`(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]{8,})`), group: 3, keep: func(v string) bool { return !looksSecret(v) }},
-	// URL with a password in the user part
-	{re: regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]*:)([^\s@/]+)(@)`), group: 2},
+	{re: regexp.MustCompile(`(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]{8,})`), group: 3, keep: func(_, v string) bool { return !looksSecret(v) }},
+	// URL with a password in the user part (the password may hold a slash), and a DSN without a scheme
+	{re: regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]*:)([^\s@]+)(@)`), group: 2},
+	{re: regexp.MustCompile(`(\b[A-Za-z0-9_.\-]+:)([^\s@:/]+)(@(?:tcp|udp|unix)\()`), group: 2},
 	// token prefixes, anchored at a word start and followed by 16 token characters
 	{re: regexp.MustCompile(`(^|[^A-Za-z0-9])((?:` + prefixes + `)[A-Za-z0-9_-]{16,})`), group: 2},
 	// chat bot tokens: digits, a colon and 35 or more token characters
 	{re: regexp.MustCompile(`(^|[^0-9])(\d{6,12}:[A-Za-z0-9_-]{35,})`), group: 2},
-	// secret flag and its value as the next word
-	{re: regexp.MustCompile(`(?i)(--?[a-z0-9_-]*(?:` + flagWords + `)[a-z0-9_-]*\s+)([^\s-]\S*)`), group: 2},
+	// secret flag and its value as the next word; the flag starts a word, so kube-token-refresher is left alone
+	{re: regexp.MustCompile(`(?mi)((?:^|\s)--?[a-z0-9_-]*(?:` + flagWords + `)[a-z0-9_-]*\s+)([^\s-]\S*)`), group: 2},
+	// -u user:password and --user user:password
+	{re: regexp.MustCompile(`(?mi)((?:^|\s)(?:-u|--user)(?:\s+|=)[^\s:]+:)(\S+)`), group: 2},
 	// key=value, key: value, JSON and YAML pairs
-	{re: regexp.MustCompile(`(?i)(["']?[A-Za-z0-9_.\-]*(?:` + pairWords + `)[A-Za-z0-9_.\-]*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"'}\]]+)`), group: 2},
+	{re: regexp.MustCompile(`(?i)(["']?` + kc + `(?:` + pairWords + `)` + kc + `["']?` + sep + `)` + value), group: 2, keep: keepPair},
+	// pass and pwd count only as whole keys
+	{re: regexp.MustCompile(`(?i)(\b(?:pass|pwd)` + sep + `)` + value), group: 2, keep: keepWord},
 }
 
 var (
-	runRe    = regexp.MustCompile(`[A-Za-z0-9+/_=-]{16,}`)
+	runRe    = regexp.MustCompile(`[A-Za-z0-9+/_-]{16,}={0,2}`)
 	hexRe    = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 	ansiRe   = regexp.MustCompile("\x1b\\[[0-?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)?|\x1b[@-Z\\\\-_]")
 	pFlagRe  = regexp.MustCompile(`(^|\s)(-p\s+)\S+`)
+	mysqlP   = regexp.MustCompile(`(?i)(\b(?:mysql|mariadb)\w*\b[^\n]*?\s-p)([^\s'"]+)`)
 	flagName = regexp.MustCompile(`(?i)^-{1,2}[a-z0-9_-]*(?:password|passwd|passphrase|pass|token|secret|key|credential)[a-z0-9_-]*$`)
 )
 
@@ -76,7 +122,7 @@ func looksSecret(v string) bool {
 			return true
 		}
 	}
-	return false
+	return len(v) >= 24
 }
 
 // Scanner finds secret-shaped text. Create it with New. It holds no state.
@@ -113,7 +159,7 @@ func replaceGroup(in string, r rule, count *int) string {
 			continue
 		}
 		val := in[start:end]
-		if strings.HasPrefix(val, "[redacted") || val == `"`+Marker+`"` || (r.keep != nil && r.keep(val)) {
+		if strings.HasPrefix(val, "[redacted") || val == `"`+Marker+`"` || (r.keep != nil && r.keep(in[m[0]:m[1]], val)) {
 			continue
 		}
 		sb.WriteString(in[last:start])
@@ -176,15 +222,20 @@ func hit(b []byte) bool {
 }
 
 // StripControl removes ANSI escape sequences and control characters other than
-// tab, and replaces invalid UTF-8.
-func StripControl(in string) string {
+// tab, and replaces invalid UTF-8. Newlines go too: it is for single-line values.
+func StripControl(in string) string { return strip(in, false) }
+
+// StripText is StripControl that keeps newlines, for text that is scanned as a whole.
+func StripText(in string) string { return strip(in, true) }
+
+func strip(in string, keepNL bool) string {
 	in = strings.ToValidUTF8(in, "\ufffd")
 	in = ansiRe.ReplaceAllString(in, "")
 	var sb strings.Builder
 	sb.Grow(len(in))
 	for _, r := range in {
 		switch {
-		case r == '\t':
+		case r == '\t', r == '\n' && keepNL:
 			sb.WriteRune(r)
 		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
 		case r >= 0x200b && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0xfeff:
@@ -224,6 +275,13 @@ func (s *Scanner) ScrubScript(in string) (string, int) {
 			n++
 			sub := pFlagRe.FindStringSubmatch(m)
 			return sub[1] + sub[2] + Marker
+		})
+	}
+	if mysqlP.MatchString(in) {
+		in = mysqlP.ReplaceAllStringFunc(in, func(m string) string {
+			n++
+			sub := mysqlP.FindStringSubmatch(m)
+			return sub[1] + Marker
 		})
 	}
 	out, k := s.Scrub(in)

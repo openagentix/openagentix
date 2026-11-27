@@ -36,6 +36,8 @@ type flags struct {
 	addr       string
 	kubeconfig string
 	checkEvery time.Duration
+	bearerFile string
+	insecure   bool
 }
 
 func splitList(s string) []string {
@@ -57,6 +59,8 @@ func parseFlags(args []string) (flags, error) {
 	fs.StringVar(&statusNS, "status-namespaces", "", "comma list: namespaces with pods, events and workloads, never logs")
 	fs.StringVar(&deny, "deny-log-namespaces", "", "comma list: namespaces that must never be log namespaces (the chart's own)")
 	fs.BoolVar(&f.cfg.Nodes, "nodes", true, "serve nodes_list and nodes_get")
+	fs.StringVar(&f.bearerFile, "bearer-file", "", "file with the bearer value that every /mcp request must send (a mounted Secret); the value is never a flag or an environment value")
+	fs.BoolVar(&f.insecure, "insecure-no-auth", false, "serve /mcp without the bearer check: tests and local runs only")
 	fs.StringVar(&f.addr, "addr", ":8080", "listen address")
 	fs.StringVar(&f.kubeconfig, "kubeconfig", "", "kubeconfig file for local runs; empty means in-cluster")
 	fs.DurationVar(&f.checkEvery, "check-interval", 5*time.Minute, "how often the rights check runs")
@@ -66,6 +70,12 @@ func parseFlags(args []string) (flags, error) {
 	f.cfg.LogNamespaces, f.cfg.StatusNamespaces, f.cfg.DenyLogNamespaces = splitList(logNS), splitList(statusNS), splitList(deny)
 	if f.checkEvery < 10*time.Second {
 		return f, errors.New("check-interval must be at least 10s")
+	}
+	if f.bearerFile == "" && !f.insecure {
+		return f, errors.New("-bearer-file is required (or -insecure-no-auth for a test)")
+	}
+	if f.bearerFile != "" && f.insecure {
+		return f, errors.New("-bearer-file and -insecure-no-auth cannot be used together")
 	}
 	if err := f.cfg.Validate(); err != nil {
 		return f, err
@@ -97,20 +107,34 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("kubernetes config: %w", err)
 	}
-	// the rights check sends a few hundred small requests at start
-	rc.QPS, rc.Burst = 50, 100
-	client, err := kubernetes.NewForConfig(rc)
+	// Two clients, so the rights check has a rate budget of its own and cannot slow the tools down.
+	toolRC, checkRC := rest.CopyConfig(rc), rest.CopyConfig(rc)
+	toolRC.QPS, toolRC.Burst = 20, 40
+	checkRC.QPS, checkRC.Burst = 10, 20
+	client, err := kubernetes.NewForConfig(toolRC)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
 	}
-	checker := clusterread.NewChecker(client, f.cfg)
+	checkClient, err := kubernetes.NewForConfig(checkRC)
+	if err != nil {
+		return fmt.Errorf("kubernetes client: %w", err)
+	}
+	checker := clusterread.NewChecker(checkClient, f.cfg)
+	checker.Logger = log
 	srv, err := clusterread.NewServer(clusterread.Options{Config: f.cfg, Client: client, Audit: audit.New(os.Stdout, "cluster-read"), Gate: checker})
+	if err != nil {
+		return err
+	}
+	handler, err := clusterread.NewHandler(srv, checker, log, version, clusterread.HandlerOptions{BearerFile: f.bearerFile, Insecure: f.insecure})
 	if err != nil {
 		return err
 	}
 	ln, err := net.Listen("tcp", f.addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
+	}
+	if f.insecure {
+		log.Warn("serving /mcp without the bearer check: for tests only")
 	}
 	log.Info("cluster-read starting", "version", version, "listen", ln.Addr().String(), "log_namespaces", f.cfg.LogNamespaces, "status_namespaces", f.cfg.StatusNamespaces, "nodes", f.cfg.Nodes)
 
@@ -120,7 +144,7 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	go checker.Loop(ctx, f.checkEvery)
 
 	hs := &http.Server{
-		Handler:           clusterread.NewHandler(srv, checker, log, version),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	errc := make(chan error, 1)

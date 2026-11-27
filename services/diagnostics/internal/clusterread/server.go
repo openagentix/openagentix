@@ -9,6 +9,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -65,8 +66,9 @@ type Options struct {
 	Now   func() time.Time
 	// Gate, if set, must report ready before any tool is served.
 	Gate Gate
-	// CallsPerMinute and LogsPerMinute default to 60 and 20.
-	CallsPerMinute, LogsPerMinute int
+	// CallsPerMinute (all callers) and LogsPerMinute default to 60 and 20. PerCallerPerMinute and
+	// RefusalsPerMinute (both per caller key) default to 30.
+	CallsPerMinute, LogsPerMinute, PerCallerPerMinute, RefusalsPerMinute int
 }
 
 // Server serves the eight tools.
@@ -81,6 +83,40 @@ type Server struct {
 	all    *ratelimit.Limiter
 	logLim *ratelimit.Limiter
 	calls  int
+
+	mu         sync.Mutex
+	perCaller  map[string]*callerLimits
+	callerRate int
+	refuseRate int
+	auditLim   *ratelimit.Limiter // bounds the audit lines of calls refused for rate
+	rejectLim  *ratelimit.Limiter // bounds the audit lines of calls the MCP layer rejected
+}
+
+type callerLimits struct{ calls, refusals *ratelimit.Limiter }
+
+type callerKey struct{}
+
+// WithCaller returns a context that carries the caller key (the network address of the
+// vMCP pod). Rate limits are kept per key, so one caller cannot use up the budget of the others.
+func WithCaller(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, callerKey{}, key)
+}
+
+const maxCallers = 512
+
+func (s *Server) limits(ctx context.Context) *callerLimits {
+	key, _ := ctx.Value(callerKey{}).(string)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l, ok := s.perCaller[key]; ok {
+		return l
+	}
+	if len(s.perCaller) >= maxCallers {
+		s.perCaller = map[string]*callerLimits{}
+	}
+	l := &callerLimits{calls: ratelimit.New(s.callerRate, s.now), refusals: ratelimit.New(s.refuseRate, s.now)}
+	s.perCaller[key] = l
+	return l
 }
 
 // NewServer checks the configuration and builds a Server.
@@ -100,6 +136,12 @@ func NewServer(o Options) (*Server, error) {
 	if o.LogsPerMinute <= 0 {
 		o.LogsPerMinute = 20
 	}
+	if o.PerCallerPerMinute <= 0 {
+		o.PerCallerPerMinute = 30
+	}
+	if o.RefusalsPerMinute <= 0 {
+		o.RefusalsPerMinute = 30
+	}
 	if o.Logs == nil {
 		kube := o.Client
 		o.Logs = func(ctx context.Context, ns, pod string, po *corev1.PodLogOptions) (io.ReadCloser, error) {
@@ -107,7 +149,8 @@ func NewServer(o Options) (*Server, error) {
 		}
 	}
 	return &Server{cfg: o.Config, kube: o.Client, logs: o.Logs, sc: redact.New(), au: o.Audit, now: o.Now, gate: o.Gate,
-		calls: o.CallsPerMinute, all: ratelimit.New(o.CallsPerMinute, o.Now), logLim: ratelimit.New(o.LogsPerMinute, o.Now)}, nil
+		calls: o.CallsPerMinute, all: ratelimit.New(o.CallsPerMinute, o.Now), logLim: ratelimit.New(o.LogsPerMinute, o.Now),
+		perCaller: map[string]*callerLimits{}, callerRate: o.PerCallerPerMinute, refuseRate: o.RefusalsPerMinute, auditLim: ratelimit.New(2, o.Now), rejectLim: ratelimit.New(30, o.Now)}, nil
 }
 
 // ---- argument structs, with the schema text agents see ----
@@ -159,25 +202,43 @@ func (s *Server) do(ctx context.Context, tool, target, object string, isLog bool
 	in := &info{target: target, object: object}
 	outcome, size := "ok", 0
 	defer func() {
-		if s.au != nil {
-			s.au.Write(audit.Record{Tool: tool, Target: in.target, Object: in.object, Outcome: outcome, Duration: time.Since(began), Bytes: size, Lines: in.lines, Redactions: in.red})
+		if s.au == nil {
+			return
 		}
+		// calls refused for rate are the only ones a caller can make without limit: bound their lines
+		if outcome == "rate_limited" && !s.auditLim.Allow() {
+			return
+		}
+		s.au.Write(audit.Record{Tool: tool, Target: in.target, Object: in.object, Outcome: outcome, Duration: time.Since(began), Bytes: size, Lines: in.lines, Redactions: in.red})
 	}()
+	lim := s.limits(ctx)
+	if !lim.refusals.Available() {
+		outcome = "rate_limited"
+		return nil, refuse("rate limit reached: too many refused calls; check the arguments and wait a minute")
+	}
 	if err := validate(); err != nil {
+		lim.refusals.Allow()
 		outcome = "refused"
 		return nil, err
 	}
 	if s.gate != nil {
-		if ok, why := s.gate.Ready(); !ok {
+		if ok, _ := s.gate.Ready(); !ok {
+			// the reason is for the operator, in the server log; a caller learns nothing about rights
 			outcome = "not_ready"
-			return nil, refuse("the server is not ready, so it serves no tool: %s", why)
+			return nil, refuse("the server is not ready, so it serves no tool; ask the operator to check the cluster-read server")
 		}
 	}
-	if !s.all.Allow() {
+	if !lim.calls.Allow() {
 		outcome = "rate_limited"
-		return nil, refuse("rate limit reached: at most %d calls a minute; wait and try again", s.calls)
+		return nil, refuse("rate limit reached: at most %d calls a minute for one caller; wait and try again", s.callerRate)
+	}
+	if !s.all.Allow() {
+		lim.calls.Refund()
+		outcome = "rate_limited"
+		return nil, refuse("rate limit reached: at most %d calls a minute in all; wait and try again", s.calls)
 	}
 	if isLog && !s.logLim.Allow() {
+		lim.calls.Refund()
 		s.all.Refund()
 		outcome = "rate_limited"
 		return nil, refuse("rate limit reached for pods_log: wait a minute and try again")
@@ -366,12 +427,16 @@ func (s *Server) PodsLog(ctx context.Context, a PodsLogArgs) (Result, error) {
 				data = nil
 			}
 		}
-		text := strings.TrimSuffix(string(data), "\n")
+		// Clean and redact the whole text first: a key, a YAML pair or a "key:" line with the value
+		// on the next line spans lines. Then split, and cut each line last.
+		scrubbed, n := s.sc.Scrub(redact.StripText(string(data)))
 		b := s.builder(a.Namespace)
+		b.red += n
+		text := strings.TrimSuffix(scrubbed, "\n")
 		lines := []string{}
 		if text != "" || len(data) > 0 {
 			for _, l := range strings.Split(text, "\n") {
-				lines = append(lines, b.s(l, maxLine))
+				lines = append(lines, redact.Cut(l, maxLine))
 			}
 		}
 		in.lines, in.red = len(lines), b.red
@@ -592,4 +657,13 @@ func (s *Server) NodesGet(ctx context.Context, a NodesGetArgs) (Result, error) {
 		in.red = b.red
 		return res, nil
 	})
+}
+
+// AuditRejected writes the audit line of a call that the MCP layer rejected before it reached a tool
+// (an argument of the wrong type, for example). It holds the tool name only.
+func (s *Server) AuditRejected(tool string) {
+	if s.au == nil || !s.rejectLim.Allow() {
+		return
+	}
+	s.au.Write(audit.Record{Tool: tool, Outcome: "refused"})
 }

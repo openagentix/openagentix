@@ -462,11 +462,12 @@ func TestAPIErrorsAreNotRepeated(t *testing.T) {
 
 func TestNodes(t *testing.T) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1", Labels: map[string]string{"x": "y"}, Annotations: map[string]string{"a": cAnno}},
-		Spec: corev1.NodeSpec{Taints: []corev1.Taint{{Key: "node.kubernetes.io/disk-pressure", Effect: corev1.TaintEffectNoSchedule}}},
+		Spec: corev1.NodeSpec{PodCIDR: cCIDR, ProviderID: cProv, Taints: []corev1.Taint{{Key: "node.kubernetes.io/disk-pressure", Effect: corev1.TaintEffectNoSchedule}}},
 		Status: corev1.NodeStatus{
+			Addresses:   []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: cNodeIP}},
 			Capacity:    corev1.ResourceList{corev1.ResourceCPU: mustQty("4"), corev1.ResourceMemory: mustQty("8Gi")},
 			Allocatable: corev1.ResourceList{corev1.ResourceCPU: mustQty("3500m")},
-			NodeInfo:    corev1.NodeSystemInfo{KubeletVersion: "v1.37.0", MachineID: cAnno},
+			NodeInfo:    corev1.NodeSystemInfo{KubeletVersion: "v1.37.0", MachineID: cMachine, OSImage: cOS, SystemUUID: cAnno},
 			Images:      []corev1.ContainerImage{{Names: []string{cAnno}}},
 			Conditions: []corev1.NodeCondition{
 				{Type: corev1.NodeReady, Status: corev1.ConditionTrue, Message: "kubelet is posting ready status"},
@@ -542,7 +543,7 @@ func TestNotReadyServesNothing(t *testing.T) {
 	g := &fakeGate{ok: false, reason: "secrets get is allowed in rca-demo"}
 	rg := newRig(t, func(o *Options) { o.Gate = g }, pod("rca-demo", "p", "Running"))
 	_, err := rg.srv.PodsList(ctx(), PodsListArgs{Namespace: "rca-demo"})
-	if err == nil || !strings.Contains(err.Error(), "not ready") || !strings.Contains(err.Error(), "secrets get is allowed") || rg.apiCalls() != 0 {
+	if err == nil || !strings.Contains(err.Error(), "not ready") || strings.Contains(err.Error(), "secrets") || rg.apiCalls() != 0 {
 		t.Fatalf("err %v, api calls %d", err, rg.apiCalls())
 	}
 	g.set(true)

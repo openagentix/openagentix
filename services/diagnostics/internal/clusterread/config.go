@@ -20,8 +20,18 @@ var (
 	dnsSubdomain = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
 	kindName     = regexp.MustCompile(`^[A-Za-z]{1,63}$`)
 
-	// builtinNoLogs are namespaces that never get logs, whatever the lists say.
-	builtinNoLogs = []string{"kube-system", "kube-public", "kube-node-lease", OwnNamespace}
+	// builtinNoLogs are namespaces that never get logs, whatever the lists and flags say: the system
+	// namespaces and the default platform namespaces of the chart. The flag adds the names a
+	// release uses instead of the defaults.
+	builtinNoLogs = []string{
+		"kube-system", "kube-public", "kube-node-lease", OwnNamespace,
+		"toolhive-system", "ate-system", "openagentix-channels", "agent-kourier", "openagentix-gateway", "kagent", "openagentix-schedules",
+		"agentgateway-system", "mcp-tools", "openagentix-knowledge", "openagentix-notify", "openagentix-memory", "openagentix-observability",
+		"openagentix-workloads", "openagentix-system", "openagentix",
+	}
+
+	// maxNamespaces bounds the lists, and with them the cost of the rights check.
+	maxNamespaces = 100
 )
 
 // Config says which namespaces are served.
@@ -57,6 +67,9 @@ func (c Config) kind(ns string) nsKind {
 
 // Validate refuses a list the server must not serve.
 func (c Config) Validate() error {
+	if len(c.LogNamespaces)+len(c.StatusNamespaces) > maxNamespaces {
+		return fmt.Errorf("at most %d namespaces in the two lists", maxNamespaces)
+	}
 	seen := map[string]string{}
 	check := func(list []string, which string) error {
 		for _, ns := range list {

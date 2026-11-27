@@ -40,9 +40,22 @@ const (
 	cHookHdr = "zzcanary-hook-header-0092"
 	cHost    = "zzcanary-hostpath-0093"
 	cTmplAnn = "zzcanary-template-annotation-0094"
+	cAlias   = "zzcanary-host-alias-0095"
+	cDNS     = "zzcanary-dns-nameserver-0096"
+	cPull    = "zzcanary-pull-secret-0097"
+	cSec     = "zzcanary-selinux-level-0098"
+	cPHost   = "zzcanary-probe-host-0099"
+	cGRPC    = "zzcanary-grpc-service-0100"
+	cStatus  = "zzcanary-status-message-0101"
+	cPodIP   = "zzcanary-pod-ip-0102"
+	cNodeIP  = "zzcanary-node-address-0103"
+	cCIDR    = "zzcanary-pod-cidr-0104"
+	cProv    = "zzcanary-provider-id-0105"
+	cOS      = "zzcanary-os-image-0106"
+	cMachine = "zzcanary-machine-id-0107"
 )
 
-var droppedCanaries = []string{cEnv, cHeader, cExec, cAnno, cInit, cEph, cCSI, cTmpl, cManaged, cLast, cHook, cHookHdr, cHost, cTmplAnn}
+var droppedCanaries = []string{cEnv, cHeader, cExec, cAnno, cInit, cEph, cCSI, cTmpl, cManaged, cLast, cHook, cHookHdr, cHost, cTmplAnn, cAlias, cDNS, cPull, cSec, cPHost, cGRPC, cStatus, cPodIP, cNodeIP, cCIDR, cProv, cOS, cMachine}
 
 // tok builds a token canary that the scanner knows. They sit in fields that
 // the server keeps after redaction, so they must be redacted.
@@ -77,12 +90,16 @@ func assertClean(t *testing.T, what, out string, extra ...string) {
 func canarySpec(env string) corev1.PodSpec {
 	probe := func(hdr string) *corev1.Probe {
 		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-			Path: "/healthz", Port: intstr.FromInt32(8080),
+			Path: "/healthz", Port: intstr.FromInt32(8080), Host: cPHost,
 			HTTPHeaders: []corev1.HTTPHeader{{Name: "Authorization", Value: hdr}},
 		}}}
 	}
 	return corev1.PodSpec{
-		NodeName: "node-1",
+		NodeName:         "node-1",
+		HostAliases:      []corev1.HostAlias{{IP: "10.9.9.9", Hostnames: []string{cAlias}}},
+		DNSConfig:        &corev1.PodDNSConfig{Nameservers: []string{cDNS}},
+		ImagePullSecrets: []corev1.LocalObjectReference{{Name: cPull}},
+		SecurityContext:  &corev1.PodSecurityContext{SELinuxOptions: &corev1.SELinuxOptions{Level: cSec}},
 		InitContainers: []corev1.Container{{
 			Name: "init", Image: "busybox:1",
 			Env: []corev1.EnvVar{{Name: "INIT_SECRET", Value: cInit}},
@@ -137,7 +154,7 @@ func canaryPod(ns, name string) *corev1.Pod {
 		},
 		Spec: spec,
 		Status: corev1.PodStatus{
-			Phase: corev1.PodRunning, QOSClass: corev1.PodQOSBurstable,
+			Phase: corev1.PodRunning, QOSClass: corev1.PodQOSBurstable, Message: cStatus, PodIP: cPodIP, HostIP: cNodeIP,
 			StartTime:  &metav1.Time{Time: testNow.Add(-time.Hour)},
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "ContainersNotReady", Message: "containers with unready status: [app] " + tok(5)}},
 			ContainerStatuses: []corev1.ContainerStatus{{

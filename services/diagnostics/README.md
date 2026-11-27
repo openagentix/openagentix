@@ -21,7 +21,7 @@ Everything below is tested with the fake Kubernetes client only. Treat it as *un
                          GET  /readyz    the rights check passed
 ```
 
-The endpoint has no authentication of its own. The tool gateway and a NetworkPolicy decide who can reach it, as for `kb` and `notify`.
+`/mcp` requires `Authorization: Bearer <value>` (ADR 0025, Amendment 1). The value is a file (a mounted Secret) named by `-bearer-file`, read on every request so a refreshed Secret needs no restart, and compared in constant time. It is never a flag, an environment value or a log line. The server refuses to start without a bearer file unless `-insecure-no-auth` is set, which is for tests and local runs. `/healthz` and `/readyz` need no value and say only "ok" or "not ready". A NetworkPolicy (slice 4) narrows who can reach the port; the bearer value is the second check.
 
 ### Tools
 
@@ -46,13 +46,14 @@ A refusal says what is wrong and never repeats the argument. API errors are neve
 |---|---|
 | `-log-namespaces` | Pods, events, workloads and pod logs |
 | `-status-namespaces` | Pods, events and workloads, never logs |
-| `-deny-log-namespaces` | Names that must never be log namespaces. The chart will fill it with the namespaces its own values name |
+| `-bearer-file` | File with the bearer value for `/mcp` (required unless `-insecure-no-auth`) |
+| `-deny-log-namespaces` | More names that must never be log namespaces, for a release that renames the platform namespaces. The default platform names of the chart and the system namespaces are built in |
 | `-nodes` | Serve the two node tools (default true) |
 | `-addr` | Listen address (default `:8080`) |
 | `-check-interval` | Rights check interval (default 5m, at least 10s) |
 | `-kubeconfig` | For a local run. Empty means in-cluster |
 
-The server refuses to start with `*`, a duplicate, a name that is not a DNS label, a namespace in both lists, `openagentix-diagnostics`,
+At most 100 namespaces in the two lists. The server refuses to start with `*`, a duplicate, a name that is not a DNS label, a namespace in both lists, `openagentix-diagnostics`,
 or `kube-system`, `kube-public`, `kube-node-lease` or a denied name in the log list.
 Platform namespaces can be status-only: an agent can see why a platform pod restarts without reading its output.
 
@@ -74,7 +75,9 @@ Results are built from an allowlist of fields. The server never returns an API o
 - Messages: event, condition and `waiting.message` texts are kept after redaction and cut at 512 bytes. A `terminated.message` is kept only in log namespaces.
 - Events: in status namespaces, events with the reasons `Unhealthy`, `ProbeWarning`, `FailedPostStartHook` and `FailedPreStopHook` keep no message,
   because the kubelet copies probe and hook output there.
-- Logs: at most 64 KiB read from the API, each line cut at 2048 bytes, ANSI sequences and control characters other than tab removed, then redacted.
+- Reasons, types and kinds that anyone who can create an Event or a custom controller can set (event reason and type, condition reason, container state reason, owner kind) pass only as plain identifiers of at most 128 characters; anything else becomes `[invalid]`.
+- A waiting message is kept in status namespaces only for reasons whose text the kubelet builds from cluster facts (`CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`, `InvalidImageName`, `ErrImageNeverPull`, `ContainerCreating`, `PodInitializing`). A failed lifecycle hook puts the command and its output in that message, so `PostStartHookError` and the others lose it there. In log namespaces the message is kept after redaction, which can include a hook command.
+- Logs: at most 64 KiB read from the API. The whole text is cleaned (ANSI sequences and control characters other than tab and newline removed) and redacted before it is split into lines, so a key, a YAML pair or a `key:` line with its value on the next line is found; each line is then cut at 2048 bytes.
   If the byte limit cut the last line, that line is dropped and `truncated` is true, so a half-read secret is not left behind.
 - Object names are DNS names and are returned as plain fields so that an agent can pass them to the next call. They are redacted and cut like every string.
   Pod and workload names must be DNS labels, so a pod name with a dot cannot be read with `pods_get`. Node names may have dots.
@@ -86,23 +89,25 @@ One scanner (`internal/redact`) is used for every kept string. It finds: PEM pri
 `Bearer` and `Basic` credentials, `password`, `token`, `secret`, `api_key` and similar pairs in `key=value`, `key: value`, JSON and flag forms,
 URLs with a password, token prefixes of code hosts, registries, chat services and model providers (`ghp_`, `github_pat_`, `glpat-`, `xoxb-`, `sk-`, `sk-ant-`, `vk-` and more),
 chat bot tokens, and the same patterns once encoded in base64 or hex.
-A prefix matches only at a word start and only with at least 16 token characters after it, so `disk-pressure` and `task-runner` are left alone.
+Pairs also match as escaped JSON, as JSON name and value objects, as YAML on two lines, with `pass` and `pwd` keys, URL-encoded, with a tab, and `user:password@tcp(` DSNs, `-u user:password`, `--user`, and `mysql -p<value>`. Counters such as `input_tokens=1234` and references such as `secretName: db-creds` are left alone. A prefix matches only at a word start and only with at least 16 token characters after it, so `disk-pressure` and `task-runner` are left alone.
 
 Remaining exposure: a value split across lines or fields in a way the pair rules do not see, encoded twice, or in a format the scanner does not know passes.
 Redaction reduces leaks. It does not prove there are none. Over-redaction is possible (for example a key named `tokens` with a value).
 
 ### Rights check
 
-At start and every 5 minutes the server asks the API server (`SelfSubjectAccessReview`) whether it holds any forbidden right
-(secrets, configmaps, service accounts, `exec`, `attach`, `portforward`, proxies, `nodes/stats`, ephemeral containers, impersonate, bind, escalate, `watch`,
-any write verb, `*`, and pod logs outside log namespaces), in every listed namespace, in `kube-system`, in `openagentix-diagnostics` and at cluster scope.
-It also reads `SelfSubjectRulesReview` for every listed namespace. If a forbidden right is allowed, or a listed namespace grants nothing,
-`/readyz` returns 503 with the reason and no tool is served until a later check passes.
-The check finds a right added outside the chart. It cannot stop one. The check sends a few hundred small requests at start.
+At start and every 5 minutes (by default) the server asks the API server about its own rights, with a client and a rate budget of its own so that tool calls are not slowed.
+
+- For every listed namespace, `kube-system` and `openagentix-diagnostics` it reads `SelfSubjectRulesReview`, which lists every rule the identity holds there, from Roles and ClusterRoles alike, and evaluates the rules. Anything that is not get and list on pods, events, the four workload kinds and nodes (and `pods/log` in log namespaces) is a forbidden grant: any other resource, any other verb, any `*`, a rule that names objects (`resourceNames`), any non-resource URL beyond the discovery, health and version paths. The rights every authenticated user has (asking about its own rights) are allowed, so the default roles do not cause a false alarm. A listed namespace that grants no read on pods grants nothing and stops serving.
+- If a rules review is `incomplete` (a webhook authorizer can do that) the server asks `SelfSubjectAccessReview` for each forbidden right in that namespace instead.
+- At cluster scope it asks `SelfSubjectAccessReview` for the full forbidden list: secrets, configmaps, service accounts and their tokens, `exec`, `attach`, `portforward`, proxies, the kubelet subresources of nodes, ephemeral containers, impersonate, bind, escalate, `watch`, writes on many named resources (including `networkpolicies`, `pods/eviction`, `deployments/scale`, custom resource definitions, webhook configurations, certificate signing requests, token reviews), `*`, pod logs, and the non-resource paths `/metrics`, `/logs` and `/debug/pprof`.
+
+The cost is one request per namespace plus about 300 fixed requests, with four workers, so it grows by one request per listed namespace. The check has a deadline of two minutes plus one second per namespace. If a right is allowed, a rules review cannot be read, or a namespace grants nothing, readiness drops and no tool is served until a later check passes. The reason goes to the server log only. Callers and `/readyz` get a fixed sentence.
+The check finds a right added outside the chart. It cannot stop one. Grants in namespaces that are not reviewed are not seen; the server never sends a request there.
 
 ### Limits and audit
 
-60 calls a minute, of which 20 `pods_log`. API calls time out after 5 seconds and log calls after 10. A refused call costs no API request.
+60 calls a minute in all, 30 for one caller (keyed by the address of the calling pod), of which 20 `pods_log` in all, and 30 refused calls a minute for one caller. Audit lines of calls refused for rate are limited to two a minute, and of calls the MCP layer rejected before a tool (a wrong argument type) to 30 a minute; those lines hold the tool name only. API calls time out after 5 seconds and log calls after 10. A refused call costs no API request.
 One audit line per call on standard output: time, server, tool, target namespace, object name, outcome, duration, output bytes, line count, redaction count.
 It never holds content, event or status text, or an argument other than those names.
 

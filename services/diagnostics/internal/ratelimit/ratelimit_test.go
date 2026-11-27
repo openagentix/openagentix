@@ -44,3 +44,13 @@ func TestRefund(t *testing.T) {
 		t.Fatal("refund did not give the token back")
 	}
 }
+
+func TestAvailableDoesNotConsume(t *testing.T) {
+	l := New(1, nil)
+	if !l.Available() || !l.Available() {
+		t.Fatal("Available consumed a token")
+	}
+	if !l.Allow() || l.Available() {
+		t.Fatal("after Allow the bucket is empty")
+	}
+}
