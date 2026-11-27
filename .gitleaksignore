@@ -19,3 +19,5 @@ services/control-plane/testdata/golden-container-tools.json:generic-api-key:36
 905ef73e86d04d132f04b344b28211c518e4c4b3:services/control-plane/testdata/golden-container-tools.json:generic-api-key:36
 # A curl call in an early version of the live check of cluster-read that passed a shell variable ($VAL) as the bearer value: a reference, not a credential. Removed in the next commit (the header now goes through a curl config file).
 32c9fc87d253027ba523ec05e8d05490031df521:hack/ci/diagnostics-live.sh:curl-auth-header:36
+# A made-up value after --password in the arguments of a demo workload (examples/use-cases/software-org): the planted canary of the arguments, not a credential.
+examples/use-cases/software-org/manifests/rca-demo.yaml:generic-api-key:100

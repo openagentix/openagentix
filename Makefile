@@ -49,6 +49,7 @@ test-chart: ## Render tests over `helm template` plus helm lint (needs helm, jq,
 	charts/openagentix/tests/run.sh
 	examples/use-cases/bank/tests/run.sh
 	examples/use-cases/equipment/tests/run.sh
+	examples/use-cases/software-org/tests/run.sh
 
 test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part needs `npm ci` in website/), bench
 	$(call need,jq)
@@ -84,6 +85,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	components/runtime/tests/run.sh
 	hack/docs/tests/run.sh
 	examples/use-cases/bank/tests/install-test.sh
+	examples/use-cases/software-org/tests/install-test.sh
 	examples/use-cases/bank/tests/live-guard-test.sh
 	examples/use-cases/equipment/tests/install-test.sh
 	examples/use-cases/equipment/tests/live-guard-test.sh
