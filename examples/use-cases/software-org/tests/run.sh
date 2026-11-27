@@ -192,7 +192,7 @@ check "the README states the limits: logs and events can hold secrets the scanne
 # shellcheck disable=SC2034
 FILES=$(find "$HERE" -type f ! -path '*/tests/*' | sort)
 check "no em dash anywhere in the use case" "! grep -l \$'\xe2\x80\x94' \$FILES"
-check "no e-mail address or phone-like digit run in the use case" "! grep -Eq '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+|[0-9]{9,}' \$(echo \$FILES | tr ' ' '\\n' | grep -v eval/cases.yaml)"
+check "no e-mail address or phone-like digit run in the use case (a CI run id after the word run is not one)" "! for f in \$(echo \$FILES | tr ' ' '\\n' | grep -v eval/cases.yaml); do sed -E 's/[Rr]un [0-9]{8,}//g' \"\$f\" | grep -Eq '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+|[0-9]{9,}' && echo \"\$f\"; done | grep -q ."
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
