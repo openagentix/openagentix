@@ -68,6 +68,6 @@ Follow the style of the existing records:
 | [0022](0022-image-registry-and-platform.md) | Build images for a remote cluster and push them to a registry | Accepted | 2026-11-26 |
 | [0023](0023-model-gateway-service-type.md) | The model gateway Service type | Accepted | 2026-11-26 |
 | [0024](0024-availability-defaults.md) | Availability defaults for platform workloads | Accepted | 2026-11-26 |
-| [0025](0025-read-only-diagnostic-tools.md) | Read-only cluster and database tools for diagnostic agents, and how a tool server gets a credential | Proposed | 2026-11-27 |
+| [0025](0025-read-only-diagnostic-tools.md) | Read-only cluster and database tools for diagnostic agents, and how a tool server gets a credential | Accepted | 2026-11-27 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.
