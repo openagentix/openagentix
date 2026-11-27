@@ -35,14 +35,8 @@ func intParam(r *http.Request, name string, def int) (int, error) {
 	return n, nil
 }
 
-// requireApprover authenticates the caller. A refusal is audited with the actor "anonymous".
 func (d *Domain) requireApprover(r *http.Request, action string) (core.Approver, error) {
-	who, ok := d.approvers.Authenticate(r)
-	if !ok {
-		d.audit.Record(r.Context(), core.AuditEntry{Actor: "anonymous", Channel: "rest", Action: action, Outcome: "denied"})
-		return core.Approver{}, &core.Error{Kind: core.Unauthorized, Msg: "a valid approver token is required"}
-	}
-	return who, nil
+	return d.guard.RequireApprover(r, action)
 }
 
 // Handler serves the REST API (port 8081). Reads and the agent's own steps need no login; the two decision
@@ -175,9 +169,9 @@ func (d *Domain) Handler() http.Handler {
 		if err := core.ReadJSON(w, r, &in); err != nil {
 			return "", nil, err
 		}
-		by := "rest"
-		if who, ok := d.approvers.Authenticate(r); ok {
-			by = who.ID // a proposal made with an approver token carries that name, so they cannot decide it
+		by, err := d.guard.Proposer(r) // an approver token names the proposer, who then cannot decide it
+		if err != nil {
+			return in.CaseID, nil, err
 		}
 		v, err := s.RequestApprovalBy(r.Context(), in.CaseID, in.Kind, in.AmountCents, by)
 		return in.CaseID, v, err
@@ -280,17 +274,5 @@ func (d *Domain) Handler() http.Handler {
 		}
 		core.WriteJSON(w, 200, map[string]any{"audit": v})
 	})
-	return d.guard(mux)
-}
-
-// guard refuses cross-origin browser writes and rate limits writes per host.
-func (d *Domain) guard(next http.Handler) http.Handler {
-	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && !d.limiter.Allow(core.Host(r)) {
-			core.WriteJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many writes from this host; try again in a minute"})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-	return http.NewCrossOriginProtection().Handler(limited)
+	return d.guard.Wrap(mux)
 }

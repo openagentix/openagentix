@@ -51,6 +51,35 @@ func TestRunServesBothPortsAndStops(t *testing.T) {
 	}
 }
 
+func TestRunServesTheEquipmentDomain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	addrs := make(chan [2]string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, env(map[string]string{"RECORDS_DOMAIN": "equipment", "RECORDS_DATA_DIR": t.TempDir(), "RECORDS_MCP_ADDR": "127.0.0.1:0", "RECORDS_REST_ADDR": "127.0.0.1:0"}),
+			slog.New(slog.NewJSONHandler(io.Discard, nil)), func(mcp, rest string) { addrs <- [2]string{mcp, rest} })
+	}()
+	var a [2]string
+	select {
+	case a = <-addrs:
+	case err := <-done:
+		t.Fatal(err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("did not start")
+	}
+	for _, u := range []string{"http://" + a[0] + "/readyz", "http://" + a[1] + "/assets/KH4120-00317"} {
+		resp, err := http.Get(u)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("%s: %v %v", u, resp, err)
+		}
+		resp.Body.Close()
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRESTPortDefaultsToLoopback(t *testing.T) {
 	if defaultRESTAddr != "127.0.0.1:8081" {
 		t.Fatalf("the REST port must default to loopback, is %q", defaultRESTAddr)
