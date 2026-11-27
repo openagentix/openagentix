@@ -1,7 +1,7 @@
 ---
 title: MCP endpoints (mcp.endpoints)
 sidebar_position: 15.6
-description: An MCP service that already runs, in a tool profile, in a tool group of its own with a header credential from a Secret (ADR 0026, slice 2): how to turn it on, what the chart renders and refuses, and what is and is not proven.
+description: "An MCP service that already runs, in a tool profile, in a tool group of its own with a header credential from a Secret (ADR 0026, slice 2). How to turn it on, what the chart renders and refuses, and what is and is not proven."
 ---
 
 # MCP endpoints that already run: `mcp.endpoints`

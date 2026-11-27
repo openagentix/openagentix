@@ -13,7 +13,7 @@ notify:
 mcp:
   endpoints:
     - name: records
-      url: http://records.fernvale-records.svc.cluster.local:8080/mcp
+      url: http://records.records-ns.svc.cluster.local:8080/mcp
       group: disputes
       auth:
         header: {name: Authorization, secret: {name: records-mcp-auth, key: value}}
@@ -55,7 +55,7 @@ echo "# endpoints: the group, the entries, the credential"
 eq "one MCPGroup per distinct group: disputes next to tools" "$(q "$D" '[.[]|select(.kind=="MCPGroup")|.metadata.namespace+"/"+.metadata.name]|sort|join(" ")')" "mcp-tools/disputes mcp-tools/tools"
 eq "entries of the group: the endpoint, and knowledge and delivery named <entryName>-<group> (ADR 0026 A3, the same rule as diagnostics)" "$(q "$D" "[$ENT|select(.spec.groupRef.name==\"disputes\")|.metadata.name]|sort|join(\" \")")" "delivery-disputes knowledge-disputes records"
 eq "no endpoint entry in the shared group: it keeps knowledge and delivery only" "$(q "$D" "[$ENT|select(.spec.groupRef.name==\"tools\")|.metadata.name]|sort|join(\" \")")" "delivery knowledge"
-eq "the endpoint entry points at the given URL, streamable-http, private endpoint allowed (an in-cluster Service)" "$(q "$D" "$ENT|select(.metadata.name==\"records\")|[.spec.remoteUrl,.spec.transport,(.spec.allowPrivateEndpoint|tostring)]|join(\" \")")" "http://records.fernvale-records.svc.cluster.local:8080/mcp streamable-http true"
+eq "the endpoint entry points at the given URL, streamable-http, private endpoint allowed (an in-cluster Service)" "$(q "$D" "$ENT|select(.metadata.name==\"records\")|[.spec.remoteUrl,.spec.transport,(.spec.allowPrivateEndpoint|tostring)]|join(\" \")")" "http://records.records-ns.svc.cluster.local:8080/mcp streamable-http true"
 eq "the mirrors have the same URL as the shared entries" "$(q "$D" "[$ENT|select(.metadata.name==\"knowledge-disputes\" or .metadata.name==\"delivery-disputes\")|.spec.remoteUrl]|sort|join(\" \")")" "$(q "$D" "[$ENT|select(.metadata.name==\"knowledge\" or .metadata.name==\"delivery\")|.spec.remoteUrl]|sort|join(\" \")")"
 eq "the header goes with headerForward from the Secret named in the values (in the tools namespace), next to an unauthenticated auth config" "$(q "$D" "$ENT|select(.metadata.name==\"records\")|[(.spec.headerForward|tojson),.spec.externalAuthConfigRef.name,.metadata.namespace]|join(\" \")")" '{"addHeadersFromSecret":[{"headerName":"Authorization","valueSecretRef":{"name":"records-mcp-auth","key":"value"}}]} records-noauth mcp-tools'
 eq "only the endpoint entry has a header" "$(q "$D" "[$ENT|select(.spec|has(\"headerForward\"))|.metadata.name]|join(\",\")")" records
@@ -85,13 +85,13 @@ eq "the RemoteMCPServer of the profile exists" "$(q "$D" '[.[]|select(.kind=="Re
 
 echo "# endpoints: network"
 NPI='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-endpoint-records")'
-eq "ingress policy: in the endpoint's namespace, Ingress only, selects the given pods" "$(q "$D" "$NPI|[.metadata.namespace,(.spec.policyTypes|join(\",\")),(.spec.podSelector|tojson)]|join(\" \")")" 'fernvale-records Ingress {"matchLabels":{"app":"records"}}'
+eq "ingress policy: in the endpoint's namespace, Ingress only, selects the given pods" "$(q "$D" "$NPI|[.metadata.namespace,(.spec.policyTypes|join(\",\")),(.spec.podSelector|tojson)]|join(\" \")")" 'records-ns Ingress {"matchLabels":{"app":"records"}}'
 eq "ingress policy: the given pod port, from the vMCPs of the group and nothing else" "$(q "$D" "$NPI|[(.spec.ingress|length|tostring),(.spec.ingress[0].ports|tojson),([.spec.ingress[0].from[]|.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]+\"/\"+.podSelector.matchLabels.app+\"/\"+.podSelector.matchLabels[\"toolhive-name\"]]|join(\",\"))]|join(\" \")")" '1 [{"protocol":"TCP","port":8080}] mcp-tools/virtualmcpserver/tools-disputes'
 eq "ingress policy: never the shared vMCP or a shared-group profile" "$(q "$D" "$NPI|[.spec.ingress[].from[].podSelector.matchLabels[\"toolhive-name\"]]|map(select(.==\"tools\" or .==\"tools-lookup\"))|length")" 0
 NPE='.[]|select(.kind=="NetworkPolicy" and .metadata.name=="openagentix-vmcp-egress-disputes")'
 eq "egress policy: in the tools namespace, Egress only, selects the vMCPs of the group by name" "$(q "$D" "$NPE|[.metadata.namespace,(.spec.policyTypes|join(\",\")),(.spec.podSelector|tojson)]|join(\" \")")" 'mcp-tools Egress {"matchExpressions":[{"key":"toolhive-name","operator":"In","values":["tools-disputes"]}],"matchLabels":{"app":"virtualmcpserver"}}'
 eq "egress policy: DNS, the endpoint pods, kb, notify, the identity provider namespace, the API server: six rules, each with a destination" "$(q "$D" "$NPE|[(.spec.egress|length|tostring),([.spec.egress[]|has(\"to\")]|all|tostring)]|join(\" \")")" "6 true"
-eq "egress policy: the endpoint rule names the namespace, the pod selector and the pod port" "$(q "$D" "$NPE|.spec.egress[]|select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"fernvale-records\")|[(.to|tojson),(.ports|tojson)]|join(\" \")")" '[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"fernvale-records"}},"podSelector":{"matchLabels":{"app":"records"}}}] [{"protocol":"TCP","port":8080}]'
+eq "egress policy: the endpoint rule names the namespace, the pod selector and the pod port" "$(q "$D" "$NPE|.spec.egress[]|select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]==\"records-ns\")|[(.to|tojson),(.ports|tojson)]|join(\" \")")" '[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"records-ns"}},"podSelector":{"matchLabels":{"app":"records"}}}] [{"protocol":"TCP","port":8080}]'
 eq "egress policy: the API server rule uses controlPlane.apiServerCIDRs and the ports" "$(q "$D" "$NPE|.spec.egress[]|select(.to[0].ipBlock!=null)|[(.to|tojson),(.ports|map(.port)|tojson)]|join(\" \")")" '[{"ipBlock":{"cidr":"172.18.0.0/24"}}] [443,6443]'
 eq "egress policy: kb and notify by namespace and pod label, port 8080 (the mirrors)" "$(q "$D" "$NPE|[.spec.egress[]|select(.to[0].podSelector.matchLabels.app==\"kb\" or .to[0].podSelector.matchLabels.app==\"notify\")|.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]+\"/\"+.to[0].podSelector.matchLabels.app+\":\"+(.ports[0].port|tostring)]|sort|join(\" \")")" "openagentix-knowledge/kb:8080 openagentix-notify/notify:8080"
 eq "egress policy: no rule without a destination (no allow-all)" "$(q "$D" "$NPE|[.spec.egress[]|select(has(\"to\")|not)]|length")" 0
@@ -136,11 +136,11 @@ rm -f "$EX3"
 echo "# endpoints: the refusals (each fails the render with a sentence that names the value)"
 ev '.mcp.endpoints[0].url="http://records:8080/mcp"'
 er "a one-label host is refused" 'mcp.endpoints[records].url' -f "$EX2"
-ev '.mcp.endpoints[0].url="http://records.fernvale-records:8080/mcp"'
+ev '.mcp.endpoints[0].url="http://records.records-ns:8080/mcp"'
 er "the short form <service>.<namespace> is refused as a URL (write .svc or .svc.cluster.local)" 'mcp.endpoints[records].url' -f "$EX2"
-ev '.mcp.endpoints[0].url="http://records.fernvale-records.svc:8080/mcp"'
+ev '.mcp.endpoints[0].url="http://records.records-ns.svc:8080/mcp"'
 okr "the .svc form is accepted" -f "$EX2"
-ev '.mcp.endpoints[0].url="https://records.fernvale-records.svc.cluster.local/mcp"'
+ev '.mcp.endpoints[0].url="https://records.records-ns.svc.cluster.local/mcp"'
 okr "https and no port are accepted" -f "$EX2"
 ev '.mcp.endpoints[0].url="https://api.example.com/mcp"'
 er "an internet URL is refused (not in this slice)" 'outside the cluster' -f "$EX2"
@@ -148,15 +148,15 @@ ev '.mcp.endpoints[0].url="http://10.0.0.5:8080/mcp"'
 er "an IPv4 literal is refused" 'address' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://[::1]:8080/mcp"'
 er "an IPv6 literal is refused" 'address' -f "$EX2"
-ev '.mcp.endpoints[0].url="http://user:pw@records.fernvale-records.svc.cluster.local:8080/mcp"'
+ev '.mcp.endpoints[0].url="http://user:pw@records.records-ns.svc.cluster.local:8080/mcp"'
 er "a user name and password in the URL are refused" 'user name' -f "$EX2"
-ev '.mcp.endpoints[0].url="http://records.fernvale-records.svc.cluster.local:8080/mcp?x=1"'
+ev '.mcp.endpoints[0].url="http://records.records-ns.svc.cluster.local:8080/mcp?x=1"'
 er "a query is refused" 'query' -f "$EX2"
-ev '.mcp.endpoints[0].url="http://records.fernvale-records.svc.cluster.local:8080/mcp#a"'
+ev '.mcp.endpoints[0].url="http://records.records-ns.svc.cluster.local:8080/mcp#a"'
 er "a fragment is refused" 'fragment' -f "$EX2"
-ev '.mcp.endpoints[0].url="http://records.fernvale-records.svc.cluster.local:99999/mcp"'
+ev '.mcp.endpoints[0].url="http://records.records-ns.svc.cluster.local:99999/mcp"'
 er "a port above 65535 is refused" 'port' -f "$EX2"
-ev '.mcp.endpoints[0].url="ftp://records.fernvale-records.svc.cluster.local/mcp"'
+ev '.mcp.endpoints[0].url="ftp://records.records-ns.svc.cluster.local/mcp"'
 er "a scheme other than http and https is refused" 'mcp.endpoints[records].url' -f "$EX2"
 # the namespaces: every value of values.yaml whose key ends in "namespace" (an empty value is the release namespace), and the fixed ones
 NSV=$(yq -r '[.. | objects | to_entries[] | select(.key|test("namespace$";"i")) | .value | strings | if .=="" then "openagentix-system" else . end] | unique | .[]' "$CHART/values.yaml")
@@ -165,7 +165,7 @@ for NSX in $NSV default kube-system kube-public kube-node-lease openagentix-anyt
   ev ".mcp.endpoints[0].url=\"http://records.$NSX.svc.cluster.local:8080/mcp\""
   er "an endpoint in the namespace $NSX is refused as a platform namespace" 'platform or system namespace' -f "$EX2"
 done
-er "a namespace value that is new in the values (zzz.extraNamespace) is refused at once: the refusal list is built from the values" 'platform or system namespace' -f "$EX" --set zzz.extraNamespace=fernvale-records
+er "a namespace value that is new in the values (zzz.extraNamespace) is refused at once: the refusal list is built from the values" 'platform or system namespace' -f "$EX" --set zzz.extraNamespace=records-ns
 ev '.mcp.endpoints[0].url="http://kubernetes.default.svc.cluster.local:443/mcp"'
 er "the Kubernetes API service is refused by name" 'Kubernetes API service' -f "$EX2"
 ev '.mcp.endpoints[0].ingress.podSelector={}'
@@ -236,9 +236,9 @@ ev ".mcp.profiles[0].tools.records=[\"$(printf 'a%.0s' $(seq 1 57))\"]"
 er "a prefixed tool name of 65 characters is refused" '64 characters' -f "$EX2"
 ev ".mcp.profiles[0].tools.records=[\"$(printf 'a%.0s' $(seq 1 56))\"]"
 okr "a prefixed tool name of 64 characters is accepted" -f "$EX2"
-ev '.mcp.endpoints += [{name:"ab",url:"http://ab.fernvale-records.svc.cluster.local:8080/mcp",group:"disputes",auth:{header:{name:"Authorization",secret:{name:"x",key:"value"}}},ingress:{podSelector:{app:"ab"},port:8080}}] | .mcp.endpoints[0].name="a" | .mcp.profiles[0].tools={a:["bc"],ab:["c"]}'
+ev '.mcp.endpoints += [{name:"ab",url:"http://ab.records-ns.svc.cluster.local:8080/mcp",group:"disputes",auth:{header:{name:"Authorization",secret:{name:"x",key:"value"}}},ingress:{podSelector:{app:"ab"},port:8080}}] | .mcp.endpoints[0].name="a" | .mcp.profiles[0].tools={a:["bc"],ab:["c"]}'
 er "two backends of one group with one prefixed tool name are refused, naming both" 'a" and "ab' -f "$EX2" --set-json 'mcp.virtual.prefixFormat="{workload}"'
-ev '.mcp.endpoints += [{name:"other",url:"http://other.fernvale-records.svc.cluster.local:8080/mcp",group:"second",auth:{header:{name:"Authorization",secret:{name:"sec2",key:"value"}}},ingress:{podSelector:{app:"other"},port:8080}}] | .mcp.profiles[0].tools.other=["x"]'
+ev '.mcp.endpoints += [{name:"other",url:"http://other.records-ns.svc.cluster.local:8080/mcp",group:"second",auth:{header:{name:"Authorization",secret:{name:"sec2",key:"value"}}},ingress:{podSelector:{app:"other"},port:8080}}] | .mcp.profiles[0].tools.other=["x"]'
 er "a profile that lists endpoints of two groups is refused" 'two tool groups' -f "$EX2"
 ev '.mcp.profiles[0].tools.osv=["query_vulnerability"]'
 er "a profile that lists an endpoint and an mcp.servers entry is refused (an MCPServer has one group)" 'mcp.servers' -f "$EX2"
@@ -251,15 +251,15 @@ er "mcp.endpointEntriesHeld naming something that is not an endpoint is refused"
 er "mcp.endpointEntriesHeld that is not a list is refused" 'endpointEntriesHeld' -f "$EX" --set mcp.endpointEntriesHeld=records
 
 echo "# endpoints: agents and definitions cannot reach the endpoint around the profile"
-for FORM in records.fernvale-records records.fernvale-records.svc records.fernvale-records.svc.cluster.local '*.fernvale-records.svc' '*.fernvale-records.svc.cluster.local'; do
+for FORM in records.records-ns records.records-ns.svc records.records-ns.svc.cluster.local '*.records-ns.svc' '*.records-ns.svc.cluster.local'; do
   yq -y "{agents: (.agents|.[0].egress={allow:[\"http://$FORM\"]})}" "$CHART/values.yaml" > "$EX2"
   er "agents[].egress.allow naming the endpoint host as $FORM is refused" 'mcp.endpoints' -f "$EX2" -f "$EX"
   er "controlPlane.policy.egress.allowedOrigins naming it as $FORM is refused" 'mcp.endpoints' -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.allowedOrigins={http://$FORM}"
 done
-for FORM in records.fernvale-records:8080 records.fernvale-records.svc:8080 records.fernvale-records.svc.cluster.local:8080; do
+for FORM in records.records-ns:8080 records.records-ns.svc:8080 records.records-ns.svc.cluster.local:8080; do
   er "controlPlane.policy.egress.inClusterDestinations naming it as $FORM is refused" 'mcp.endpoints' -f "$EX" --set controlPlane.enabled=true --set "controlPlane.policy.egress.inClusterDestinations={$FORM}"
 done
-yq -y '{agents: (.agents|.[0].egress={allow:["http://other.fernvale-records.svc.cluster.local"]})}' "$CHART/values.yaml" > "$EX2"
+yq -y '{agents: (.agents|.[0].egress={allow:["http://other.records-ns.svc.cluster.local"]})}' "$CHART/values.yaml" > "$EX2"
 okr "another service of the same namespace is not named by this rule (it is only the endpoint host)" -f "$EX2" -f "$EX"
 okr "a wildcard of another namespace is fine" -f "$EX" --set controlPlane.enabled=true --set 'controlPlane.policy.egress.allowedOrigins={https://*.example.com}'
 

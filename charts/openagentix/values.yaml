@@ -298,7 +298,7 @@ mcp:
   # vMCPs of the group. The Secret is yours: create it in mcp.namespace before the install; the chart renders only the reference. Empty (the default): nothing renders.
   endpoints: []
   #  - name: records                    # lower case letters, digits, single dashes; at most 30 characters; it is the tool prefix (records_...)
-  #    url: http://records.fernvale-records.svc.cluster.local:8080/mcp   # <service>.<namespace>.svc[.cluster.local]; no address, no user name, no query
+  #    url: http://records.records-ns.svc.cluster.local:8080/mcp   # <service>.<namespace>.svc[.cluster.local]; no address, no user name, no query
   #    transport: streamable-http       # streamable-http (default) | sse
   #    group: disputes                  # the tool group of this endpoint (required): letters, digits, single dashes, at most 20 characters
   #    auth:
