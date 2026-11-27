@@ -186,6 +186,7 @@ rules:
     resources: [agentdefinitions, agentdefinitions/status]
     verbs: [get, list, watch]
 ---
+{{- include "oa.pdb" (dict "root" $ "name" $sa "app" "control-plane" "ns" $ns) }}
 # One replica, strategy Recreate, no leader election (ADR 0007). Hardened like the A2A gate.
 apiVersion: apps/v1
 kind: Deployment
@@ -215,6 +216,9 @@ spec:
         openagentix.io/source-hash: {{ $c.sourceHash | quote }}
         {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       serviceAccountName: {{ $sa }}
       automountServiceAccountToken: true   # its own token talks to the API server
       terminationGracePeriodSeconds: 30
