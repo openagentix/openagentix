@@ -1,0 +1,314 @@
+# Objects of the ToolHive diagnostics spike (issue #230, ADR 0025 slice 2). Applied by toolhive-diagnostics-spike.sh to a throwaway
+# kind cluster; __RESULT_CANARY__, __ISSUER__ and __AUDIENCE__ are filled in by the script. Not part of the chart.
+#
+# Backends (MCPServerEntry, no pods of their own; one stand-in server answers all of them, the path picks the tool set):
+#   group shared : ok  (ping, whoami)           dgs (pods_list, whoami: the "diagnostics" backend that must be kept out)
+#   group sepgrp : oksep                        (a group that does not hold any diagnostics backend)
+#   group diag   : dg (pods_list, whoami), hdra..hdrd (whoami, ping: the four ways to send a header)
+# vMCPs: sh-open (control, audit capture on), sh-excl (aggregation excludeAll), sh-deny (defaultToolVisibility deny),
+#        sh-cedar (Cedar forbid), sh-sep (separate group), diag (dedicated: OIDC, audit capture off, passthroughHeaders).
+apiVersion: v1
+kind: Namespace
+metadata: {name: spike-mcp}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mcpstub, namespace: spike-mcp}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mcpstub}}
+  template:
+    metadata: {labels: {app: mcpstub}}
+    spec:
+      containers:
+        - name: stub
+          image: public.ecr.aws/docker/library/python:3.12-slim
+          command: [python, -u, /app/server.py, "8080"]
+          env: [{name: RESULT_CANARY, value: "__RESULT_CANARY__"}]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 3}
+          resources: {requests: {cpu: 10m, memory: 32Mi}}
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: spike-backend}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcpstub, namespace: spike-mcp}
+spec:
+  selector: {app: mcpstub}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# A tiny identity provider: it serves only a JWKS and a discovery document, from a ConfigMap, over plain HTTP.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: idp, namespace: spike-mcp}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: idp}}
+  template:
+    metadata: {labels: {app: idp}}
+    spec:
+      containers:
+        - name: idp
+          image: public.ecr.aws/docker/library/python:3.12-slim
+          command: [python, -m, http.server, "8080", --directory, /srv]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /jwks.json, port: 8080}, periodSeconds: 3}
+          resources: {requests: {cpu: 10m, memory: 24Mi}}
+          volumeMounts: [{name: srv, mountPath: /srv}]
+      volumes:
+        - name: srv
+          configMap:
+            name: spike-idp
+            items:
+              - {key: jwks.json, path: jwks.json}
+              - {key: openid-configuration, path: .well-known/openid-configuration}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: idp, namespace: spike-mcp}
+spec:
+  selector: {app: idp}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPOIDCConfig
+metadata: {name: spike-idp, namespace: spike-mcp}
+spec:
+  type: inline
+  inline:
+    issuer: "__ISSUER__"
+    jwksUrl: "__ISSUER__/jwks.json"
+    insecureAllowHTTP: true
+    jwksAllowPrivateIP: true
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPGroup
+metadata: {name: shared, namespace: spike-mcp}
+spec: {description: "stands in for the shared tool group"}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPGroup
+metadata: {name: sepgrp, namespace: spike-mcp}
+spec: {description: "a group without a diagnostics backend"}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPGroup
+metadata: {name: diag, namespace: spike-mcp}
+spec: {description: "the diagnostics backends only"}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata: {name: noauth, namespace: spike-mcp}
+spec: {type: unauthenticated}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata: {name: hdr-inject, namespace: spike-mcp}
+spec:
+  type: headerInjection
+  headerInjection:
+    headerName: Authorization
+    valueSecretRef: {name: hdr-token, key: value}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata: {name: hdr-bearer, namespace: spike-mcp}
+spec:
+  type: bearerToken
+  bearerToken:
+    tokenSecretRef: {name: hdr-token-raw, key: value}
+---
+# ---- backends
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: ok, namespace: spike-mcp}
+spec:
+  groupRef: {name: shared}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/ok
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: noauth}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: dgs, namespace: spike-mcp}
+spec:
+  groupRef: {name: shared}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/dgs
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: noauth}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: oksep, namespace: spike-mcp}
+spec:
+  groupRef: {name: sepgrp}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/oksep
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: noauth}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: dg, namespace: spike-mcp}
+spec:
+  groupRef: {name: diag}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/dg
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: noauth}
+---
+# header path A: the entry's own headerForward, a Secret reference; the auth config is the usual `unauthenticated`
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: hdra, namespace: spike-mcp}
+spec:
+  groupRef: {name: diag}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/hdra
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: noauth}
+  headerForward:
+    addHeadersFromSecret:
+      - {headerName: Authorization, valueSecretRef: {name: hdr-token, key: value}}
+---
+# header path B: an MCPExternalAuthConfig of type headerInjection
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: hdrb, namespace: spike-mcp}
+spec:
+  groupRef: {name: diag}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/hdrb
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: hdr-inject}
+---
+# header path C: an MCPExternalAuthConfig of type bearerToken
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: hdrc, namespace: spike-mcp}
+spec:
+  groupRef: {name: diag}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/hdrc
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: hdr-bearer}
+---
+# header path A without any externalAuthConfigRef: is the entry dropped (as for the other entries in this repository)?
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: hdrd, namespace: spike-mcp}
+spec:
+  groupRef: {name: diag}
+  remoteUrl: http://mcpstub.spike-mcp.svc.cluster.local:8080/mcp/hdrd
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  headerForward:
+    addHeadersFromSecret:
+      - {headerName: Authorization, valueSecretRef: {name: hdr-token, key: value}}
+---
+# ---- vMCPs. Anonymous callers except `diag`; the policy shape is the one the chart renders.
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata: {name: sh-open, namespace: spike-mcp}
+spec:
+  groupRef: {name: shared}
+  config:
+    aggregation:
+      conflictResolution: prefix
+      conflictResolutionConfig: {prefixFormat: "{workload}_"}
+    codeMode: {enabled: true, stepLimit: 100000, parallelMaxConcurrency: 10, toolCallTimeout: 30s}
+    audit: {enabled: true, includeRequestData: true, includeResponseData: true}
+  incomingAuth:
+    type: anonymous
+    authzConfig: {type: inline, inline: {policies: ['permit(principal, action, resource);']}}
+  outgoingAuth: {source: discovered}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata: {name: sh-excl, namespace: spike-mcp}
+spec:
+  groupRef: {name: shared}
+  config:
+    aggregation:
+      conflictResolution: prefix
+      conflictResolutionConfig: {prefixFormat: "{workload}_"}
+      tools:
+        - {workload: dgs, excludeAll: true}
+    codeMode: {enabled: true, stepLimit: 100000, parallelMaxConcurrency: 10, toolCallTimeout: 30s}
+  incomingAuth:
+    type: anonymous
+    authzConfig: {type: inline, inline: {policies: ['permit(principal, action, resource);']}}
+  outgoingAuth: {source: discovered}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata: {name: sh-deny, namespace: spike-mcp}
+spec:
+  groupRef: {name: shared}
+  config:
+    aggregation:
+      conflictResolution: prefix
+      conflictResolutionConfig: {prefixFormat: "{workload}_"}
+      defaultToolVisibility: deny
+      tools:
+        - {workload: ok, filter: [ping, whoami]}
+    codeMode: {enabled: true, stepLimit: 100000, parallelMaxConcurrency: 10, toolCallTimeout: 30s}
+  incomingAuth:
+    type: anonymous
+    authzConfig: {type: inline, inline: {policies: ['permit(principal, action, resource);']}}
+  outgoingAuth: {source: discovered}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata: {name: sh-cedar, namespace: spike-mcp}
+spec:
+  groupRef: {name: shared}
+  config:
+    aggregation:
+      conflictResolution: prefix
+      conflictResolutionConfig: {prefixFormat: "{workload}_"}
+    codeMode: {enabled: true, stepLimit: 100000, parallelMaxConcurrency: 10, toolCallTimeout: 30s}
+  incomingAuth:
+    type: anonymous
+    authzConfig:
+      type: inline
+      inline:
+        policies:
+          - 'forbid(principal, action == Action::"call_tool", resource == Tool::"dgs_pods_list");'
+          - 'forbid(principal, action == Action::"call_tool", resource == Tool::"dgs_whoami");'
+          - 'permit(principal, action, resource);'
+  outgoingAuth: {source: discovered}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata: {name: sh-sep, namespace: spike-mcp}
+spec:
+  groupRef: {name: sepgrp}
+  config:
+    aggregation:
+      conflictResolution: prefix
+      conflictResolutionConfig: {prefixFormat: "{workload}_"}
+  incomingAuth:
+    type: anonymous
+    authzConfig: {type: inline, inline: {policies: ['permit(principal, action, resource);']}}
+  outgoingAuth: {source: discovered}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: VirtualMCPServer
+metadata: {name: diag, namespace: spike-mcp}
+spec:
+  groupRef: {name: diag}
+  passthroughHeaders: [X-Caller-Id]
+  config:
+    aggregation:
+      conflictResolution: prefix
+      conflictResolutionConfig: {prefixFormat: "{workload}_"}
+    audit: {enabled: true, includeRequestData: false, includeResponseData: false}
+  incomingAuth:
+    type: oidc
+    oidcConfigRef: {name: spike-idp, audience: "__AUDIENCE__"}
+    authzConfig: {type: inline, inline: {policies: ['permit(principal, action, resource);']}}
+  outgoingAuth: {source: discovered}
