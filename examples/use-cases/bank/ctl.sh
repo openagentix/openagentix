@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# The desk's commands for the bank use case. Local kind cluster, after examples/use-cases/bank/install.sh.
+#
+#   ctl.sh ask "Work case DSP-2026-0001"     ask the dispute agent through the A2A gate, as the desk (ServiceAccount disputes-desk)
+#   ctl.sh cases                             open cases (id, claim, status, route)
+#   ctl.sh case DSP-2026-0001                one case with its evidence, as the REST API shows it
+#   ctl.sh approvals                         approval requests (id, case, kind, amount, status)
+#   ctl.sh show APR-0001                     one request: the exact payload the approver decides, and its hash
+#   ctl.sh approve APR-0001 [--yes] [note]   read the request, then approve it as desk:lead-1 (asks first unless --yes)
+#   ctl.sh reject APR-0001 [note]            reject it: the case goes back to an analyst
+#   ctl.sh outbox | ledger                   what was queued to leave the bank, and what was posted to an account
+#
+# REST is reached only through `kubectl port-forward` to the pod (it listens on the pod's loopback). The approver token is read from the
+# Secret records-approver-token into a shell variable and given to curl through a file descriptor: never printed, never in an argument list.
+# Env: CLUSTER (default openagentix)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  RECORDS_NAMESPACE (default fernvale-records)
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/../../.." && pwd)
+CLUSTER=${CLUSTER:-openagentix}
+KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
+KUBECTL=${KUBECTL:-kubectl}
+NS=${RECORDS_NAMESPACE:-fernvale-records}
+K="$KUBECTL --context $KUBE_CONTEXT"
+
+die(){ echo "ERROR: $*" >&2; exit 1; }
+usage(){ sed -n 2,13p "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+for c in jq curl; do command -v "$c" >/dev/null || die "$c is required"; done
+[ $# -ge 1 ] || usage
+
+PF_PID=""; PF_LOG=""; BASE=""
+cleanup(){
+  if [ -n "$PF_PID" ]; then kill "$PF_PID" 2>/dev/null || true; wait "$PF_PID" 2>/dev/null || true; fi
+  if [ -n "$PF_LOG" ]; then rm -f "$PF_LOG"; fi
+}
+trap cleanup EXIT
+
+connect(){
+  [ -z "$BASE" ] || return 0
+  PF_LOG=$(mktemp)
+  $K port-forward -n "$NS" deploy/records :8081 >"$PF_LOG" 2>&1 &
+  PF_PID=$!
+  local port=""
+  for _ in $(seq 1 30); do
+    port=$(sed -nE 's/^Forwarding from 127\.0\.0\.1:([0-9]+) .*/\1/p' "$PF_LOG" | head -1)
+    [ -n "$port" ] && break
+    kill -0 "$PF_PID" 2>/dev/null || die "port-forward failed: $(cat "$PF_LOG")"
+    sleep 1
+  done
+  [ -n "$port" ] || die "port-forward did not come up"
+  BASE="http://127.0.0.1:$port"
+  for _ in $(seq 1 30); do curl -fsS -m 3 "$BASE/readyz" >/dev/null 2>&1 && return 0; sleep 1; done
+  die "the records service is not ready"
+}
+
+get(){ connect; curl -fsS -m 15 "$BASE$1"; }
+
+valid_id(){ [[ "$2" =~ $1 ]] || die "'$2' is not a valid id"; }
+CASE_RE='^DSP-[0-9]{4}-[0-9]{4}$'; APR_RE='^APR-[0-9]{4,}$'
+
+# decide <approve|reject> <APR-id> <note>
+decide(){
+  local what=$1 id=$2 note=$3 token body code resp
+  connect
+  token=$($K get secret records-approver-token -n "$NS" -o jsonpath='{.data.token}' | base64 -d)
+  [ -n "$token" ] || die "no approver token in the Secret records-approver-token"
+  if [ "$what" = approve ]; then
+    body=$(jq -nc --arg h "$HASH" --arg n "$note" '{payload_hash:$h,note:$n}')
+  else
+    body=$(jq -nc --arg n "$note" '{note:$n}')
+  fi
+  resp=$(mktemp)
+  code=$(curl -sS -m 30 -o "$resp" -w '%{http_code}' -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") \
+    -H 'Content-Type: application/json' -d "$body" "$BASE/approvals/$id/$what") || code=000
+  unset token
+  if [ "$code" = 200 ]; then jq -r '"\(.id): \(.status) by \(.decided_by)"' "$resp"; rm -f "$resp"
+  else echo "ERROR: http $code: $(jq -r '.error // "refused"' "$resp" 2>/dev/null || echo refused)" >&2; rm -f "$resp"; exit 1; fi
+}
+
+cmd=$1; shift
+case "$cmd" in
+  ask)
+    [ $# -eq 1 ] || usage
+    ASK_SA=openagentix-system/disputes-desk ASK_USER=desk:lead-1 KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$ROOT/hack/ask.sh" dispute-agent "$1" ;;
+  cases)
+    get /cases | jq -r '.cases[] | [.id, .claim_type, .status, (.route // "-")] | @tsv' ;;
+  case)
+    [ $# -eq 1 ] || usage; valid_id "$CASE_RE" "$1"; get "/cases/$1" | jq . ;;
+  approvals)
+    get /approvals | jq -r '.approvals[] | [.id, .subject, .kind, .amount_cents, .status] | @tsv' ;;
+  show)
+    [ $# -eq 1 ] || usage; valid_id "$APR_RE" "$1"
+    get "/approvals/$1" | jq -r '"proposed by: \(.proposed_by)\nstatus: \(.status)\npayload_hash: \(.payload_hash)\npayload:\n\(.payload)"' ;;
+  approve|reject)
+    [ $# -ge 1 ] || usage
+    id=$1; shift; valid_id "$APR_RE" "$id"
+    yes=0; note=""
+    for a in "$@"; do if [ "$a" = --yes ]; then yes=1; else note="$a"; fi; done
+    ar=$(get "/approvals/$id")
+    status=$(jq -r .status <<<"$ar")
+    [ "$status" = pending ] || die "$id is $status, not pending"
+    HASH=$(jq -r .payload_hash <<<"$ar")
+    echo "$id was proposed by $(jq -r .proposed_by <<<"$ar"). The payload you decide:"
+    jq -r .payload <<<"$ar"
+    echo "payload_hash: $HASH"
+    if [ "$yes" != 1 ]; then
+      printf '%s %s as desk:lead-1? [y/N] ' "$cmd" "$id"
+      read -r answer </dev/tty || die "no terminal to ask on: pass --yes to decide without asking"
+      [ "$answer" = y ] || [ "$answer" = Y ] || die "not confirmed: nothing changed"
+    fi
+    [ -n "$note" ] || note="decided with ctl.sh"
+    decide "$cmd" "$id" "$note" ;;
+  outbox) get /outbox | jq -r '.outbox[] | [.id, .subject, .kind, .status] | @tsv' ;;
+  ledger) get /ledger | jq -r '.ledger[] | [.case_id, .kind, .amount_cents, .approval_id, .posted_at] | @tsv' ;;
+  -h|--help|help) usage 0 ;;
+  *) usage ;;
+esac
