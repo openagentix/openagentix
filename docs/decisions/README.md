@@ -67,6 +67,6 @@ Follow the style of the existing records:
 | [0019](0019-container-agent-tools.md) | Tools for container agents through a workload tool server | Proposed | 2026-11-26 |
 | [0022](0022-image-registry-and-platform.md) | Build images for a remote cluster and push them to a registry | Accepted | 2026-11-26 |
 | [0023](0023-model-gateway-service-type.md) | The model gateway Service type | Accepted | 2026-11-26 |
-| [0024](0024-availability-defaults.md) | Availability defaults for platform workloads | Proposed | 2026-11-26 |
+| [0024](0024-availability-defaults.md) | Availability defaults for platform workloads | Accepted | 2026-11-26 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.

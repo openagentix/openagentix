@@ -1,9 +1,11 @@
 # ADR 0024: availability defaults for platform workloads
 
-Status: Proposed
+Status: Accepted (2026-11-27)
 Date: 2026-11-26
 Issue: https://github.com/openagentix/openagentix/issues/197 (umbrella #212; slices #198, #199; tests #201, #204)
 Replaces: none
+
+The 7-day review period was waived by the maintainer on 2026-11-27; an independent review was done and its changes are in this text.
 
 Every Deployment and StatefulSet of the chart gets a PodDisruptionBudget with `maxUnavailable: 1`, on by default. This is a stated exception to the rule "off by default, byte-identical default render". The A2A gate and the console default to two replicas with a soft spread over nodes and zones; the quick start and minimal profiles keep one of each. Every other workload stays at one replica, for a reason named per workload below. The chart sets no priority class unless the operator names one. Four new chart values become public.
 
@@ -266,13 +268,13 @@ On a cluster (each result goes into `docs/diary/what-works.md` with its limits; 
 - Everything about Kubernetes behaviour in Context is read from documentation, not run here: *unverified* until the tests above run.
 - The memory cost of the second gate and console in the full demo on a 6 CPU, 8 GiB VM is computed from requests, not measured.
 
-### Proposed answers (owner decides)
+### Decisions (owner, 2026-11-27)
 
-1. Should the quick start on a remote cluster (`CLUSTER_TYPE=remote PROFILE=quickstart`) run two gate replicas? Proposed: yes, only when the installer's preflight sees two or more Ready, schedulable nodes; otherwise one, so a drain is never blocked by our default.
-2. Should the gate replicas share one audit hash salt (a Secret made by install.sh)? Proposed: not in this ADR. It changes what the audit record lets a reader link over time, so it needs its own security ADR.
-3. Should the kb run two replicas in the full demo? Proposed: no. The extraction budget is per process, and its database and embedding server stay single.
-4. Should stateless single replicas get shorter not-ready tolerations than 300 s? Proposed: decide after #204 gives numbers, and never for a workload on a ReadWriteOnce volume.
-5. Should the embedding model caches become `emptyDir`, so the embedding servers can move on a node failure at the cost of a download (about 120 MB for the memory model)? Proposed: decide in #206 (volume keep policy), and only as an opt-in value.
-6. A priority class per workload? Proposed: no. One value for all chart pods until a platform team asks with a reason.
+1. Should the quick start on a remote cluster (`CLUSTER_TYPE=remote PROFILE=quickstart`) run two gate replicas? Decided: yes, only when the installer's preflight sees two or more Ready, schedulable nodes; otherwise one, so a drain is never blocked by our default.
+2. Should the gate replicas share one audit hash salt (a Secret made by install.sh)? Decided: not in this ADR. It changes what the audit record lets a reader link over time, so it needs its own security ADR.
+3. Should the kb run two replicas in the full demo? Decided: no. The extraction budget is per process, and its database and embedding server stay single.
+4. Should stateless single replicas get shorter not-ready tolerations than 300 s? Decided: decide after #204 gives numbers, and never for a workload on a ReadWriteOnce volume.
+5. Should the embedding model caches become `emptyDir`, so the embedding servers can move on a node failure at the cost of a download (about 120 MB for the memory model)? Decided: decide in #206 (volume keep policy), and only as an opt-in value.
+6. A priority class per workload? Decided: no. One value for all chart pods until a platform team asks with a reason.
 
 Also open, outside this ADR: replicas and budgets for the upstream workloads, above all the model gateway proxy (#211).
