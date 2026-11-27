@@ -177,7 +177,14 @@ func seedData(ctx context.Context, tx *sql.Tx, now time.Time) error {
 		if i < 360 && i%20 == 5 {
 			sup = fmt.Sprintf("P-%d", 10001+360+i/20)
 		}
-		s.exec(`INSERT INTO parts(id,name,superseded_by) VALUES(?,?,?)`, id, fmt.Sprintf("%s, variant %d", components[i%20], i/20+1), sup)
+		name := fmt.Sprintf("%s, variant %d", components[i%20], i/20+1)
+		switch id { // the two parts of the demo case are the thermostats that service bulletin SB-2026-011 names
+		case "P-10006":
+			name = "Thermostat, early type"
+		case "P-10361":
+			name = "Thermostat, replacement for P-10006"
+		}
+		s.exec(`INSERT INTO parts(id,name,superseded_by) VALUES(?,?,?)`, id, name, sup)
 		for di, dealer := range dealerIDs {
 			qty := 3 + (di+i)%8
 			switch {

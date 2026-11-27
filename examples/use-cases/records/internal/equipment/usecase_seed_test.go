@@ -70,4 +70,42 @@ func TestUseCaseSeedIdsExistInTheRecordsSeed(t *testing.T) {
 	if !strings.Contains(string(raw), "E-345") {
 		t.Error("out-of-warranty.md must name E-345, the flapping sensor code")
 	}
+
+	// Part names. The first real-model run found that the record called P-10361 "Hydraulic pump seal kit" while the bulletin SB-2026-011 and the graph call it
+	// the thermostat that replaces P-10006. A part that a document or a graph fact describes as a thermostat is a thermostat in the records seed.
+	partName := func(id string) string {
+		var n string
+		if err := d.db.QueryRow(`SELECT name FROM parts WHERE id=?`, id).Scan(&n); err != nil {
+			t.Fatalf("part %s: %v", id, err)
+		}
+		return n
+	}
+	graph, err := os.ReadFile(filepath.Join(root, "graph", "service-facts.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	described := 0
+	for _, m := range regexp.MustCompile(`name: Part (P-[0-9]{5}).*description: "([^"]*)"`).FindAllStringSubmatch(string(graph), -1) {
+		if strings.Contains(strings.ToLower(m[2]), "thermostat") {
+			described++
+			if !strings.Contains(strings.ToLower(partName(m[1])), "thermostat") {
+				t.Errorf("the graph describes %s as a thermostat (%q); the records seed names it %q", m[1], m[2], partName(m[1]))
+			}
+		}
+	}
+	if described < 2 {
+		t.Errorf("the graph describes %d parts as a thermostat, want 2 (P-10006 and P-10361)", described)
+	}
+	bulletin, err := os.ReadFile(filepath.Join(root, "kb", "bulletin-sb-2026-011.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"P-10006", "P-10361"} {
+		if !strings.Contains(string(bulletin), id) {
+			t.Fatalf("the bulletin SB-2026-011 no longer names %s: update this test", id)
+		}
+		if !strings.Contains(strings.ToLower(string(bulletin)), "thermostat") || !strings.Contains(strings.ToLower(partName(id)), "thermostat") {
+			t.Errorf("the bulletin SB-2026-011 is about the thermostat; the records seed names %s %q", id, partName(id))
+		}
+	}
 }
