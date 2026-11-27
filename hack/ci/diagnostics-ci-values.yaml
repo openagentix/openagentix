@@ -1,0 +1,34 @@
+# CI ONLY. These values make a cluster unfit for agents: the tool gateways trust the API server's own tokens, and the namespaces listed below are ones
+# only a throwaway CI cluster has. hack/ci/diagnostics-live.sh refuses to run anywhere but on GitHub Actions (or a context named by DIAGNOSTICS_CI_CONTEXT).
+# Values of the live check of cluster-read (ADR 0025 slice 4), on top of the quick start:
+#   PROFILE=quickstart VALUES_FILE=hack/ci/diagnostics-ci-values.yaml ./install.sh      then      DIAGNOSTICS=1 hack/ci/diagnostics-live.sh
+# The e2e workflow runs it on request (workflow_dispatch, input `diagnostics`). It is NOT a recommended configuration: it lists
+# kube-system and the platform namespace as status namespaces only to show that the rights check passes on a real API server.
+# What it settles: the server becomes Ready (its rights check passes with the default discovery rules of a real ServiceAccount), the
+# dedicated profile `rca` lists the eight tools and the shared tool server lists none.
+diagnostics:
+  enabled: true
+  cluster:
+    enabled: true
+    logNamespaces: [diag-ci]                    # an empty namespace that install.sh creates (a RoleBinding lives in it)
+    statusNamespaces: [kagent, kube-system]     # pods, events and workloads only; never logs
+mcp:
+  # a list replaces the quick start's list, so `lookup` is stated again exactly as components/quickstart/values.yaml has it
+  profiles:
+    - name: lookup
+      codeMode: false
+      tools:
+        osv: [query_vulnerability]
+    - name: rca
+      codeMode: false
+      tools:
+        cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
+  virtual:
+    incomingAuth:
+      # Only for this job (review F5): the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/diagnostics-live.sh can make a
+      # token and make real calls through them. The script puts the cluster CA into the ConfigMap below and restarts the vMCPs. Agents' tool calls do
+      # not work in a cluster installed with these values: use them for this check and nothing else.
+      oidc:
+        issuer: https://kubernetes.default.svc.cluster.local
+        jwksUrl: https://kubernetes.default.svc/openid/v1/jwks
+        caBundle: {configMap: ci-apiserver-ca, key: ca.crt}

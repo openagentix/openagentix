@@ -68,6 +68,9 @@
 #   SKIP_NOTIFY_IMAGE=1  do not build/load the notify image (services/notify); it is only built when notify.enabled is true
 #   SKIP_A2A_GATE_IMAGE=1  do not build/load the A2A gate image (services/a2a-gate); it is only built when governance.a2a.enabled is true
 #   SKIP_CONTROL_PLANE_IMAGE=1  do not build/load the control plane image (services/control-plane); it is only built when controlPlane.enabled is true
+#   SKIP_DIAGNOSTICS_IMAGE=1  do not build/load the diagnostics image (services/diagnostics); it is only built when diagnostics.enabled and diagnostics.cluster.enabled are true
+#   DIAGNOSTICS_APISERVER_CIDRS  the API server addresses cluster-read's NetworkPolicy lets it reach (a comma list, or found as for the control plane)
+#   DIAG_VMCP_SETTLE=30   seconds to wait for the DiscoveredAuthConfig conditions of the diagnostics group's vMCPs (the install fails when one is False)
 #   SKIP_CONSOLE_IMAGE=1  do not build/load the console image (services/console + console); it is only built when console.enabled is true
 #   CONSOLE_APISERVER_CIDRS="10.0.0.0/24 ..."  the API server addresses the console's NetworkPolicy allows (comma or space separated);
 #                        default: derived like the control plane's, unless console.apiServerCIDRs is set in a values file
@@ -217,7 +220,8 @@ fi
 
 # What is required is decided from what the chart renders, before anything is created.
 render(){ helm template $RELEASE $CHART -n "$RELEASE_NS" --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} "$@" | yq -c 'select(.!=null)'; }
-RENDERED=$(render) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
+# (the planning renders accept the open API server egress of cluster-read: the addresses are found below, and the render that is applied refuses an empty list, review F6)
+RENDERED=$(render --set diagnostics.allowAnyApiServerAddress=true) || die "chart does not render; run: helm template $RELEASE $CHART ${VALUES_FILE:+-f $VALUES_FILE}"
 # STUB_SCENARIOS (ADR 0026, B): scenario files for the stub model. Each *.json file is passed with --set-file, in name order, with the dot of
 # the name escaped; the chart renders the ConfigMap, the mount and the checksum that rolls the pod. Checked before anything is created.
 if [ -n "${STUB_SCENARIOS:-}" ]; then
@@ -236,7 +240,7 @@ if [ -n "${STUB_SCENARIOS:-}" ]; then
   done
   if jq -e 'select(.kind=="Deployment" and .metadata.name=="stub-model")' <<<"$RENDERED" >/dev/null; then
     for f in "${SCEN_LIST[@]}"; do n=$(basename "$f"); VALS+=(--set-file "gateway.stubModel.scenarios.files.${n//./\\.}=$f"); done
-    RENDERED=$(render) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
+    RENDERED=$(render --set diagnostics.allowAnyApiServerAddress=true) || die "chart does not render with STUB_SCENARIOS=$STUB_SCENARIOS (the chart's refusal is above). Nothing was changed."
     echo "NOTE: the stub model plays ${#SCEN_LIST[@]} scenario file(s) from $STUB_SCENARIOS. Runs with them are scripted by the stub, not the behaviour of a model: say so in any demo, diary entry or report."
   else
     echo "STUB_SCENARIOS is set, but the stub model is off in this install: no scenario file is passed."
@@ -268,6 +272,7 @@ NOTIFY_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="notify")' <<
 A2A_GATE_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="a2a-gate")' <<<"$RENDERED")   # empty when governance.a2a.enabled=false
 CP_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")' <<<"$RENDERED")   # empty when controlPlane.enabled=false
 CN_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="openagentix-console")' <<<"$RENDERED")   # empty when console.enabled=false
+DIAG_DEP=$(jq -c 'select(.kind=="Deployment" and .metadata.name=="cluster-read")' <<<"$RENDERED")   # empty unless diagnostics.enabled and diagnostics.cluster.enabled (ADR 0025)
 
 # --- 5. images ----------------------------------------------------------------------------------------------
 SET=()
@@ -376,6 +381,12 @@ if [ "${SKIP_CONSOLE_IMAGE:-0}" != 1 ] && [[ "$CN_IMAGE" == openagentix/console:
   tag_image CN_IMAGE console services/console console
   log "console image $CN_IMAGE (build context: the repository root; it builds the web app inside Docker)"
   queue_build "$CN_IMAGE" . services/console/Dockerfile console
+fi
+DIAG_IMAGE=$(jq -r '.spec.template.spec.containers[0].image' <<<"${DIAG_DEP:-null}" 2>/dev/null || true)
+if [ "${SKIP_DIAGNOSTICS_IMAGE:-0}" != 1 ] && [[ "$DIAG_IMAGE" == openagentix/diagnostics:* ]]; then
+  tag_image DIAG_IMAGE diagnostics services/diagnostics
+  log "diagnostics image $DIAG_IMAGE"
+  queue_build "$DIAG_IMAGE" services/diagnostics "" diagnostics
 fi
 if [ "$QS_BYO" = 1 ]; then
   BYO_REPO=registry.local/oa/echo-a2a; BYO_REF=""
@@ -542,6 +553,10 @@ fi
 for ns in $RELEASE_NS $NAMESPACES; do
   $K get namespace "$ns" >/dev/null 2>&1 || $K create namespace "$ns" >/dev/null
 done
+if [ -n "$DIAG_DEP" ]; then   # the namespace of the diagnostics servers: Pod Security `restricted` (ADR 0025 section 1). The bearer Secret must exist before the pod, so the installer makes the namespace.
+  DIAG_NS=$(jq -r '.metadata.namespace' <<<"$DIAG_DEP")
+  $K label namespace "$DIAG_NS" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest pod-security.kubernetes.io/audit=restricted pod-security.kubernetes.io/warn=restricted --overwrite >/dev/null
+fi
 
 # --- 4. secrets (values from env only) ------------------------------------------------------------------------
 # put_secret ns name key ENVVAR: server-side apply with one field manager per key, so keys do not clobber each
@@ -723,6 +738,17 @@ if [ -n "$CN_DEP" ]; then
   mk_random_secret "$CN_NS" "$CN_TOKEN_S" "$CN_TOKEN_K" 24
 fi
 
+# --- 4f. diagnostics: the bearer value between the tool gateway and cluster-read (ADR 0025 section 5) ---------------------------------------------
+# Two Secrets with the same random value, created only when absent, never printed: cluster-read-bearer in the server's namespace (the server mounts it
+# as a file) and diagnostics-bearer-cluster-read in the tools namespace (the MCPServerEntry sends it). hack/diagnostics-bearer.sh, tested without a cluster.
+if [ -n "$DIAG_DEP" ]; then
+  log "diagnostics bearer value"
+  # shellcheck source=hack/diagnostics-bearer.sh
+  . hack/diagnostics-bearer.sh
+  DIAG_MCP_NS=$(jq -r 'select(.kind=="MCPServerEntry" and .metadata.name=="cluster-read")|.metadata.namespace' <<<"$RENDERED")
+  diag_bearer_ensure "$K" "$DIAG_MCP_NS" "$DIAG_NS" cluster-read || die "could not create the bearer Secrets of cluster-read (see above). The chart was not applied."
+fi
+
 finish_builds   # wait for the background builds, then load the images into the cluster in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
@@ -772,6 +798,24 @@ if [ -n "$CP_DEP" ]; then
     CP_CIDRS=$(kourier_apiserver_cidrs "${CONTROL_PLANE_APISERVER_CIDRS:-}" "$CP_EPS" "$CP_NODES") || die "could not find the API server address for the control plane's NetworkPolicy; set CONTROL_PLANE_APISERVER_CIDRS"
     echo "control plane: its NetworkPolicy lets it reach the API server at $CP_CIDRS"
     SET+=(--set-json "controlPlane.apiServerCIDRs=$CP_CIDRS")
+  fi
+fi
+if [ -n "$DIAG_DEP" ]; then
+  # Same for cluster-read: a hash of services/diagnostics rolls the pod on a code change although the tag stays "dev".
+  DIAG_HASH=$(cd services/diagnostics && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
+  SET+=(--set-string "diagnostics.sourceHash=$DIAG_HASH")
+  # The API server addresses its NetworkPolicy lets it reach: found the way the control plane's are. A values file that sets them wins.
+  if jq -e -s 'any(.[]; .kind=="NetworkPolicy" and .metadata.name=="cluster-read-egress" and ([.spec.egress[]?.to[]?|select(has("ipBlock"))]|length)==0)' <<<"$RENDERED" >/dev/null; then
+    # shellcheck source=components/channels/apiserver-cidrs.sh
+    . components/channels/apiserver-cidrs.sh
+    DG_EPS=""; DG_NODES=""
+    if [ -z "$(printf '%s' "${DIAGNOSTICS_APISERVER_CIDRS:-}" | tr -d '[:space:],')" ]; then
+      DG_EPS=$($K get endpointslices.discovery.k8s.io -n default -l kubernetes.io/service-name=kubernetes -o json)
+      DG_NODES=$($K get nodes -o json 2>/dev/null || echo '{"items":[]}')   # only used to recognise kind
+    fi
+    DG_CIDRS=$(kourier_apiserver_cidrs "${DIAGNOSTICS_APISERVER_CIDRS:-}" "$DG_EPS" "$DG_NODES") || die "could not find the API server address for cluster-read's NetworkPolicy; set DIAGNOSTICS_APISERVER_CIDRS"
+    echo "diagnostics: cluster-read's NetworkPolicy lets it reach the API server at $DG_CIDRS"
+    SET+=(--set-json "diagnostics.apiServerCIDRs=$DG_CIDRS")
   fi
 fi
 if jq -e -s 'any(.[]; .kind=="MCPOIDCConfig" and .metadata.name=="openagentix-workload-sa")' <<<"$RENDERED" >/dev/null; then
@@ -929,6 +973,27 @@ for row in $(jq -r 'select(.kind=="VirtualMCPServer" and (.metadata.annotations[
   log "tool profile vMCP ${row##*/}"
   $K wait "virtualmcpserver/${row##*/}" -n "${row%%/*}" --for=condition=Ready --timeout=300s || echo "WARN: ${row##*/} not Ready yet: $K get virtualmcpserver ${row##*/} -n ${row%%/*} -o yaml"
 done
+
+# Diagnostics (ADR 0025): the server is Ready only while its rights check passes (the Helm wait above already needed that). Then every vMCP of the
+# diagnostics group is read: ToolHive keeps a vMCP Ready when it drops a backend whose auth it cannot use, so the install fails on a DiscoveredAuthConfig-*
+# condition that is False. hack/diagnostics-check.sh, tested without a cluster.
+if [ -n "$DIAG_DEP" ]; then
+  log "diagnostics: cluster-read"
+  $K rollout status deployment/cluster-read -n "$DIAG_NS" --timeout=180s \
+    || die "cluster-read is not Ready: its rights check does not pass, or the Secret is missing. Its log says why (no secret in it): $K logs -n $DIAG_NS deploy/cluster-read --tail=30"
+  # shellcheck source=hack/diagnostics-check.sh
+  . hack/diagnostics-check.sh
+  DIAG_ENTRIES=$(jq -rs '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name=="diagnostics")]|length' <<<"$RENDERED")
+  DIAG_VMCPS=$(jq -r 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name=="diagnostics")|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
+  # A repaired or rotated bearer value: the vMCP pods of the group hold the old one as an environment value until they restart (review F4)
+  if [ "${DIAG_BEARER_CHANGED:-0}" = 1 ]; then
+    diag_bearer_wait_server "$K" "$DIAG_NS" cluster-read 150 || true
+    # shellcheck disable=SC2086   # one word per vMCP
+    diag_bearer_restart "$K" $DIAG_VMCPS || die "could not restart the vMCPs of the diagnostics group after the bearer value changed (see above)."
+  fi
+  # shellcheck disable=SC2086   # one word per vMCP
+  diag_check_vmcps "$K" "${DIAG_VMCP_SETTLE:-30}" "$DIAG_ENTRIES" $DIAG_VMCPS || die "a vMCP of the diagnostics group dropped a backend (see above)."
+fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"
 for a in $(jq -r 'select(.kind=="Agent")|.metadata.name' <<<"$RENDERED"); do

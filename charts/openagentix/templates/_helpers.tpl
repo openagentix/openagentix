@@ -305,6 +305,7 @@ Needs the A2A gate (the only way to the MemoryService), the bridge, and the brid
 {{- range .Values.mcp.servers }}{{ $w = append $w .name }}{{ end -}}
 {{- if .Values.knowledge.enabled }}{{ $w = append $w .Values.knowledge.mcp.entryName }}{{ end -}}
 {{- if .Values.notify.enabled }}{{ $w = append $w .Values.notify.mcp.entryName }}{{ end -}}
+{{- if include "oa.diagOn" . }}{{ $w = append $w "cluster-read" }}{{ end -}}
 {{- $w | toJson -}}
 {{- end -}}
 
@@ -314,7 +315,7 @@ Argument: dict "root" <top-level context> "profile" <one mcp.profiles entry>. */
 {{- $root := .root -}}
 {{- $names := list -}}
 {{- range $w := (keys .profile.tools | sortAlpha) -}}
-{{- $pfx := replace "{workload}" $w $root.Values.mcp.virtual.prefixFormat -}}
+{{- $pfx := replace "{workload}" (include "oa.diagWorkload" (dict "root" $root "profile" $.profile "w" $w)) $root.Values.mcp.virtual.prefixFormat -}}
 {{- range $t := (index $.profile.tools $w) }}{{ $names = append $names (printf "%s%s" $pfx $t) }}{{ end -}}
 {{- end -}}
 {{- if .profile.codeMode }}{{ $names = append $names "execute_tool_script" }}{{ end -}}
@@ -456,9 +457,12 @@ adapter's own section (runtime.kagent, tools.toolhive). It holds no secret: name
 {{- $_ := include "oa.profilesCheck" . -}}
 {{- $wl := dict -}}{{- range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}{{ $_ := set $wl $w.name $w }}{{ end -}}
 {{- range $p := (.Values.mcp.profiles | default list) -}}
+{{- /* a diagnostics profile is left out of the catalog, and so of the AgentTemplate guard, unless definitions may use it (ADR 0025) */ -}}
+{{- if or (not (include "oa.diagProfile" (dict "root" $ "profile" $p))) (($.Values.diagnostics | default dict).allowDefinitions) -}}
 {{- $e := dict "name" $p.name "toolServer" (printf "%s-%s" $k.remoteMCPServer.name $p.name) "codeMode" (eq (toString (default false $p.codeMode)) "true") "tools" (include "oa.profileToolNames" (dict "root" $ "profile" $p) | fromJsonArray) -}}
 {{- with (get $wl $p.name) }}{{ $_ := set $e "workload" (dict "url" .url "audience" .audience "namespace" $.Values.mcp.namespace "podSelector" (dict "app" "virtualmcpserver" "toolhive-name" .server) "port" (int .port)) }}{{ end -}}
 {{- $profiles = append $profiles $e -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $knOn := and .Values.knowledge.enabled .Values.mcp.enabled -}}

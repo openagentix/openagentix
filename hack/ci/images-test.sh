@@ -133,6 +133,7 @@ rc(){ local reg=$1 built=$2 r="" p i x; shift 3
       controlPlane) r+=$(wl openagentix-control-plane "$i")$'\n';;
       console) r+=$(wl openagentix-console "$i")$'\n';;
       renamedConsole) r+=$(wl my-console "$i")$'\n';;
+      diagnostics) r+=$(wl cluster-read "$i")$'\n';;
     esac
   done
   r+=$(wl other busybox:1)$'\n'
@@ -150,11 +151,14 @@ t "a host with a port is qualified" "$(rc "" "" -- bridge=localhost:5000/x/teleg
 t "the schedules CronJob image is checked (scheduling)" "$(rc "" "" -- scheduling=openagentix/a2a-call:dev | grep -c 'scheduling: openagentix/a2a-call:dev is an unqualified name')" 1
 t "a built image path not found in the rendered workloads (a renamed Deployment) is refused, the path named" "$(rc $REG "console" -- renamedConsole=$REG/openagentix/console@$DGX | grep -c 'console: the installer built an image for this path but no rendered workload runs it')" 1
 t "a built image path not found: rc 1" "$(rc $REG "console" -- renamedConsole=$REG/openagentix/console@$DGX | grep -o 'rc=[0-9]')" rc=1
+t "diagnostics (cluster-read, ADR 0025): the built image with a digest from IMAGE_REGISTRY passes" "$(rc $REG "diagnostics" -- diagnostics=$REG/openagentix/diagnostics:dev-1-amd64@$DGX)" "rc=0|"
+t "diagnostics: an unqualified image is refused, the path named" "$(rc "" "" -- diagnostics=openagentix/diagnostics:dev | grep -c 'diagnostics: openagentix/diagnostics:dev is an unqualified name')" 1
+t "diagnostics: a built image with no rendered cluster-read Deployment is refused" "$(rc $REG "diagnostics" -- renamedConsole=$REG/openagentix/console@$DGX | grep -c 'diagnostics: the installer built an image for this path but no rendered workload runs it')" 1
 t "a built image path not found next to one that is found: only that path is named" "$(rc $REG "controlPlane console" -- controlPlane=$REG/openagentix/control-plane@$DGX | grep -c 'console: the installer built an image')" 1
 t "images of other workloads (a Deployment, the memory-expiry CronJob) are not checked" "$(rc "" "" -- | grep -cE 'busybox|postgres')" 0
 
 echo "# every Dockerfile the installer pushes pins its base images by digest (ADR 0022)"
-for f in bridges/telegram/Dockerfile tools/a2a-call/Dockerfile services/kb/Dockerfile services/notify/Dockerfile services/a2a-gate/Dockerfile services/stub-model/Dockerfile services/control-plane/Dockerfile services/console/Dockerfile examples/agents/echo-a2a/Dockerfile; do
+for f in bridges/telegram/Dockerfile tools/a2a-call/Dockerfile services/kb/Dockerfile services/notify/Dockerfile services/a2a-gate/Dockerfile services/stub-model/Dockerfile services/control-plane/Dockerfile services/console/Dockerfile services/diagnostics/Dockerfile examples/agents/echo-a2a/Dockerfile; do
   t "$f: every FROM is pinned by digest" "$(grep -E '^FROM[[:space:]]' "$f" | grep -vc '@sha256:[0-9a-f]\{64\}')" 0
 done
 

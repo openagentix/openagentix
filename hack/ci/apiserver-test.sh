@@ -484,6 +484,100 @@ for d in a2a-gate openagentix-console; do
   GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/dep-$d.json" 2>/dev/null | jq -r '.spec.template.spec.priorityClassName // "pruned"')
   [ "$GOT" = system-cluster-critical ] && ok "the API server keeps priorityClassName on $d ($GOT)" || bad "priorityClassName kept on $d" "got '$GOT'"
 done
+# ---- diagnostics (ADR 0025, slice 4): cluster-read's roles, the admission policy openagentix-diagnostics-rbac, and what the ServiceAccount may do ----
+echo "# diagnostics: the three roles, their bindings and the admission policy (a real API server)"
+DGLOG=rca-demo; DGST=rca-status; DGNS=openagentix-diagnostics
+DGSA="system:serviceaccount:$DGNS:cluster-read"; DBSA="system:serviceaccount:$DGNS:db-read"
+helm template openagentix charts/openagentix -n openagentix-system --set diagnostics.enabled=true --set diagnostics.cluster.enabled=true --set "diagnostics.apiServerCIDRs={172.18.0.0/24}" \
+  --set "diagnostics.cluster.logNamespaces={$DGLOG}" --set "diagnostics.cluster.statusNamespaces={$DGST}" | yq -c 'select(.!=null)' > "$TMP/diag.jsonl"
+for n in $DGLOG $DGST $DGNS; do kubectl get namespace "$n" >/dev/null 2>&1 || kubectl create namespace "$n" >/dev/null; done
+jq -c 'select(.kind=="ValidatingAdmissionPolicy" or .kind=="ValidatingAdmissionPolicyBinding") | select(.metadata.name=="openagentix-diagnostics-rbac")' "$TMP/diag.jsonl" > "$TMP/diag-policy.jsonl"
+allowed "the policy openagentix-diagnostics-rbac and its binding are accepted with server-side validation" bash -c "kubectl apply --server-side --validate=strict -f - < '$TMP/diag-policy.jsonl'"
+j=""
+for _ in $(seq 1 90); do
+  j=$(kubectl get validatingadmissionpolicy openagentix-diagnostics-rbac -o json)
+  jq -e '(.status.observedGeneration // 0) >= .metadata.generation' >/dev/null <<<"$j" && break
+  sleep 1
+done
+if jq -e '(.status.observedGeneration // 0) >= .metadata.generation' >/dev/null <<<"$j"; then
+  w=$(jq -c '[.status.typeChecking.expressionWarnings[]?|{fieldRef,warning}]' <<<"$j")
+  [ "$w" = "[]" ] && ok "openagentix-diagnostics-rbac: no type-checking warning" || bad "openagentix-diagnostics-rbac: type-checking warnings" "$w"
+else
+  bad "openagentix-diagnostics-rbac: the API server did not report typeChecking in 90 s" ""
+fi
+# the policy needs a moment to be active: wait until a known refusal is a refusal
+cat > "$TMP/dg-role-probe.json" <<JSON
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"probe","namespace":"$DGNS"},"rules":[]}
+JSON
+for _ in $(seq 1 60); do kubectl create --dry-run=server -f "$TMP/dg-role-probe.json" >/dev/null 2>&1 || break; sleep 1; done
+# the objects the chart renders must pass its own policy (admission runs for every user, the administrator included)
+jq -c 'select(.kind=="ServiceAccount" or .kind=="ClusterRole" or .kind=="ClusterRoleBinding" or .kind=="RoleBinding") | select((.metadata.name|test("^(cluster-read|openagentix-cluster-read)"))) ' "$TMP/diag.jsonl" > "$TMP/diag-rbac.jsonl"
+NRB=$(wc -l < "$TMP/diag-rbac.jsonl" | tr -d ' ')
+[ "$NRB" -ge 8 ] && ok "the chart renders $NRB RBAC objects for cluster-read (ServiceAccount, 3 ClusterRoles, ClusterRoleBinding, RoleBindings)" || bad "the chart renders at least 8 RBAC objects" "got $NRB"
+allowed "the rendered ServiceAccount, ClusterRoles and bindings are admitted by the policy" bash -c "kubectl apply --server-side --validate=strict -f - < '$TMP/diag-rbac.jsonl'"
+# refusals, one per rule; each object is valid for the API server itself, so that the refusal is the policy's
+dgobj() { printf '%s' "$1" > "$TMP/dg-obj.json"; echo "$TMP/dg-obj.json"; }
+rbind() { # rbind <kind> <ns or ""> <role> <subject json>
+  local md="{\"name\":\"probe\"}"; [ -z "$2" ] || md="{\"name\":\"probe\",\"namespace\":\"$2\"}"
+  dgobj "{\"apiVersion\":\"rbac.authorization.k8s.io/v1\",\"kind\":\"$1\",\"metadata\":$md,\"roleRef\":{\"apiGroup\":\"rbac.authorization.k8s.io\",\"kind\":\"ClusterRole\",\"name\":\"$3\"},\"subjects\":[$4]}"
+}
+SUB_SA="{\"kind\":\"ServiceAccount\",\"name\":\"cluster-read\",\"namespace\":\"$DGNS\"}"
+SUB_USER="{\"apiGroup\":\"rbac.authorization.k8s.io\",\"kind\":\"User\",\"name\":\"$DGSA\"}"
+SUB_GROUP="{\"apiGroup\":\"rbac.authorization.k8s.io\",\"kind\":\"Group\",\"name\":\"system:serviceaccounts:$DGNS\"}"
+SUB_DB="{\"kind\":\"ServiceAccount\",\"name\":\"db-read\",\"namespace\":\"$DGNS\"}"
+SUB_DBUSER="{\"apiGroup\":\"rbac.authorization.k8s.io\",\"kind\":\"User\",\"name\":\"$DBSA\"}"
+for role in view cluster-admin; do
+  refused "a RoleBinding of the ServiceAccount form to $role is refused" "may reference only the ClusterRoles openagentix-cluster-read" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGLOG $role "$SUB_SA")"
+  refused "a RoleBinding of the User form (system:serviceaccount:...) to $role is refused" "may reference only the ClusterRoles openagentix-cluster-read" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGLOG $role "$SUB_USER")"
+  refused "a RoleBinding of the Group form (system:serviceaccounts:<ns>) to $role is refused" "no binding may name the group" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGLOG $role "$SUB_GROUP")"
+  refused "a ClusterRoleBinding of the ServiceAccount form to $role is refused" "may reference only the ClusterRoles openagentix-cluster-read" kubectl create --dry-run=server -f "$(rbind ClusterRoleBinding "" $role "$SUB_SA")"
+  refused "a ClusterRoleBinding of the User form to $role is refused" "may reference only the ClusterRoles openagentix-cluster-read" kubectl create --dry-run=server -f "$(rbind ClusterRoleBinding "" $role "$SUB_USER")"
+  refused "a ClusterRoleBinding of the Group form to $role is refused" "no binding may name the group" kubectl create --dry-run=server -f "$(rbind ClusterRoleBinding "" $role "$SUB_GROUP")"
+done
+refused "a ClusterRoleBinding of cluster-read to the roles of the namespaces is refused" "may reference only openagentix-cluster-read-nodes" kubectl create --dry-run=server -f "$(rbind ClusterRoleBinding "" openagentix-cluster-read "$SUB_SA")"
+refused "any binding of db-read (ServiceAccount form) is refused" "no binding may name the ServiceAccount db-read" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGLOG openagentix-cluster-read "$SUB_DB")"
+refused "any binding of db-read (User form) is refused" "no binding may name the ServiceAccount db-read" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGLOG openagentix-cluster-read "$SUB_DBUSER")"
+refused "the logs role is refused in kube-system" "may not be bound in a platform or system namespace" kubectl create --dry-run=server -f "$(rbind RoleBinding kube-system openagentix-cluster-read-logs "$SUB_SA")"
+refused "the logs role is refused in the release namespace (a platform namespace)" "may not be bound in a platform or system namespace" kubectl create --dry-run=server -f "$(rbind RoleBinding openagentix-system openagentix-cluster-read-logs "$SUB_SA")"
+refused "a RoleBinding that the chart does not render is refused in $DGNS (even one to an allowed role)" "no RoleBinding may exist in openagentix-diagnostics" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGNS openagentix-cluster-read "$SUB_SA")"
+refused "a foreign RoleBinding (another account, another role) is refused in $DGNS" "no RoleBinding may exist in openagentix-diagnostics" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGNS edit '{"kind":"ServiceAccount","name":"other","namespace":"default"}')"
+refused "a Role is refused in $DGNS" "no Role may exist in openagentix-diagnostics" kubectl create --dry-run=server -f "$TMP/dg-role-probe.json"
+allowed "the same Role in another namespace is fine (the policy is about its own namespace)" bash -c "sed 's/$DGNS/$DGLOG/' '$TMP/dg-role-probe.json' | kubectl create --dry-run=server -f -"
+allowed "an unrelated binding of view is fine" kubectl create --dry-run=server -f "$(rbind RoleBinding $DGLOG view '{"kind":"ServiceAccount","name":"builder","namespace":"default"}')"
+for rn in openagentix-cluster-read openagentix-cluster-read-logs openagentix-cluster-read-nodes; do
+  kubectl get clusterrole "$rn" -o json | jq 'del(.metadata.resourceVersion,.metadata.uid,.metadata.creationTimestamp,.metadata.managedFields)|.aggregationRule={clusterRoleSelectors:[{matchLabels:{"rbac.example/aggregate":"true"}}]}' > "$TMP/dg-agg-$rn.json"
+  refused "$rn with an aggregationRule is refused" "may not have an aggregationRule" kubectl replace --dry-run=server -f "$TMP/dg-agg-$rn.json"
+  for bad in '{"apiGroups":[""],"resources":["secrets"],"verbs":["get"]}' '{"apiGroups":[""],"resources":["configmaps"],"verbs":["get"]}' '{"apiGroups":[""],"resources":["pods/exec"],"verbs":["create"]}' \
+             '{"apiGroups":[""],"resources":["pods"],"verbs":["watch"]}' '{"apiGroups":["*"],"resources":["*"],"verbs":["*"]}' '{"apiGroups":[""],"resources":["pods"],"verbs":["delete"]}'; do
+    kubectl get clusterrole "$rn" -o json | jq --argjson r "$bad" 'del(.metadata.resourceVersion,.metadata.uid,.metadata.creationTimestamp,.metadata.managedFields)|.rules+=[$r]' > "$TMP/dg-rule.json"
+    refused "$rn with the rule $(jq -r '.resources[0]+" "+.verbs[0]' <<<"$bad") is refused" "$rn may hold only" kubectl replace --dry-run=server -f "$TMP/dg-rule.json"
+  done
+done
+echo "# diagnostics: what the ServiceAccount may do (kubectl auth can-i, impersonated)"
+# kubectl reads "pods/exec" as the pod NAMED exec; a subresource is --subresource=exec. The lists below use the ADR's shorthand (pods/exec), so it is translated here.
+can() { local a=() r; for r in "$@"; do case "$r" in -*) a+=("$r");; */*) a+=("${r%%/*}" "--subresource=${r#*/}");; *) a+=("$r");; esac; done; kubectl auth can-i "${a[@]}" 2>/dev/null || true; }
+canas() { local who=$1; shift; can "$@" --as="$who"; }
+# yes: exactly what the three roles give
+for q in "get pods/log -n $DGLOG" "list pods -n $DGLOG" "list events -n $DGLOG" "list events -n $DGST" "list pods -n $DGST" "get deployments.apps -n $DGST" "list statefulsets.apps -n $DGLOG" "list daemonsets.apps -n $DGLOG" "list replicasets.apps -n $DGST" "list nodes" "get nodes"; do
+  [ "$(canas $DGSA $q)" = yes ] && ok "cluster-read may: $q" || bad "cluster-read may: $q" "the API server says no"
+done
+# no: everything the ADR forbids, in every listed namespace, in kube-system, at cluster scope
+for ns in $DGLOG $DGST kube-system $DGNS; do
+  for q in "get secrets" "list secrets" "list configmaps" "get configmaps" "create pods/exec" "create pods/attach" "create pods/portforward" "get pods/proxy" "get services/proxy" "get nodes/proxy" "get nodes/stats" \
+           "create serviceaccounts/token" "get serviceaccounts" "watch pods" "watch events" "delete pods" "create pods" "patch deployments.apps" "update deployments.apps" "delete deployments.apps" "patch pods" "create pods/ephemeralcontainers" "list roles.rbac.authorization.k8s.io" "create rolebindings.rbac.authorization.k8s.io"; do
+    [ "$(canas $DGSA $q -n $ns)" = no ] && ok "cluster-read may not: $q in $ns" || bad "cluster-read may not: $q in $ns" "the API server does not say no"
+  done
+done
+for ns in kube-system $DGST; do
+  [ "$(canas $DGSA get pods/log -n $ns)" = no ] && ok "cluster-read may not read pod logs in $ns (status only or system)" || bad "cluster-read may not read pod logs in $ns" "the API server does not say no"
+done
+for q in "get secrets" "list configmaps" "create pods/exec" "get nodes/proxy" "create serviceaccounts/token" "impersonate users" "impersonate serviceaccounts" "impersonate groups" "bind clusterroles" "escalate clusterroles" "watch pods" "watch nodes" "delete nodes" "patch nodes" "get namespaces" "list namespaces" "get pods/log"; do
+  [ "$(canas $DGSA $q --all-namespaces)" = no ] && ok "cluster-read may not (cluster scope): $q" || bad "cluster-read may not (cluster scope): $q" "the API server does not say no"
+done
+# db-read has no rights in the cluster at all: not one of the answers above, the yes cases included
+for q in "get pods/log -n $DGLOG" "list pods -n $DGLOG" "list events -n $DGST" "list nodes" "get secrets -n $DGLOG" "list configmaps -n $DGLOG" "create pods/exec -n $DGLOG" "get nodes/proxy" "watch pods -n $DGLOG" "list deployments.apps -n $DGST"; do
+  [ "$(canas $DBSA $q)" = no ] && ok "db-read may not: $q" || bad "db-read may not: $q" "the API server does not say no"
+done
 echo
 echo "apiserver-test: passed=$PASS failed=$FAIL"
 [ "$FAIL" = 0 ]

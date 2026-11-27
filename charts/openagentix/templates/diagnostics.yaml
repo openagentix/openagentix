@@ -1,0 +1,472 @@
+{{- $_ := include "oa.diagCheck" . }}
+{{- if include "oa.diagOn" . }}
+{{- /* ADR 0025, slice 4: cluster-read, the read-only cluster tool server. Everything below renders only with diagnostics.enabled and
+diagnostics.cluster.enabled. The namespace openagentix-diagnostics is created and labelled for Pod Security `restricted` by install.sh (it must
+exist before the bearer Secret does). The bearer Secrets are created by install.sh, never by the chart. */ -}}
+{{- $d := .Values.diagnostics }}
+{{- $c := $d.cluster }}
+{{- $m := .Values.mcp }}
+{{- $ns := "openagentix-diagnostics" }}
+{{- $log := $c.logNamespaces | default list }}
+{{- $st := $c.statusNamespaces | default list }}
+{{- $nodes := ne (toString $c.nodes) "false" }}
+{{- $platform := include "oa.diagPlatformNamespaces" . | fromJsonArray }}
+{{- $caNames := list }}{{ range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}{{ $caNames = append $caNames $w.name }}{{ end }}
+{{- $rbNames := list }}{{- /* the RoleBindings the chart renders in openagentix-diagnostics: none. A name added here is the only one the policy lets through. */}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-read
+  namespace: {{ $ns }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+---
+# The three roles grant nothing until bound (ADR 0025 section 2). No aggregationRule, no Secret, no ConfigMap, no exec, no watch, no write verb.
+# The admission policy openagentix-diagnostics-rbac keeps them, and every binding of the ServiceAccount, to exactly this.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openagentix-cluster-read
+  labels: {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openagentix-cluster-read-logs
+  labels: {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+{{- if $nodes }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openagentix-cluster-read-nodes
+  labels: {{- include "oa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openagentix-cluster-read-nodes
+  labels: {{- include "oa.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: openagentix-cluster-read-nodes}
+subjects:
+  - {kind: ServiceAccount, name: cluster-read, namespace: {{ $ns }}}
+{{- end }}
+{{- range $x := (concat $log $st) }}
+---
+# pods, events and workloads of {{ $x }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openagentix-cluster-read
+  namespace: {{ $x }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: openagentix-cluster-read}
+subjects:
+  - {kind: ServiceAccount, name: cluster-read, namespace: {{ $ns }}}
+{{- end }}
+{{- range $x := $log }}
+---
+# pod logs of {{ $x }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openagentix-cluster-read-logs
+  namespace: {{ $x }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: openagentix-cluster-read-logs}
+subjects:
+  - {kind: ServiceAccount, name: cluster-read, namespace: {{ $ns }}}
+{{- end }}
+---
+# The admission policy of ADR 0025 section 2, for every user (Helm included), fail-closed. A key allowlist on the three ClusterRoles (the
+# rules below and no others, no aggregationRule); a binding that names cluster-read or db-read in any of the three subject forms RBAC accepts
+# (ServiceAccount, the User system:serviceaccount:<ns>:<name>, the Group system:serviceaccounts:<ns>) may reference only the three roles; a
+# ClusterRoleBinding only the nodes role; the logs role is never bound in the namespaces the render refuses for logs; db-read is never bound;
+# nothing binds the namespace group; and in openagentix-diagnostics there is no Role and no RoleBinding the chart does not render (it renders
+# none). Stated limit: a binding to a cluster-wide group (system:serviceaccounts, system:authenticated) cannot be refused without breaking the
+# cluster; only the rights check of the server finds a right given that way.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: openagentix-diagnostics-rbac
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [clusterroles, roles, rolebindings, clusterrolebindings]
+  variables:
+    - name: res
+      expression: "request.resource.resource"
+    - name: obj
+      expression: "dyn(object)"
+    - name: roleNames
+      expression: "['openagentix-cluster-read', 'openagentix-cluster-read-logs', 'openagentix-cluster-read-nodes']"
+    - name: isBinding
+      expression: "variables.res in ['rolebindings', 'clusterrolebindings']"
+    - name: namesApp
+      expression: >-
+        variables.isBinding && has(variables.obj.subjects) && variables.obj.subjects.exists(s,
+        (s.kind == 'ServiceAccount' && s.name == 'cluster-read' && (!has(s.namespace) || s.namespace in ['', 'openagentix-diagnostics']))
+        || (s.kind == 'User' && s.name == 'system:serviceaccount:openagentix-diagnostics:cluster-read'))
+    - name: namesDb
+      expression: >-
+        variables.isBinding && has(variables.obj.subjects) && variables.obj.subjects.exists(s,
+        (s.kind == 'ServiceAccount' && s.name == 'db-read' && (!has(s.namespace) || s.namespace in ['', 'openagentix-diagnostics']))
+        || (s.kind == 'User' && s.name == 'system:serviceaccount:openagentix-diagnostics:db-read'))
+    - name: namesGroup
+      expression: >-
+        variables.isBinding && has(variables.obj.subjects) && variables.obj.subjects.exists(s,
+        s.kind == 'Group' && s.name == 'system:serviceaccounts:openagentix-diagnostics')
+    - name: refusedLogNamespaces
+      expression: {{ $platform | toJson | quote }}
+  validations:
+    - expression: "!(variables.res == 'clusterroles' && object.metadata.name in variables.roleNames) || !has(variables.obj.aggregationRule)"
+      message: "the diagnostics ClusterRoles may not have an aggregationRule: it would add the rights of other roles"
+      reason: Forbidden
+    - expression: >-
+        !(variables.res == 'clusterroles' && object.metadata.name == 'openagentix-cluster-read') || !has(variables.obj.rules)
+        || variables.obj.rules.all(r, has(r.apiGroups) && has(r.resources) && has(r.verbs) && !has(r.resourceNames) && !has(r.nonResourceURLs)
+        && r.verbs.all(v, v in ['get', 'list'])
+        && ((r.apiGroups == [''] && r.resources.all(x, x in ['pods', 'events']))
+        || (r.apiGroups == ['events.k8s.io'] && r.resources.all(x, x in ['events']))
+        || (r.apiGroups == ['apps'] && r.resources.all(x, x in ['deployments', 'replicasets', 'statefulsets', 'daemonsets']))))
+      message: "openagentix-cluster-read may hold only get and list on pods, events (core and events.k8s.io), deployments, replicasets, statefulsets and daemonsets"
+      reason: Forbidden
+    - expression: >-
+        !(variables.res == 'clusterroles' && object.metadata.name == 'openagentix-cluster-read-logs') || !has(variables.obj.rules)
+        || variables.obj.rules.all(r, has(r.apiGroups) && has(r.resources) && has(r.verbs) && !has(r.resourceNames) && !has(r.nonResourceURLs)
+        && r.apiGroups == [''] && r.resources.all(x, x in ['pods/log']) && r.verbs.all(v, v in ['get']))
+      message: "openagentix-cluster-read-logs may hold only get on pods/log"
+      reason: Forbidden
+    - expression: >-
+        !(variables.res == 'clusterroles' && object.metadata.name == 'openagentix-cluster-read-nodes') || !has(variables.obj.rules)
+        || variables.obj.rules.all(r, has(r.apiGroups) && has(r.resources) && has(r.verbs) && !has(r.resourceNames) && !has(r.nonResourceURLs)
+        && r.apiGroups == [''] && r.resources.all(x, x in ['nodes']) && r.verbs.all(v, v in ['get', 'list']))
+      message: "openagentix-cluster-read-nodes may hold only get and list on nodes"
+      reason: Forbidden
+    - expression: "!variables.namesDb"
+      message: "no binding may name the ServiceAccount db-read of openagentix-diagnostics in any form (ServiceAccount, User or Group): cluster-read has its own role and db-read has none in the cluster"
+      reason: Forbidden
+    - expression: "!variables.namesGroup"
+      message: "no binding may name the group system:serviceaccounts:openagentix-diagnostics: it would give the rights to every ServiceAccount of that namespace"
+      reason: Forbidden
+    - expression: "!variables.namesApp || (variables.obj.roleRef.kind == 'ClusterRole' && variables.obj.roleRef.name in variables.roleNames)"
+      message: "a binding of the ServiceAccount cluster-read (as ServiceAccount or as the User system:serviceaccount:openagentix-diagnostics:cluster-read) may reference only the ClusterRoles openagentix-cluster-read, openagentix-cluster-read-logs and openagentix-cluster-read-nodes"
+      reason: Forbidden
+    - expression: "!variables.namesApp || variables.res != 'clusterrolebindings' || variables.obj.roleRef.name == 'openagentix-cluster-read-nodes'"
+      message: "a ClusterRoleBinding of cluster-read may reference only openagentix-cluster-read-nodes: the other two roles are bound by a RoleBinding in each listed namespace"
+      reason: Forbidden
+    - expression: "!variables.namesApp || variables.res != 'rolebindings' || variables.obj.roleRef.name != 'openagentix-cluster-read-logs' || !(request.namespace in variables.refusedLogNamespaces)"
+      message: "openagentix-cluster-read-logs may not be bound in a platform or system namespace (kube-system, the namespaces of this chart, the ToolHive and Substrate namespaces, openagentix-diagnostics): list it in diagnostics.cluster.statusNamespaces instead"
+      reason: Forbidden
+    - expression: "variables.res != 'roles' || request.namespace != 'openagentix-diagnostics'"
+      message: "no Role may exist in openagentix-diagnostics: the tool servers there get their rights only from the three ClusterRoles"
+      reason: Forbidden
+    - expression: "variables.res != 'rolebindings' || request.namespace != 'openagentix-diagnostics'{{ range $n := $rbNames }} || object.metadata.name == {{ $n | quote }}{{ end }}"
+      message: "no RoleBinding may exist in openagentix-diagnostics except the ones the chart renders (it renders none)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: openagentix-diagnostics-rbac
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  policyName: openagentix-diagnostics-rbac
+  validationActions: [Deny]
+---
+{{- include "oa.pdb" (dict "root" $ "name" "cluster-read" "app" "cluster-read" "ns" $ns) }}
+# One replica (Recreate): the rate limits live in the process. Credentials: the ServiceAccount's own projected token (the server needs the API)
+# and one bearer value, a mounted Secret file (never an argument or an environment value). The pod reaches nothing but the API server.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-read
+  namespace: {{ $ns }}
+  labels:
+    app: cluster-read
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: cluster-read}
+  template:
+    metadata:
+      labels:
+        app: cluster-read
+        {{- include "oa.labels" . | nindent 8 }}
+      {{- if $d.sourceHash }}
+      annotations:
+        # set by install.sh from the content of services/diagnostics: a code change rolls the pod although the image tag stays "dev"
+        openagentix.io/source-hash: {{ $d.sourceHash | quote }}
+      {{- end }}
+    spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      serviceAccountName: cluster-read
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (include "oa.openshift" $) }}
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        {{- end }}
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: cluster-read
+          image: {{ include "oa.image" (list $d.image "diagnostics") | quote }}
+          imagePullPolicy: {{ $d.image.pullPolicy }}
+          command: ["/cluster-read"]
+          args:
+            - "-addr=:8080"
+            - {{ printf "-log-namespaces=%s" (join "," $log) | quote }}
+            - {{ printf "-status-namespaces=%s" (join "," $st) | quote }}
+            - {{ printf "-nodes=%t" $nodes | quote }}
+            - {{ printf "-deny-log-namespaces=%s" (join "," $platform) | quote }}
+            - "-bearer-file=/var/run/secrets/openagentix/bearer/bearer"
+          ports:
+            - {name: http, containerPort: 8080}
+          volumeMounts:
+            - {name: bearer, mountPath: /var/run/secrets/openagentix/bearer, readOnly: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}   # ready only while the rights check passes
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources: {{- toYaml $d.resources | nindent 12 }}
+      volumes:
+        - name: bearer
+          secret:
+            secretName: cluster-read-bearer   # created by install.sh (same value as diagnostics-bearer-cluster-read in {{ $m.namespace }}); never rendered here
+            defaultMode: 0440
+            items:
+              - {key: bearer, path: bearer}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-read
+  namespace: {{ $ns }}
+  labels:
+    app: cluster-read
+    {{- include "oa.labels" . | nindent 4 }}
+spec:
+  selector: {app: cluster-read}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# The tool group of the diagnostics servers (ADR 0025, Amendment 1). The shared vMCP and the profiles on the shared group do not reference it, so
+# they never hold the bearer value as an environment value. A profile that lists a cluster-read tool is rendered on this group (mcp.yaml).
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPGroup
+metadata:
+  name: diagnostics
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  description: Read-only diagnostic tool servers and the backends a diagnostics profile may list next to them
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata:
+  name: cluster-read-noauth
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  type: unauthenticated
+---
+# The entry sends `Authorization: <value of the Secret>` on every request, discovery and calls (shown on ToolHive 0.67.1: headerForward works,
+# the auth type bearerToken does not and drops the backend silently). The Secret diagnostics-bearer-cluster-read, key authorization, holds
+# "Bearer <value>"; the server's own Secret cluster-read-bearer holds the same value without the scheme word. install.sh creates both.
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata:
+  name: cluster-read
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  groupRef: {name: diagnostics}
+  remoteUrl: {{ printf "http://cluster-read.%s.svc.cluster.local:8080/mcp" $ns | quote }}
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: cluster-read-noauth}
+  headerForward:
+    addHeadersFromSecret:
+      - {headerName: Authorization, valueSecretRef: {name: diagnostics-bearer-cluster-read, key: authorization}}
+{{- /* the other backends a diagnostics profile may list: an entry of their own in this group, named <entryName>-diagnostics (the shared group has
+the entries knowledge and delivery already, in the same namespace). Entries create no pods. */}}
+{{- if .Values.knowledge.enabled }}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata:
+  name: {{ .Values.knowledge.mcp.entryName }}-diagnostics-noauth
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  type: unauthenticated
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata:
+  name: {{ .Values.knowledge.mcp.entryName }}-diagnostics
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  groupRef: {name: diagnostics}
+  remoteUrl: {{ printf "http://kb.%s.svc.cluster.local:8080/mcp" .Values.knowledge.namespace | quote }}
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: {{ .Values.knowledge.mcp.entryName }}-diagnostics-noauth}
+{{- end }}
+{{- if .Values.notify.enabled }}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata:
+  name: {{ .Values.notify.mcp.entryName }}-diagnostics-noauth
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  type: unauthenticated
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata:
+  name: {{ .Values.notify.mcp.entryName }}-diagnostics
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  groupRef: {name: diagnostics}
+  remoteUrl: {{ printf "http://notify.%s.svc.cluster.local:8080/mcp" .Values.notify.namespace | quote }}
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: {{ .Values.notify.mcp.entryName }}-diagnostics-noauth}
+{{- end }}
+{{- range $b, $tl := ($d.allowWith | default dict) }}
+{{- $port := 8080 }}{{ range $s := $m.servers }}{{ if eq $s.name $b }}{{ $port = default 8080 $s.proxyPort }}{{ end }}{{ end }}
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPExternalAuthConfig
+metadata:
+  name: {{ $b }}-diagnostics-noauth
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  type: unauthenticated
+---
+# {{ $b }} may sit next to diagnostics tools (diagnostics.allowWith): this entry points at the proxy Service of the MCPServer {{ $b }}
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata:
+  name: {{ $b }}-diagnostics
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" $ | nindent 4 }}
+spec:
+  groupRef: {name: diagnostics}
+  remoteUrl: {{ printf "http://mcp-%s-proxy.%s.svc.cluster.local:%d/mcp" $b $m.namespace (int $port) | quote }}
+  transport: streamable-http
+  allowPrivateEndpoint: true
+  externalAuthConfigRef: {name: {{ $b }}-diagnostics-noauth}
+{{- end }}
+---
+# Ingress: only the vMCP pods of the diagnostics group (the profile vMCPs that list a diagnostics tool, and their -workload variants of ADR 0019,
+# because each one connects to every backend of its group for discovery). Never the shared vMCP. The bearer value is the second check.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-read-ingress
+  namespace: {{ $ns }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app: cluster-read}
+  policyTypes: [Ingress]
+  ingress:
+    {{- $vm := list }}
+    {{- range $p := ($m.profiles | default list) }}
+    {{- if include "oa.diagProfile" (dict "root" $ "profile" $p) }}
+    {{- $vm = append $vm (printf "%s-%s" $m.virtual.name $p.name) }}
+    {{- if has $p.name $caNames }}{{ $vm = append $vm (printf "%s-%s-workload" $m.virtual.name $p.name) }}{{ end }}
+    {{- end }}
+    {{- end }}
+    {{- if $vm }}
+    - ports: [{protocol: TCP, port: 8080}]
+      from:
+        {{- range $v := $vm }}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $m.namespace }}}}
+          podSelector:
+            matchLabels: {app: virtualmcpserver, toolhive-name: {{ $v | quote }}}
+        {{- end }}
+    {{- else }} []
+    {{- end }}
+---
+# Egress: the API server only (no DNS: the in-cluster configuration uses the Service address). install.sh sets diagnostics.apiServerCIDRs the way it
+# does for the control plane. kindnet does not enforce egress to the internet, so on kind this is a second layer; Calico or Cilium enforce it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-read-egress
+  namespace: {{ $ns }}
+  labels: {{- include "oa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app: cluster-read}
+  policyTypes: [Egress]
+  egress:
+    {{- if $d.apiServerCIDRs }}
+    - to:
+        {{- range $d.apiServerCIDRs }}
+        - ipBlock: {cidr: {{ . | quote }}}
+        {{- end }}
+      ports:
+        {{- range $d.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- else }}
+    # FALLBACK, because diagnostics.apiServerCIDRs is empty: the API server ports towards ANY address. A policy that allowed no address would cut the
+    # server off from the API server, and the chart cannot look the address up. Set diagnostics.apiServerCIDRs (install.sh does) to close it.
+    - ports:
+        {{- range $d.apiServerPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+{{- end }}

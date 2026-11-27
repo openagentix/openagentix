@@ -35,6 +35,13 @@ spec:
 {{- $policies = append $policies (printf "permit(principal, action == Action::\"call_tool\", resource == Tool::%s) when { context[\"claim_actor.ate.dev\"].atespace == %s };" (quote $t) (quote $r.atespace)) }}
 {{- end }}{{ end }}
 {{- end }}
+{{- if include "oa.diagOn" . }}
+{{- /* ADR 0025: the diagnostics tools live in a group of their own, which this vMCP does not reference. A forbid on each tool name, in front of the
+permit, is the second layer: an entry that is put into this group by mistake is still refused (a direct call and a code mode call). */}}
+{{- $forbids := list }}
+{{- range $t := (include "oa.diagClusterTools" . | fromJsonArray) }}{{ $forbids = append $forbids (printf "forbid(principal, action == Action::\"call_tool\", resource == Tool::%s);" (quote (printf "%s%s" (replace "{workload}" "cluster-read" $m.virtual.prefixFormat) $t))) }}{{ end }}
+{{- $policies = concat $forbids $policies }}
+{{- end }}
 {{- if eq $ia.type "oidc" }}
 ---
 # Validates the per-actor JWT that Substrate injects (RemoteMCPServer.spec.actorJwt). Issuer, keys and CA come
@@ -121,6 +128,8 @@ spec:
     useClusterAuth: {{ regexMatch "^https://kubernetes[.]default[.]svc([.]cluster[.]local)?(:[0-9]+)?(/|$)" .Values.controlPlane.containerAgents.serviceAccountTokens.jwksUrl }}
 {{- end }}
 {{- range $p := $m.profiles }}
+{{- /* a profile that lists a diagnostics tool lives on the group `diagnostics` (ADR 0025, Amendment 1): its own entries, audit data off */}}
+{{- $diag := include "oa.diagProfile" (dict "root" $ "profile" $p) }}
 {{- $variants := list "" }}{{ if has $p.name $wlNames }}{{ $variants = append $variants "workload" }}{{ end }}
 {{- range $v := $variants }}
 ---
@@ -145,7 +154,7 @@ metadata:
   annotations:
     openagentix.io/tool-profile: {{ $p.name }}
 spec:
-  groupRef: {name: {{ $m.groupName }}}
+  groupRef: {name: {{ ternary "diagnostics" $m.groupName (not (empty $diag)) }}}
   config:
     aggregation:
       conflictResolution: prefix
@@ -153,7 +162,7 @@ spec:
       defaultToolVisibility: deny
       tools:
         {{- range $w := (keys $p.tools | sortAlpha) }}
-        - workload: {{ $w }}
+        - workload: {{ include "oa.diagWorkload" (dict "root" $ "profile" $p "w" $w) }}
           filter: {{ toJson (index $p.tools $w) }}
         {{- end }}
     {{- if $p.codeMode }}
@@ -163,7 +172,13 @@ spec:
       parallelMaxConcurrency: {{ $m.virtual.codeMode.parallelMaxConcurrency }}
       toolCallTimeout: {{ $m.virtual.codeMode.toolCallTimeout }}
     {{- end }}
-    {{- if and (include "oa.obsOn" $) $.Values.observability.audit.enabled }}
+    {{- if $diag }}
+    # Tool arguments and results (log lines, events) are never copied into the audit, whatever the observability values say (ADR 0025 section 6).
+    audit:
+      enabled: true
+      includeRequestData: false
+      includeResponseData: false
+    {{- else if and (include "oa.obsOn" $) $.Values.observability.audit.enabled }}
     audit:
       enabled: true
       includeRequestData: {{ include "oa.obsCapture" $ }}

@@ -343,6 +343,22 @@ Render rules, all refusals with a sentence that names the fix:
 | Load on the database or the API server | A loop of calls | Rate limits, statement timeout 5 s, connection limit 2, row caps, no `watch` | A slow statistics query on a very large catalogue |
 | Supply chain | A dependency changes | One image built from this repository, pinned base digest, two well-known libraries | Normal dependency risk |
 
+**Note (2026-11-27), from the independent review of slice 4 (PR #248): what the chart does differently from the text above, and what the admission policy does not cover.**
+
+Three departures, none of them a widening:
+
+1. The Secret in `mcp.namespace` holds `Bearer <value>`, and the server's own Secret holds `<value>`. Section 5 says "two Secrets with the same value": the value is the same, the form differs, because ToolHive sends a header Secret as the header value as it is, so the scheme word has to be in it. Both are equally sensitive, both are kept on re-runs, and `uninstall.sh` with `PURGE_SECRETS=1` deletes both.
+2. A ClusterRoleBinding of the ServiceAccount may reference only `openagentix-cluster-read-nodes`. Section 2 says a matched binding may reference only the three ClusterRoles. The first two roles are bound by a RoleBinding in each listed namespace, so a cluster-wide binding of them would reach every namespace, which the namespace lists exist to prevent. This is stricter than the text.
+3. The chart does not render the namespace `openagentix-diagnostics`. `install.sh` creates it and labels it for Pod Security `restricted`, because the bearer Secret must exist before the pod does. A helm-only install must create the namespace and the labels first, then the two Secrets (see the comment of the `diagnostics` values).
+
+What the admission policy `openagentix-diagnostics-rbac` does not cover, in addition to the cluster-wide groups stated in section 2:
+
+- Anyone who can create a Pod in `openagentix-diagnostics`, or a token for the ServiceAccount (`serviceaccounts/token`), runs with the rights of `cluster-read`: pod logs of the log namespaces and the reads of the first role. A cluster-wide `edit` or `admin` binding gives that, and the policy does not see it, because it checks RBAC objects only. Pod Security `restricted` does not stop it. The rights check of the server only finds rights that are too wide, not a second pod that uses the narrow ones. Treat the right to create Pods in that namespace as the right to read those logs.
+- A binding that existed before the policy was applied is never evaluated, because the policy checks CREATE and UPDATE. Only the rights check of the server finds it.
+- Whoever can change or delete the policy and its binding (write on `validatingadmissionpolicies` and their bindings, in practice cluster admins) can remove it. The policy does not protect itself.
+
+Two changes of the chart follow from the same review: an agent may name the RemoteMCPServer of a diagnostics profile in `tools[].server` only when its `toolProfile` is that profile, so the per-tool mixing rule and the reply-path rule of section 6 cannot be bypassed; and a diagnostics profile is left out of the control plane catalog, and so out of the AgentTemplate guard, while `diagnostics.allowDefinitions` is false. The render also refuses an empty `diagnostics.apiServerCIDRs` unless `diagnostics.allowAnyApiServerAddress` is true, because the egress of the server would otherwise be open to any address on the API ports.
+
 ## Consequences
 
 - Possible: the pod root-cause agent and the database tuning agent of #229 run on the existing kind cluster with real data, without ADR 0021's gate, and without any change to the control plane.

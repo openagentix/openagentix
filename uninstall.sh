@@ -5,6 +5,7 @@
 # PURGE_SECRETS=1 additionally deletes the Secrets/ConfigMap that install.sh created for this release (except the
 # knowledge base database credentials: they must stay as long as its volume does).
 # PURGE_SECRETS=1 also deletes the kb's graph extraction key (Secret kb-extract-key) when the knowledge graph was enabled.
+# PURGE_SECRETS=1 also deletes the two bearer Secrets of cluster-read (diagnostics, ADR 0025). The namespace openagentix-diagnostics stays.
 # PURGE_SECRETS=1 also deletes the notify service's Secrets (the destinations file with the chat ids, and the copied bot token).
 # Observability: the release's objects (bundled VictoriaMetrics and Jaeger, monitors, telemetry configs) go with the release; PURGE_DATA=1 also
 # deletes the VictoriaMetrics volume. The kagent controller's telemetry settings and Agent Kourier's OTLP env are NOT reverted by uninstalling
@@ -60,6 +61,8 @@ WHSECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r '
 GATESECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r '(select(.kind=="Binding" and .spec.identity.tokenSecretRef!=null)|.metadata.namespace+"/"+.spec.identity.tokenSecretRef.name),(select(.kind=="Deployment" and .metadata.name=="a2a-gate")|.metadata.namespace as $ns|.spec.template.spec.volumes[]|select(.name=="keys")|$ns+"/"+.secret.secretName)' 2>/dev/null || true)
 # console (console.enabled): the login token Secret, read before the release goes
 CONSOLESECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r 'select(.kind=="Deployment" and .metadata.name=="openagentix-console")|.metadata.namespace as $ns|.spec.template.spec.volumes[]|select(.name=="token")|$ns+"/"+.secret.secretName' 2>/dev/null || true)
+# diagnostics (cluster-read, ADR 0025): the two bearer Secrets (the entry's header Secret in the tools namespace, the server's own), read before the release goes
+DIAGSECRETS=$(helm get manifest openagentix -n "$RELEASE_NS" 2>/dev/null | yq -r '(select(.kind=="MCPServerEntry" and .metadata.name=="cluster-read")|.metadata.namespace+"/"+.spec.headerForward.addHeadersFromSecret[0].valueSecretRef.name),(select(.kind=="Deployment" and .metadata.name=="cluster-read")|.metadata.namespace as $ns|.spec.template.spec.volumes[]|select(.name=="bearer")|$ns+"/"+.secret.secretName)' 2>/dev/null || true)
 if helm status openagentix -n "$RELEASE_NS" >/dev/null 2>&1; then
   helm uninstall openagentix -n "$RELEASE_NS" --wait
 else
@@ -69,6 +72,7 @@ KOURIER_NS=${KOURIER_NS:-agent-kourier} CLUSTER="$CLUSTER" KUBE_CONTEXT="$CTX" K
 if [ "${PURGE_SECRETS:-0}" = 1 ]; then
   for row in $WHSECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done
   for row in $GATESECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done   # gate keys and their hashes
+  for row in $DIAGSECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done   # the bearer values of cluster-read
   for row in $CONSOLESECRETS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done   # the console's login token
   for row in $VKEYS; do $K delete secret -n "${row%%/*}" "${row##*/}" --ignore-not-found; done
   $K delete configmap llm-api-keys llm-api-keys-control-plane -n agentgateway-system --ignore-not-found

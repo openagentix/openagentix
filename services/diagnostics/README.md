@@ -7,11 +7,11 @@ This module has one server so far:
 
 | Command | What it does | Status |
 |---|---|---|
-| `cluster-read` | Reads pods, events, pod logs, workloads and nodes of the cluster it runs on | Server code and tests (slice 3). Not in the chart yet (slice 4). |
+| `cluster-read` | Reads pods, events, pod logs, workloads and nodes of the cluster it runs on | Server code and tests (slice 3). In the chart, off by default (slice 4). |
 | `db-read` | Reads PostgreSQL statistics and settings | Not built (slice 6) |
 
-Nothing here is deployed by the chart yet. There is no registration with the tool gateway, and no cluster proof.
-Everything below is tested with the fake Kubernetes client only. Treat it as *unverified* on a real cluster until slice 5.
+The chart renders `cluster-read` when `diagnostics.enabled` and `diagnostics.cluster.enabled` are true (slice 4): the Deployment, the ServiceAccount and three ClusterRoles, the bindings, the admission policy, the tool group and its entries, the NetworkPolicies. See the README of the repository and `docs/diary/features/diagnostics.md`.
+The server code is tested with the fake Kubernetes client. The chart, the policy and the installer steps have their own tests. A live check on a real API server runs on request in CI (`e2e` workflow, input `diagnostics`). An agent root-cause run is slice 5 and is not done. Treat the server as *unverified* in use until then.
 
 ## `cluster-read`
 
@@ -21,7 +21,7 @@ Everything below is tested with the fake Kubernetes client only. Treat it as *un
                          GET  /readyz    the rights check passed
 ```
 
-`/mcp` requires `Authorization: Bearer <value>` (ADR 0025, Amendment 1). The value is a file (a mounted Secret) named by `-bearer-file`, read on every request so a refreshed Secret needs no restart, and compared in constant time. It is never a flag, an environment value or a log line. The server refuses to start without a bearer file unless `-insecure-no-auth` is set, which is for tests and local runs. `/healthz` and `/readyz` need no value and say only "ok" or "not ready"; `/readyz` is also not ready when the bearer file cannot be read. The scheme word is case-insensitive. A NetworkPolicy (slice 4) narrows who can reach the port; the bearer value is the second check.
+`/mcp` requires `Authorization: Bearer <value>` (ADR 0025, Amendment 1). The value is a file (a mounted Secret) named by `-bearer-file`, read on every request so a refreshed Secret needs no restart, and compared in constant time. It is never a flag, an environment value or a log line. The server refuses to start without a bearer file unless `-insecure-no-auth` is set, which is for tests and local runs. `/healthz` and `/readyz` need no value and say only "ok" or "not ready"; `/readyz` is also not ready when the bearer file cannot be read. The scheme word is case-insensitive. A NetworkPolicy (the chart, slice 4) narrows who can reach the port; the bearer value is the second check. `install.sh` creates the value as two Secrets and the tool gateway sends it.
 
 ### Tools
 
@@ -103,7 +103,7 @@ At start and every 5 minutes (by default) the server asks the API server about i
 - At cluster scope it asks `SelfSubjectAccessReview` for the full forbidden list: secrets, configmaps, service accounts and their tokens, `exec`, `attach`, `portforward`, proxies, the kubelet subresources of nodes, ephemeral containers, impersonate, bind, escalate, `watch`, writes on many named resources (including `networkpolicies`, `pods/eviction`, `deployments/scale`, custom resource definitions, webhook configurations, certificate signing requests, token reviews), `*`, pod logs, and the non-resource paths `/metrics`, `/logs` and `/debug/pprof`.
 
 The cost is one request per namespace plus about 300 fixed requests (and about six more per namespace whose review is incomplete), with four workers, so it grows by one request per listed namespace. The check has a deadline of two minutes plus one second per namespace. If a right is allowed, a rules review cannot be read, or a namespace grants nothing, readiness drops and no tool is served until a later check passes. The reason goes to the server log only. Callers and `/readyz` get a fixed sentence.
-The allowlist of default non-resource paths (discovery, health, version, the OIDC discovery paths with and without a trailing slash) and of the rights every authenticated identity has is taken from the Kubernetes bootstrap policy as I know it; it has not been compared with a real API server and needs that proof in slice 5, on kind, k3s and a managed cluster, before "the intended role passes" is claimed.
+The allowlist of default non-resource paths (discovery, health, version, the OIDC discovery paths with and without a trailing slash) and of the rights every authenticated identity has is taken from the Kubernetes bootstrap policy as I know it; it was compared with a real API server for the first time in slice 4 (kind, Kubernetes 1.37, CI run 46010375067), and it was missing one default: the built-in ClusterRole `system:cluster-trust-bundle-discovery` gives every authenticated identity get, list and watch on `clustertrustbundles`, so the check failed and the server never became Ready. The one-entry change is proposed on the branch `spike/230-r2-ctb-allow` and is not merged. k3s and a managed cluster are still not compared, and the list may be missing a default there too.
 The check finds a right added outside the chart. It cannot stop one. Grants in namespaces that are not reviewed are not seen; the server never sends a request there.
 
 ### Limits and audit
@@ -124,5 +124,5 @@ Run against a cluster you may read, with your own kubeconfig (the rights check w
 go run ./cmd/cluster-read -kubeconfig ~/.kube/config -log-namespaces demo -status-namespaces kagent
 ```
 
-Not built here: the chart, the roles and bindings, the admission policy, registration with the tool gateway, the shared gateway exclusion, and the live proof.
-Those are slices 4 and 5 of the ADR.
+Not built here: the live proof with an agent (slice 5 of the ADR) and `db-read` (slices 6 to 8).
+The chart side (roles, bindings, admission policy, the tool group, the bearer Secrets) is slice 4: `charts/openagentix/templates/diagnostics.yaml`.
