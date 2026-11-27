@@ -12,8 +12,15 @@
 #   - one caller rule for the disputes desk.
 # What it cannot add with existing values, and why, is in the README, "What could not be wired".
 #
-# Beside the full demo: the full demo has more agents and callers, and a list in a later file replaces the earlier one, so copy the
-# entries you need from components/ into the lists below.
+# QUICK START ONLY. Do not use this file with the full demo, or with any install where another agent uses the shared tool server
+# (the vMCP `tools`) or where that server has code mode on. The records tools join the shared tool server, nothing there limits who may
+# call them, and a script run in code mode (the full demo's `assistant` agent has it) could call the write tools. install.sh checks this
+# and refuses. A tool profile would fix it; the chart cannot express one for this server yet (README, "What could not be wired", item 1).
+# The existing value `mcp.virtual.incomingAuth.toolAccess` cannot do it: it keys on the atespace, which is the namespace `kagent` for
+# every agent, not on the single agent.
+#
+# Prompt clash: with `knowledge: true` the chart appends the knowledge base prompt (for questions about OpenAgentix itself) to the
+# prompt below. The two do not conflict on the dispute steps, but a real model may mix them; watch for it in the live runs.
 
 knowledge:
   enabled: true

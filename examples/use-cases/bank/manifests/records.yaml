@@ -99,8 +99,11 @@ spec:
   ports:
     - {name: mcp, port: 8080, targetPort: mcp}
 ---
-# MCP has no login of its own, so only the vMCP pods of the tool group may reach it. The shared vMCP (name `tools`) is the one the agent
-# uses today. Kubelet probes come from the node and are not affected. The pod may call nothing: no egress rule, DNS included.
+# MCP has no login of its own, so only the vMCP pods of the tool group may reach it. Every vMCP of the group connects to every backend
+# (discovery, health), whichever tools it offers, so the policy admits the shared vMCP `tools` and the profile vMCP of the quick start,
+# `tools-lookup`, as the chart's kb policy admits every profile vMCP. A tool profile of your own needs its name added here.
+# This policy limits who can reach the port ONLY on a network plugin that enforces NetworkPolicy. Whether yours does must be tested
+# (README, live proof checklist). Kubelet probes come from the node and are not affected. The pod may call nothing: no egress rule, DNS included.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -116,5 +119,7 @@ spec:
       from:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: mcp-tools}}
           podSelector:
-            matchLabels: {app: virtualmcpserver, toolhive-name: tools}
+            matchLabels: {app: virtualmcpserver}
+            matchExpressions:
+              - {key: toolhive-name, operator: In, values: [tools, tools-lookup]}
   egress: []

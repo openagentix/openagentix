@@ -147,15 +147,27 @@ func (s *Service) GetCase(ctx context.Context, id string) (CaseView, error) {
 	if err := rows.Err(); err != nil {
 		return c, err
 	}
-	var posted string
-	if err := s.db.QueryRowContext(ctx, `SELECT posted_at FROM transactions WHERE id=?`, c.TransactionID).Scan(&posted); err == nil {
-		if p, err := time.Parse(core.TimeFmt, posted); err == nil {
-			opened, _ := time.Parse(core.TimeFmt, c.OpenedAt)
-			c.TxnAgeDays = int(opened.Sub(p).Hours() / 24)
-			c.WithinSchemeWindow = c.TxnAgeDays <= SchemeWindowDays
-		}
-	}
+	c.TxnAgeDays, c.WithinSchemeWindow = schemeWindow(ctx, s.db, c)
 	return c, nil
+}
+
+// schemeWindow reads the age of the disputed charge at the day the case was opened, and whether it is inside the scheme limit.
+// When the facts cannot be read it says outside: a credit or a chargeback then needs facts that are there.
+func schemeWindow(ctx context.Context, q querier, c CaseView) (int, bool) {
+	var posted string
+	if err := q.QueryRowContext(ctx, `SELECT posted_at FROM transactions WHERE id=?`, c.TransactionID).Scan(&posted); err != nil {
+		return 0, false
+	}
+	p, err := time.Parse(core.TimeFmt, posted)
+	if err != nil {
+		return 0, false
+	}
+	opened, err := time.Parse(core.TimeFmt, c.OpenedAt)
+	if err != nil {
+		return 0, false
+	}
+	days := int(opened.Sub(p).Hours() / 24)
+	return days, days <= SchemeWindowDays
 }
 
 // ListCases returns cases, soonest response deadline first. status "" means every case that is not resolved,
@@ -421,17 +433,21 @@ func (s *Service) RequestApprovalBy(ctx context.Context, id, kind string, amount
 
 // proposalPayload is exactly what the approver reads and what the hash covers.
 type proposalPayload struct {
-	CaseID           string `json:"case_id"`
-	AccountID        string `json:"account_id"`
-	TransactionID    string `json:"transaction_id"`
-	Kind             string `json:"kind"`
-	AmountCents      int64  `json:"amount_cents"`
-	DisputedCents    int64  `json:"disputed_cents"`
-	PriorCreditCents int64  `json:"prior_credit_cents"` // credits already posted on this transaction by earlier cases
-	RouteReason      string `json:"route_reason"`
-	Letter           string `json:"letter"`
-	Filing           string `json:"filing,omitempty"` // present only for the chargeback routes
-	CaseVersion      int64  `json:"case_version"`
+	CaseID             string `json:"case_id"`
+	AccountID          string `json:"account_id"`
+	TransactionID      string `json:"transaction_id"`
+	ClaimType          string `json:"claim_type"`   // facts read from the record, not written by the agent
+	TxnAgeDays         int    `json:"txn_age_days"` // age of the charge on the day the case opened
+	WithinSchemeWindow bool   `json:"within_scheme_window"`
+	SchemeWindowDays   int    `json:"scheme_window_days"`
+	Kind               string `json:"kind"`
+	AmountCents        int64  `json:"amount_cents"`
+	DisputedCents      int64  `json:"disputed_cents"`
+	PriorCreditCents   int64  `json:"prior_credit_cents"` // credits already posted on this transaction by earlier cases
+	RouteReason        string `json:"route_reason"`
+	Letter             string `json:"letter"`
+	Filing             string `json:"filing,omitempty"` // present only for the chargeback routes
+	CaseVersion        int64  `json:"case_version"`
 }
 
 // Hooks for the approval queue.
@@ -489,7 +505,12 @@ func (s *Service) Describe(ctx context.Context, tx *sql.Tx, subject, kind string
 			return "", 0, &core.Error{Kind: core.Conflict, Msg: "the account is not active, so it cannot be credited"}
 		}
 	}
-	p := proposalPayload{CaseID: c.ID, AccountID: c.AccountID, TransactionID: c.TransactionID, Kind: kind, AmountCents: amount,
+	age, within := schemeWindow(ctx, tx, c)
+	if kind != RouteDecline && !within {
+		return "", 0, &core.Error{Kind: core.Conflict, Msg: "the charge is outside the scheme window: only a decline can be proposed"}
+	}
+	p := proposalPayload{CaseID: c.ID, AccountID: c.AccountID, TransactionID: c.TransactionID, ClaimType: c.ClaimType, TxnAgeDays: age,
+		WithinSchemeWindow: within, SchemeWindowDays: SchemeWindowDays, Kind: kind, AmountCents: amount,
 		DisputedCents: c.AmountCents, PriorCreditCents: prior, RouteReason: c.RouteReason, Letter: letter.Body, Filing: filing.Body, CaseVersion: c.Version}
 	b, err := json.Marshal(p)
 	if err != nil {

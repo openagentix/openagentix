@@ -138,6 +138,17 @@ check "every case checks the ledger is empty" "jq -e 'all(.cases[]; .expect.stat
 check "every cited title is a document title of the seed" "jq -r '.cases[].expect.cites[]?' '$T/cases.json' | while read -r c; do printf '%s\n' \"\$KB_DRY\" | cut -f2 | grep -qx \"\$c\" || exit 1; done"
 check "the injection case expects a refusal and no approval request" "jq -e '.cases[] | select(.id==\"injected-instruction-refused\") | .expect | (.answer_must | any(test(\"not follow\"))) and (.tools_not_called | index(\"records_request_approval\") != null)' '$T/cases.json' >/dev/null"
 
+echo "# the restated caller, the profile vMCP and the exposure limits"
+check "the restated quick start caller is the whole entry of the quick start values" "[ \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"quickstart-ask\")' '$QS')\" = \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"quickstart-ask\")' '$VALS')\" ]"
+check "the quick start has exactly the one caller that values.yaml restates (so nothing else is lost)" "[ \"\$(yq -r '.governance.a2a.callers | length' '$QS')\" = 1 ]"
+check "the quick start renders the profile vMCP tools-lookup that the records policy admits" "doc '$T/qs.yaml' VirtualMCPServer tools-lookup | jq -e '.metadata.name == \"tools-lookup\"' >/dev/null && yq -e 'select(.kind==\"NetworkPolicy\") | .spec.ingress[0].from[0].podSelector.matchExpressions[0].values | index(\"tools-lookup\") != null' '$M' >/dev/null"
+check "the quick start shared vMCP has code mode off (install.sh refuses it on)" "! doc '$T/qs.yaml' VirtualMCPServer tools | jq -e '.spec.config.codeMode' >/dev/null 2>&1"
+check "values.yaml and the README say quick start only" "grep -qi 'quick start only' '$HERE/values.yaml' && grep -qi 'quick start only' '$HERE/README.md'"
+check "values.yaml no longer tells anyone to install beside the full demo" "! grep -qi 'beside the full demo' '$HERE/values.yaml' '$HERE/README.md'"
+check "the README makes no claim about kindnet enforcement" "! grep -qi 'kindnet' '$HERE/README.md' '$HERE/manifests/records.yaml'"
+check "the README has the live proof checklist, all unchecked" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[ \\]' '$HERE/README.md')\" -ge 10 ] && ! grep -q '^- \\[x\\]' '$HERE/README.md'"
+check "ctl.sh asks as an analyst, not as the approver" "grep -q 'ASK_USER=desk:analyst-1' '$HERE/ctl.sh' && ! grep -q 'ASK_USER=desk:lead-1' '$HERE/ctl.sh'"
+
 echo "# plain English and no personal data"
 # shellcheck disable=SC2034
 FILES=$(find "$HERE" -type f ! -path '*/tests/*' | sort)

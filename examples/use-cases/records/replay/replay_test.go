@@ -104,7 +104,7 @@ func buildStub(t *testing.T) string {
 	return stubBin
 }
 
-func startStub(t *testing.T) string {
+func startStub(t *testing.T, scenarios string) string {
 	t.Helper()
 	bin := buildStub(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -113,7 +113,7 @@ func startStub(t *testing.T) string {
 	}
 	addr := ln.Addr().String()
 	_ = ln.Close()
-	abs, err := filepath.Abs(scenarioFile)
+	abs, err := filepath.Abs(scenarios)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,9 @@ func startStub(t *testing.T) string {
 	return ""
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, scenarioFile) }
+
+func newEnvWith(t *testing.T, scenarios string) *env {
 	t.Helper()
 	db, err := core.Open(filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {
@@ -172,7 +174,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, rest: d.Handler(), mcp: sess, stub: startStub(t)}
+	e := &env{t: t, rest: d.Handler(), mcp: sess, stub: startStub(t, scenarios)}
 	for _, tl := range list.Tools {
 		e.tools = append(e.tools, "records_"+tl.Name)
 	}
