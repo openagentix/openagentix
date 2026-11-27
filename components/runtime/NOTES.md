@@ -59,7 +59,7 @@ Values files are in `values/`. Key kagent values: `controller.substrateClientCer
 | Symptom | Cause | Fix |
 |---|---|---|
 | ate-api-server CrashLoopBackOff, "parsing PostgreSQL connection string: invalid value" | `postgres.clientCertificates.enabled` defaults false | set true |
-| `kagent-controller` restarted twice at install: `substrate: dial ate-api "dns:///api.ate-system.svc:443": context deadline exceeded` (RESTARTS=2), then healthy | Not root-caused. Network and NetworkPolicy were fine (a test pod connected to :443). Likely a start-up race (controller's podidentity cert / ate-api readiness) with a 10 s dial deadline. Self-healed within ~2 min; unverified whether it recurs on a clean install | none; treat as a readiness race, add a wait/ordering in the umbrella |
+| `kagent-controller` restarted twice at install: `substrate: dial ate-api "dns:///api.ate-system.svc:443": context deadline exceeded` (RESTARTS=2), then healthy | Root-caused in issue #178: kagent 1.0.1 `substrate.Dial` (go/core/internal/substrate/client.go) waits 10 s (fixed default; app.go sets no DialTimeout, the config has no field) and the controller exits when ate-api is not serving yet. ate-api waits for its servicedns pod certificate and for the Substrate PostgreSQL, so after a node restart it is often not serving for 1 to 3 minutes | `kagent-postrender.sh` (helm post-renderer in `kagent-helm.sh`) adds init container `wait-for-ate-api` (TCP connect to api.ate-system.svc:443) |
 | Agent `my-first-agent` Ready=False "waiting for the ActorTemplate golden snapshot" for ~1 min | Normal: atelet pulls the harness image into the sandbox cache and checkpoints | wait |
 | First turn: `agent run failed: Error 402 ... prepayment credits are depleted` | Google project of the supplied key has no credits (reproduced with direct curl on 4 models) | external; needs a funded key |
 | Stub-LLM agent: `lookup mock-llm.kagent.svc on 169.254.17.1:53: no such host` | Sandbox DNS relay does not apply search domains; use FQDN `*.svc.cluster.local` | use FQDN |
@@ -106,7 +106,7 @@ Because of the 402, `manifests/mock-llm.yaml` adds a ~40-line OpenAI-compatible 
 ## Unverified
 
 - Any successful Gemini completion (key out of credits).
-- Clean-install reproducibility of the kagent-controller start-up race.
+- kagent-controller start-up race: fixed by the wait in `kagent-postrender.sh` (issue #178); proven by 6 recovery runs in CI, not on a laptop VM.
 - Behaviour under several concurrent agents, memory per sandbox, and resource limits.
 - `up.sh` on a fresh machine: I re-ran it on the existing cluster: exit 0 in 51 s, every step a no-op or unchanged, agent still Ready (idempotency verified). I did not recreate the cluster from zero, so the cold path is only verified as the manual sequence it was derived from.
 - kagent UI and other harnesses (claude/codex) not exercised.
