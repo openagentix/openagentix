@@ -90,7 +90,7 @@ Live, on one kind cluster in CI (the `e2e` workflow, input `endpoints`; two tiny
 **Spike results, each observed once (not a guarantee):**
 
 - *Redirects.* A backend that answers every POST with `307` to another Service was not followed. Three requests reached the redirecting server, each with the entry's `Authorization` header, none reached the target, and the backend shows `unavailable`. Only a `307` on a POST was tried. A custom header on a redirect was not tested, because an entry of `mcp.endpoints` has one header.
-- *`overrides`.* The field renames a tool and its description: with `overrides: {echo: {name: renamed_echo, description: ...}}` and no filter the vMCP lists `echo_renamed_echo` with the new description. With the profile's filter `[echo]` next to the override, the list is empty: the filter did not match the renamed tool. The result with a filter on the new name is in the live log of the last run. So a later change that renames the mirror tools back to the shared names has to write the filter with the new names.
+- *`overrides`.* The field renames a tool and its description: with `overrides: {echo: {name: renamed_echo, description: ...}}` and no filter the vMCP lists `echo_renamed_echo` with the new description. With the profile's filter `[echo]` next to the override, the list is empty: the filter did not match the renamed tool. With the filter on the new name (`[renamed_echo]`) the list is exactly `echo_renamed_echo`, with the new description. So a later change that renames the mirror tools back to the shared names has to write the filter with the new names. This was seen in the third live run only (three probe vMCPs, one tool).
 
 ## What is not proven
 
