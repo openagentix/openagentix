@@ -164,6 +164,10 @@ func allowedVerbs(group, resource string, isLog bool) []string {
 	// every authenticated user may ask the API server about its own rights
 	case "authorization.k8s.io|selfsubjectaccessreviews", "authorization.k8s.io|selfsubjectrulesreviews", "authentication.k8s.io|selfsubjectreviews":
 		return []string{"create"}
+	// the default ClusterRole system:cluster-trust-bundle-discovery, bound by the API server to every authenticated identity (seen on kind with
+	// Kubernetes 1.37): clustertrustbundles hold public CA certificates. Only these three verbs and only this resource.
+	case "certificates.k8s.io|clustertrustbundles":
+		return []string{"get", "list", "watch"}
 	}
 	return nil
 }
