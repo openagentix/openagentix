@@ -9,6 +9,7 @@
 {{- $_ = required (printf "notify.tokens: %s needs a secret name" $t.env) $t.secret }}
 {{- $_ = required (printf "notify.tokens: %s needs a secret key" $t.env) $t.key }}
 {{- end }}
+{{- include "oa.pdb" (dict "root" $ "name" "notify" "app" "notify" "ns" $ns) }}
 # One replica (Recreate): rate limits, the in-flight cap and idempotency keys live in the process.
 # The destinations file (chat ids) and the tokens come from existing Secrets; the chart never contains their values.
 apiVersion: apps/v1
@@ -36,6 +37,9 @@ spec:
         openagentix.io/source-hash: {{ $n.sourceHash | quote }}
       {{- end }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 35
       securityContext:

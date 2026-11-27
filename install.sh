@@ -217,6 +217,12 @@ if [ ${#problems[@]} -gt 0 ]; then
   for p in "${problems[@]}"; do printf '  - %s\n' "$p" >&2; done
   printf 'Nothing was changed.\n' >&2; exit 1
 fi
+# PodDisruptionBudgets (ADR 0024): a budget that this release does not own and that selects one of our pods would make that pod impossible to
+# evict. Read-only, on every cluster type, not skipped by SKIP_PREFLIGHT=1; it is not run when availability.podDisruptionBudgets.enabled is false.
+# The cluster may not exist yet (a fresh kind or k3d install): then there is nothing to find.
+if [ "$CLUSTER_UP" = 1 ]; then
+  printf '%s\n' "$RENDERED" | KUBECTL=$K KUBE_CONTEXT=$CTX RELEASE=$RELEASE bash hack/pdb-check.sh || exit 1
+fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
 fi

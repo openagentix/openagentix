@@ -187,6 +187,7 @@ spec:
   resources: {requests: {storage: {{ $b.metrics.storage.size }}}}
 {{- end }}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" "victoria-metrics" "app" "victoria-metrics" "ns" $ns) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -199,10 +200,15 @@ spec:
   selector: {matchLabels: {app: victoria-metrics}}
   template:
     metadata:
-      labels: {app: victoria-metrics}
+      labels:
+        app: victoria-metrics
+        {{- include "oa.labels" . | nindent 8 }}
       annotations:
         checksum/scrape: {{ $targets | toJson | sha256sum | trunc 16 }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       serviceAccountName: victoria-metrics
       securityContext:
         runAsNonRoot: true
@@ -264,6 +270,7 @@ data:
   config.yaml: |
     {{- include "oa.jaegerConfig" . | nindent 4 }}
 ---
+{{- include "oa.pdb" (dict "root" $ "name" "jaeger" "app" "jaeger" "ns" $ns) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -276,10 +283,15 @@ spec:
   selector: {matchLabels: {app: jaeger}}
   template:
     metadata:
-      labels: {app: jaeger}
+      labels:
+        app: jaeger
+        {{- include "oa.labels" . | nindent 8 }}
       annotations:
         checksum/config: {{ include "oa.jaegerConfig" . | sha256sum | trunc 16 }}
     spec:
+      {{- with include "oa.priorityClass" $ }}
+      priorityClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
