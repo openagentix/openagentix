@@ -30,7 +30,7 @@ The scripted chains run against the real records service and the real stub model
 
 ## What the live run showed
 
-The opt-in job `e2e (equipment, mcp.endpoints)` (`gh workflow run e2e.yml -f equipment=true --ref <branch>`, `hack/ci/equipment-live.sh`) ran on a kind cluster. The stub model played `examples/use-cases/equipment/eval/scenario.json`, so **every agent run was scripted by the stub model** and shows the platform, not a model. The first run on the final scripts (run 46066469406) passed 92 checks with none failed:
+The opt-in job `e2e (equipment, mcp.endpoints)` (`gh workflow run e2e.yml -f equipment=true --ref <branch>`, `hack/ci/equipment-live.sh`) ran on a kind cluster. The stub model played `examples/use-cases/equipment/eval/scenario.json`, so **every agent run was scripted by the stub model** and shows the platform, not a model. The first run (run 46066469406) passed 92 checks with none failed; the run on the final scripts is named in the pull request. It showed:
 
 - The tool server of the group listed `dealer-records` and `knowledge-dealer` as ready, the shared tool server listed neither, and the agent was Ready.
 - `oa-eval` passed all seven cases through the A2A gate, with the audit lines of the group's tool server as the audit source and the records REST state as the state source. Every audited call was a tool of the profile, none was a tool of the bank, and the shared tool server saw none.
@@ -40,12 +40,13 @@ The opt-in job `e2e (equipment, mcp.endpoints)` (`gh workflow run e2e.yml -f equ
 - Called directly (the identity settings of the tool servers were changed for this part and restored): the group's tool server listed exactly the 26 tools of the profile, a service tool that the profile leaves out (`open_proactive_case`) was refused and opened no case, and the shared tool server and the quick start profile listed none and refused a call.
 - A pod in `default` timed out against the records port. The egress policy of the group cut a labelled probe from an in-cluster web server that a control pod reached (one run, in-cluster target only). `kubectl auth can-i get secret/dealer-records-mcp-auth` for the shared tool server answered **yes** (ADR 0026 A3).
 
-WITH_BANK_RESULT
+The job with the bank installed first (`equipment_with_bank`; the equipment install found the bank in the release and composed it) passed 95 checks with none failed (run 46071631350, on the final scripts). Besides the checks above, the equipment profile listed no bank tool, the equipment tool server refused a bank tool, the bank's tool server listed no equipment tool and refused one, and it still answered its own tool, so the refusals are not a broken server. The first run of that install crash-looped the stub model: both scenario files had scenarios named `other-case` and `injection-attempt`, and the stub refuses a name used twice. The offline tests had not seen it because they use a fake platform installer. The equipment scenarios are prefixed now, and a test loads both files with the real loader.
 
 ## Findings
 
 - The scenarios, written from the bank's findings (the `{"output": ...}` shape of a tool result, citing the top search result and falling back to "needs human review"), passed the live job at the first run. The knowledge base ranked the intended documents first for all five queries. That is one run on nine short documents.
 - The equipment records route `GET /approvals` ignored its `case_id` filter, which the bank's route honours. An evaluation set that asks "no approval for this case" would have counted every case's requests. Fixed, with a test that failed first.
+- Lessons of the first real-model run of the bank, applied here before any real-model run of this one: the agent instructions make the approval request the last write and say to read the request back (`get_approval`) before reporting it pending, and the scripted chains read it back too (a test shows that a write after the request leaves it superseded and that the read-back shows it); the tool descriptions state every field limit (lengths, ranges, id formats, the two allowed approval kinds), and a test fails when one is missing; a test checks that every machine, part, dealer and fault code in the documents and the graph facts exists in the records seed. None of this is shown with a real model.
 - The scenarios pick the dealer by position in the stock list. That is right for this seed only, and the README says so.
 
 ## What is not proven

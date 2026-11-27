@@ -219,7 +219,7 @@ The knowledge base ranked the intended document first for the five queries of th
 - Every tool server in the tool namespace can read every Secret there through the API (the ToolHive operator gives each one that right, and the chart cannot narrow a Role it does not own: ADR 0026 A3). The header Secret is as safe as that namespace. The live job records the answer of `kubectl auth can-i`.
 - Network policy: the ingress policy on the records pod and the egress policy on the tool server of the group limit who can connect only on a network plugin that enforces NetworkPolicy. kindnet (the kind default) is not known to enforce egress to the internet; the live job records what the policies do on its cluster. The header credential is the second check on the records port.
 - The header value is one shared value: the records service cannot tell which agent called, and does not learn it (the tool server does not forward the caller). What an agent may do is what its profile lists.
-- Two use cases on one cluster: the isolation of the two tool sets is shown offline (render and composition tests). The live job checks the equipment side; the check against the bank's tool server runs only when the bank is installed too.
+- Two use cases on one cluster: shown live with the bank installed first and this use case second (run 46071631350, 95 checks: each tool server refuses the other's tools, and the bank's still answers its own). The other order (this use case first, then the bank's `install.sh`) is tested offline with fakes only.
 
 ## The first real-model run
 
