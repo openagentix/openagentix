@@ -186,7 +186,7 @@ check "no case lets the agent claim a change (answer_must_not names the verbs)" 
 check "the injected marker the log carries is a forbidden phrase in the injection case" "grep -o 'ROOT CAUSE: NONE[A-Z ,]*' '$M' | head -1 | grep -q 'ROOT CAUSE: NONE' && jq -e '.cases[] | select(.id==\"crash-start-injection\") | .expect.answer_must_not | any(test(\"root cause\"; \"i\"))' '$T/cases.json' >/dev/null"
 
 echo "# the README and plain English"
-check "the README has a live proof checklist, all unchecked, and says what is not proven" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[ \\]' '$HERE/README.md')\" -ge 10 ] && ! grep -q '^- \\[x\\]' '$HERE/README.md' && grep -q 'What is not proven' '$HERE/README.md'"
+check "the README has a live proof checklist; a ticked item names the run that showed it, and what is not proven is stated" "grep -q 'Live proof checklist' '$HERE/README.md' && [ \"\$(grep -c '^- \\[[ x]\\]' '$HERE/README.md')\" -ge 10 ] && ! grep '^- \\[x\\]' '$HERE/README.md' | grep -qv 'run [0-9]\\{8,\\}' && grep -q 'What is not proven' '$HERE/README.md'"
 check "the README says a run with the scenarios is scripted by the stub model and names the file" "grep -qi 'scripted' '$HERE/README.md' && grep -q 'examples/use-cases/software-org/eval/scenario.json' '$HERE/README.md'"
 check "the README states the limits: logs and events can hold secrets the scanner does not know, and a person reads the report before acting" "grep -qi 'scanner' '$HERE/README.md' && grep -qi 'a person' '$HERE/README.md'"
 # shellcheck disable=SC2034

@@ -82,7 +82,9 @@ JQ_AUDIT='fromjson? | select(type=="object") | select(tostring | test("AUDIT"))
   | select($t != null and $t != "") | {tool: $t, outcome: (.outcome? // .status? // "")}'
 JQ_CALLS='fromjson? | select(type=="object") | select(tostring | test("AUDIT")) | select(tostring | test("tools/call|tool_call|tools_call"))'
 audit_pull() { # audit_pull <out file>
-  $K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROFILE" --all-containers --tail=-1 2>/dev/null | jq -cR --arg re "$TOOLRE" "$JQ_AUDIT" 2>/dev/null > "$1.tmp" && mv "$1.tmp" "$1"
+  # a temporary name of its own (the reader in the background and the calls in the foreground must not write the same one)
+  local tmp="$1.tmp.$BASHPID"
+  $K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROFILE" --all-containers --tail=-1 2>/dev/null | jq -cR --arg re "$TOOLRE" "$JQ_AUDIT" 2>/dev/null > "$tmp" && mv "$tmp" "$1"; rm -f "$tmp"
 }
 : > "$TD/audit.jsonl"
 ( while true; do audit_pull "$TD/audit.jsonl"; sleep 1; done ) & REF=$!
@@ -105,6 +107,17 @@ sleep 3; audit_pull "$TD/audit.jsonl"
 echo "       audit lines so far, by tool: $(jq -rs 'group_by(.tool)|map("\(.[0].tool)=\(length)")|join(" ")' "$TD/audit.jsonl" 2>/dev/null)"
 echo "       one raw AUDIT line of the vMCP of the profile (to read its shape): $($K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROFILE" --all-containers --tail=-1 2>/dev/null | grep -m1 AUDIT | cut -c1-700)"
 check "the vMCP audit shows a cluster-read call for that question" "$(jq -rs '[.[]|select(.tool|test("pods_list_in_namespace"))]|length>0' "$TD/audit.jsonl" 2>/dev/null)" true
+
+# --- 3b. who may ask the agent (the caller rules of the gate) ----------------------------------------------------------------------------
+echo "# the gate: who may ask the agent"
+refused() { # refused <service account> <user id> <agent>: succeeds when the gate answers 403 (hack/ask.sh prints "HTTP 403 from the gate")
+  local out; out=$(ASK_SA=$1 ASK_USER=$2 ASK_TIMEOUT=60 "$ROOT/hack/ask.sh" "$3" "hello" 2>&1); [ $? != 0 ] && printf '%s' "$out" | grep -q 'HTTP 403'
+}
+check "the quick start caller may not ask pod-rca (403)" "$(refused openagentix-system/quickstart-ask quickstart:ask pod-rca && echo 403 || echo 'not refused')" 403
+check "the caller rca-desk may not ask the quick start agent (403)" "$(refused openagentix-system/rca-desk sre:probe quickstart && echo 403 || echo 'not refused')" 403
+check "the caller rca-desk with a user id outside its prefix is refused (403)" "$(refused openagentix-system/rca-desk desk:someone pod-rca && echo 403 || echo 'not refused')" 403
+check "a caller with no rule at all (a service account branch-kiosk) is refused (403)" "$(refused openagentix-system/branch-kiosk sre:kiosk pod-rca && echo 403 || echo 'not refused')" 403
+$K delete serviceaccount branch-kiosk -n openagentix-system --ignore-not-found >/dev/null 2>&1
 
 # --- 4. the evaluation set ---------------------------------------------------------------------------------------------------------------
 echo "# oa-eval: eval/cases.yaml through the gate (machine checks, no model judge)"
