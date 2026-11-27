@@ -3,6 +3,7 @@
 # Needs: bash, jq, yq (the Python wrapper), openssl, shasum or sha256sum. Usage: examples/use-cases/equipment/tests/install-test.sh   (exit 1 on any failure)
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n       %s\n' "$1" "$2"; }
@@ -15,7 +16,7 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 LOG="$TMP/log"; mkdir -p "$LOG"
 
 # fake kubectl: every call is logged (arguments only), stdin of apply and create is kept, the state of each namespace and Secret lives in files.
-# FAKE_NOCTX=1 (no such kube context), FAKE_NO_AGENT=1, FAKE_CODEMODE=true, FAKE_STUB=1, FAKE_SCENARIOS=1|wrongkey (the chart ConfigMap), FAKE_BANK=1 (the bank use case is installed)
+# FAKE_NOCTX=1 (no such kube context), FAKE_SECRET_ERR=<secret name> (an API error on that Secret), FAKE_HELM_ERR=1, FAKE_NO_AGENT=1, FAKE_CODEMODE=true, FAKE_STUB=1, FAKE_SCENARIOS=1|wrongkey (the chart ConfigMap), FAKE_BANK=1 (the bank use case is installed)
 cat > "$BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG/calls"
@@ -29,11 +30,13 @@ case "$*" in
   *"get namespace openagentix-knowledge"*) exit 0 ;;
   *"get agents.api.kagent.dev service-agent"*) [ -z "${FAKE_NO_AGENT:-}" ] && exit 0 || exit 1 ;;
   *"get virtualmcpservers.toolhive.stacklok.dev tools-dealer"*) printf %s "${FAKE_CODEMODE:-false}"; exit 0 ;;
-  *"get secret records-approvers "*|*"get secret records-approvers -n"*) [ -f "$FAKE_LOG/secret_a" ] && exit 0 || exit 1 ;;
-  *"get secret records-approver-token"*) [ -f "$FAKE_LOG/secret_t" ] && exit 0 || exit 1 ;;
-  *"get secret records-mcp-expected"*) [ -f "$FAKE_LOG/secret_e" ] && exit 0 || exit 1 ;;
-  *"get secret dealer-records-mcp-auth"*) [ -f "$FAKE_LOG/secret_m" ] && exit 0 || exit 1 ;;
   *"get secret records-mcp-auth"*) [ -n "${FAKE_BANK:-}" ] && exit 0 || exit 1 ;;
+  *"get secret "*)
+    n=$(printf '%s' "$*" | sed -n 's/.*get secret \([a-z-]*\) .*/\1/p')
+    if [ -n "${FAKE_SECRET_ERR:-}" ] && [ "$n" = "$FAKE_SECRET_ERR" ]; then echo "Unable to connect to the server: net/http: TLS handshake timeout" >&2; exit 1; fi
+    case "$n" in records-approvers) f=secret_a;; records-approver-token) f=secret_t;; records-mcp-expected) f=secret_e;; dealer-records-mcp-auth) f=secret_m;; *) f=none;; esac
+    if [ -f "$FAKE_LOG/$f" ]; then echo "secret/$n"; exit 0; fi
+    echo "Error from server (NotFound): secrets \"$n\" not found" >&2; exit 1 ;;
   *"get deployment stub-model"*) [ -n "${FAKE_STUB:-}" ] && exit 0 || exit 1 ;;
   *"get configmap stub-model-scenarios"*) case "${FAKE_SCENARIOS:-}" in "") exit 1 ;; wrongkey) echo '{"data":{"other.json":"{}"}}' ;; *) echo '{"data":{"scenario.json":"{}","equipment.json":"{}"}}' ;; esac; exit 0 ;;
   *"delete secret"*) rm -f "$FAKE_LOG/secret_a" "$FAKE_LOG/secret_t" "$FAKE_LOG/secret_e" "$FAKE_LOG/secret_m" ;;
@@ -51,7 +54,8 @@ cat > "$BIN/helm" <<'EOF'
 #!/usr/bin/env bash
 echo "helm $*" >> "$FAKE_LOG/calls"
 case "$1" in
-  get) if [ -f "$FAKE_LOG/release.json" ]; then cat "$FAKE_LOG/release.json"; exit 0; fi; echo "Error: release: not found"; exit 1 ;;
+  get) if [ -n "${FAKE_HELM_ERR:-}" ]; then echo "Error: query: failed to query with labels: secrets is forbidden: the secret list was not found in this namespace" >&2; exit 1; fi
+       if [ -f "$FAKE_LOG/release.json" ]; then cat "$FAKE_LOG/release.json"; exit 0; fi; echo "Error: release: not found" >&2; exit 1 ;;
   template) if [ -n "${FAKE_RENDER_DIFF:-}" ] && printf '%s' "$*" | grep -q 'your-values.yaml'; then echo "merged: different"; else echo "render: same"; fi; exit 0 ;;
 esac
 exit 0
@@ -75,7 +79,7 @@ EOF
 chmod +x "$BIN"/*
 
 run() { # run <args>... : the script with the fakes; stdout and stderr go to $LOG/out; returns its exit code
-  FAKE_LOG="$LOG" CLUSTER="${CLUSTER-oa-equipment}" KUBECTL="$BIN/kubectl" HELM="$BIN/helm" DOCKER="$BIN/docker" KIND="$BIN/kind" KB_INGEST="$BIN/kb-ingest" KB_GRAPH_LOAD="$BIN/kb-graph-load" \
+  FAKE_LOG="$LOG" CLUSTER="${CLUSTER-oa-equipment}" KUBECTL="$BIN/kubectl" HELM="${HELM_OVERRIDE:-$BIN/helm}" DOCKER="$BIN/docker" KIND="$BIN/kind" KB_INGEST="$BIN/kb-ingest" KB_GRAPH_LOAD="$BIN/kb-graph-load" \
     PLATFORM_INSTALL="$BIN/platform-install" PATH="$BIN:$PATH" bash "$HERE/install.sh" "$@" > "$LOG/out" 2>&1
 }
 reset() { rm -f "$LOG"/*; }
@@ -110,7 +114,7 @@ check "the kb scripts get the same kubectl and context" "grep -q 'KUBECTL=$BIN/k
 check "the desk ServiceAccount is made" "grep -q 'create serviceaccount service-desk -n openagentix-system' '$LOG/calls'"
 check "the script makes no MCPServerEntry, no registration and no patch of the stub model (the chart does it)" "! grep -E 'patch|tool-registration|create configmap|mcpserverentry' '$LOG/calls' | grep -q ."
 check "a stub model with the chart scenarios missing: a warning that names STUB_SCENARIOS" "grep -q 'WARN: the stub model has no scenarios' '$LOG/out'"
-check "the script never reads a Secret value" "! grep -q 'get secret .*-o' '$LOG/calls'"
+check "the script never reads a Secret value" "! grep -Eq 'get secret .*-o (json|yaml|jsonpath)' '$LOG/calls'"
 check "the output says what is next" "grep -q 'ctl.sh fault' '$LOG/out' && grep -q 'ctl.sh approve' '$LOG/out'"
 
 echo "# a second run"
@@ -137,10 +141,16 @@ reset
 CLUSTER="" KUBE_CONTEXT=kind-oa-equipment run; rc=$?
 check "KUBE_CONTEXT alone names the cluster" "[ $rc = 0 ] && grep -q 'kind load docker-image .* --name oa-equipment' '$LOG/calls'" "exit $rc: $(tail -3 "$LOG/out")"
 reset
-KUBE_CONTEXT=gke_example_project run; rc=$?
+CLUSTER=oa-equipment KUBE_CONTEXT=kind-other run; rc=$?
+check "CLUSTER and KUBE_CONTEXT that disagree are refused before any call" "[ $rc = 1 ] && grep -q 'different clusters' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
+reset
+CLUSTER=oa-equipment KUBE_CONTEXT=kind-oa-equipment run; rc=$?
+check "CLUSTER and KUBE_CONTEXT that agree are accepted" "[ $rc = 0 ]" "exit $rc: $(tail -3 "$LOG/out")"
+reset
+CLUSTER="" KUBE_CONTEXT=gke_example_project run; rc=$?
 check "a context that is not kind is refused before any call" "[ $rc = 1 ] && grep -q 'local kind cluster' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
 reset
-KUBE_CONTEXT=gke_example_project run --uninstall; rc=$?
+CLUSTER="" KUBE_CONTEXT=gke_example_project run --uninstall; rc=$?
 check "--uninstall in a context that is not kind is refused before any call" "[ $rc = 1 ] && grep -q 'local kind cluster' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
 reset
 CLUSTER=openagentix run; rc=$?
@@ -166,35 +176,46 @@ reset
 FAKE_NOCTX=1 run; rc=$?
 check "kind creates the cluster with the repository's kind config, before anything else is applied" "[ $rc = 0 ] && grep -q '^kind create cluster --name oa-equipment --config .*/hack/kind-config.yaml' '$LOG/calls' && [ \"\$(line_of 'kind create cluster')\" -lt \"\$(line_of 'create namespace kestrel-records')\" ]" "exit $rc: $(tail -3 "$LOG/out")"
 
-echo "# a release with more than the quick start is not replaced"
+echo "# a release with more than the quick start and this use case is not replaced (an allowlist of key paths)"
 reset
-cat > "$LOG/release.json" <<'JSON'
-{"schedules":[{"name":"nightly"}],"bridge":{"enabled":true},"notify":{"enabled":true},"agents":[{"name":"assistant"},{"name":"service-agent"}],"mcp":{"profiles":[{"name":"lookup"},{"name":"extra"}]},"governance":{"a2a":{"callers":[{"name":"quickstart-ask"},{"name":"someone"}]}}}
-JSON
+echo '{"customThing":{"enabled":true},"agents":[{"name":"assistant"},{"name":"service-agent"}],"mcp":{"profiles":[{"name":"lookup"},{"name":"extra"}]},"observability":{"bundled":{"enabled":true,"extra":1}}}' > "$LOG/release.json"
 run; rc=$?
-check "refused, naming what would be lost, before any change" "[ $rc = 1 ] && grep -q 'more than the quick start' '$LOG/out' && grep -q 'schedules' '$LOG/out' && grep -q 'agents: assistant' '$LOG/out' && grep -q 'tool profiles: extra' '$LOG/out' && grep -q 'gate callers: someone' '$LOG/out' && grep -q -- '--beside-full-demo' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
-cat > "$LOG/release.json" <<'JSON'
-{"knowledge":{"enabled":true},"schedules":[{"name":"fleet-sweep"}],"agents":[{"name":"service-agent"}],"mcp":{"endpoints":[{"name":"dealer-records"}],"profiles":[{"name":"lookup"},{"name":"dealer"}],"servers":[{"name":"osv"}]},"governance":{"a2a":{"callers":[{"name":"quickstart-ask"},{"name":"service-desk"}]}}}
-JSON
-: > "$LOG/calls"
+check "refused, naming the paths and entries that would be lost, before any change" "[ $rc = 1 ] && grep -q 'more than the quick start' '$LOG/out' && grep -q '.customThing.enabled' '$LOG/out' && grep -q '.agents\[assistant\]' '$LOG/out' && grep -q '.mcp.profiles\[extra\]' '$LOG/out' && grep -q '.observability.bundled.extra' '$LOG/out' && grep -q -- '--beside-full-demo' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+echo '{"observability":{"enabled":true,"bundled":{"enabled":true}},"console":{"enabled":true,"theme":"x"}}' > "$LOG/release.json"
 run; rc=$?
-check "a release that holds exactly the quick start and this use case is updated" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
-cat > "$LOG/release.json" <<'JSON'
-{"knowledge":{"enabled":true},"schedules":[{"name":"deadline-sweep"},{"name":"fleet-sweep"}],"agents":[{"name":"dispute-agent"},{"name":"service-agent"}],"mcp":{"endpoints":[{"name":"records"},{"name":"dealer-records"}],"profiles":[{"name":"lookup"},{"name":"disputes"},{"name":"dealer"}],"servers":[{"name":"osv"}]},"governance":{"a2a":{"callers":[{"name":"quickstart-ask"},{"name":"disputes-desk"},{"name":"service-desk"}]}}}
-JSON
-: > "$LOG/calls"
+check "a small custom release (a key the quick start does not set) is refused too" "[ $rc = 1 ] && grep -q '.console.theme' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+# a release that is exactly the composed values plus what the platform installer sets itself
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" 2>/dev/null | yq . > "$TMP/expected.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"knowledge":{"kb":{"sourceHash":"def","image":{"tag":"dev-1","digest":"sha256:1","repository":"r"}}},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"{}"}}}},"notify":{"requireReady":false}}' "$TMP/expected.json" > "$TMP/release-ok.json"
+reset; cp "$TMP/release-ok.json" "$LOG/release.json"; : > "$LOG/calls"
 run; rc=$?
-check "a release that holds the bank use case too is refused without --with-bank (it would be replaced), and nothing is changed" "[ $rc = 1 ] && grep -q 'more than the quick start' '$LOG/out' && grep -q -- '--with-bank' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+check "a release that holds exactly the composed values plus what the platform installer sets itself is updated" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$ROOT/examples/use-cases/bank/values.yaml" "$HERE/values.yaml" 2>/dev/null | yq . > "$TMP/expected-both.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"gateway":{"stubModel":{"sourceHash":"x"}}}' "$TMP/expected-both.json" > "$LOG/release.json"
+run; rc=$?
+check "a release that holds the bank use case too is refused without --with-bank (it would be replaced), the message names --with-bank and the bank's agent, and nothing is changed" "[ $rc = 1 ] && grep -q 'more than the quick start' '$LOG/out' && grep -q -- '--with-bank' '$LOG/out' && grep -q 'dispute-agent' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 reset
 echo '{}' > "$LOG/release.json"
 run --skip-platform; rc=$?
 check "--skip-platform runs no platform installer and does not read the release" "[ $rc = 0 ] && ! grep -q 'platform-install' '$LOG/calls' && ! grep -q '^helm get' '$LOG/calls'" "exit $rc: $(tail -3 "$LOG/out")"
+reset
+HELM_OVERRIDE=/nonexistent/helm run; rc=$?
+check "a missing helm stops the install (it is not read as: no release), before any change" "[ $rc = 1 ] && grep -q 'helm is required' '$LOG/out' && [ ! -s '$LOG/calls' ]" "exit $rc: $(cat "$LOG/out")"
+reset
+FAKE_HELM_ERR=1 run; rc=$?
+check "a helm failure that only contains the words not found is not read as: no release, the install stops before any change" "[ $rc = 1 ] && grep -q 'cannot read the values of the release' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+
+echo "# a Secret read that fails is not a Secret that is absent"
+reset; : > "$LOG/ns"; : > "$LOG/ns_mcp"; : > "$LOG/secret_a"; : > "$LOG/secret_t"; : > "$LOG/secret_e"; : > "$LOG/secret_m"
+FAKE_SECRET_ERR=records-mcp-expected run; rc=$?
+check "an API error on one of the four Secrets stops the install: nothing is deleted, made again or restarted, and the platform is not touched" "[ $rc = 1 ] && grep -q 'cannot read the Secret records-mcp-expected' '$LOG/out' && ! grep -qE 'delete secret|create secret|rollout restart|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+check "the four Secrets are still there" "[ -f '$LOG/secret_a' ] && [ -f '$LOG/secret_t' ] && [ -f '$LOG/secret_e' ] && [ -f '$LOG/secret_m' ]"
 
 echo "# beside the bank use case (--with-bank): one records deployment each, both agents on one platform install"
 reset
-cat > "$LOG/release.json" <<'JSON'
-{"knowledge":{"enabled":true},"schedules":[{"name":"deadline-sweep"}],"agents":[{"name":"dispute-agent"}],"mcp":{"endpoints":[{"name":"records"}],"profiles":[{"name":"lookup"},{"name":"disputes"}],"servers":[{"name":"osv"}]},"governance":{"a2a":{"callers":[{"name":"quickstart-ask"},{"name":"disputes-desk"}]}}}
-JSON
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$ROOT/examples/use-cases/bank/values.yaml" 2>/dev/null | yq . > "$LOG/release.json"
 FAKE_BANK=1 FAKE_STUB=1 ANTHROPIC_API_KEY=should-not-reach-the-installer run --with-bank; rc=$?
 check "exits 0 on a release that holds the quick start and the bank use case" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
 check "the values given to the platform installer have both agents, both endpoints, both profiles, and the quick start's profile once" "yq -e '([.agents[].name] | sort == [\"dispute-agent\",\"service-agent\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"]) and ([.mcp.profiles[].name] | sort == [\"dealer\",\"disputes\",\"lookup\"])' '$LOG/platform-values.yaml' >/dev/null" "$(head -3 "$LOG/platform-values.yaml")"

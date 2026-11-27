@@ -170,6 +170,15 @@ func TestEquipmentCtlHasNoDefaultClusterAndRefusesAContextThatIsNotKind(t *testi
 	}
 }
 
+// CLUSTER and KUBE_CONTEXT that name different clusters are refused before any call.
+func TestEquipmentCtlRefusesAClusterAndAContextThatDisagree(t *testing.T) {
+	e := newEqEnv(t)
+	out, code, calls := eqCtlWith(t, e.rest, []string{"CLUSTER=oa-equipment", "KUBE_CONTEXT=kind-other"}, "approvals")
+	if code != 1 || !strings.Contains(out, "different clusters") || strings.TrimSpace(calls) != "" {
+		t.Fatalf("want exit 1, 'different clusters' and no kubectl call, got %d (calls %q):\n%s", code, calls, out)
+	}
+}
+
 func TestEquipmentCtlEveryCallNamesTheContext(t *testing.T) {
 	e := newEqEnv(t)
 	e.run("Work case SVC-2026-0001")

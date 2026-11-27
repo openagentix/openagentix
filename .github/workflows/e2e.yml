@@ -506,6 +506,8 @@ jobs:
           EQUIPMENT_LIVE: "1"
           EQUIPMENT_OUT: equipment-out
           EQUIPMENT_INSTALL_LOG: install.log
+          EQUIPMENT_INSTALL_LOG2: install2.log
+          EQUIPMENT_LIVE_LOG: equipment-live.log
           EQUIPMENT_WITH_BANK: ${{ inputs.equipment_with_bank && '1' || '0' }}
         run: |
           set -o pipefail
@@ -542,6 +544,26 @@ jobs:
           kubectl logs -n agentgateway-system deploy/stub-model --tail=60 | cut -c1-300 || true
           kubectl logs -n openagentix-gateway -l app=a2a-gate --tail=60 | cut -c1-300 || true
           kind export logs ./kind-logs --name oa-equipment-demo || true
+      - name: scan the files that are uploaded for the header value and the approver token
+        if: always()
+        run: |
+          # The values are read from the cluster and given to grep through a process substitution: they are never written to a file. A file that holds one is
+          # removed from the upload and the job fails. When the values cannot be read, nothing that could hold one is uploaded.
+          LEAK=0
+          HV=$(kubectl get secret -n mcp-tools dealer-records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
+          AT=$(kubectl get secret -n kestrel-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
+          if [ -n "$HV" ] && [ -n "$AT" ]; then
+            for f in kind-logs equipment-out install.log install2.log install-bank.log equipment-live.log; do
+              [ -e "$f" ] || continue
+              if grep -rlF -f <(printf '%s\n%s\n' "${HV#Bearer }" "$AT") "$f" >/dev/null 2>&1; then
+                echo "a secret value is in $f: it is removed from the upload"; rm -rf "$f"; LEAK=1
+              fi
+            done
+          else
+            echo "the secret values could not be read from the cluster: the cluster logs are not uploaded"; rm -rf kind-logs; LEAK=1
+          fi
+          unset HV AT
+          [ "$LEAK" = 0 ]
       - name: upload the report, the audit file and the logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -49,6 +49,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
 # No default cluster: a script that changes a cluster must be told which one.
 [ -n "${CLUSTER:-}${KUBE_CONTEXT:-}" ] || { echo "ERROR: set CLUSTER (the kind cluster name) or KUBE_CONTEXT: there is no default cluster. Nothing was changed." >&2; exit 1; }
+# When both are set they must name the same cluster: kubectl and the platform installer use the context, kind uses the name.
+if [ -n "${CLUSTER:-}" ] && [ -n "${KUBE_CONTEXT:-}" ] && [ "$KUBE_CONTEXT" != "kind-$CLUSTER" ]; then
+  echo "ERROR: CLUSTER=$CLUSTER and KUBE_CONTEXT=$KUBE_CONTEXT name different clusters (the context of $CLUSTER is kind-$CLUSTER). Set one of them, or make them agree. Nothing was changed." >&2; exit 1
+fi
 CLUSTER=${CLUSTER:-${KUBE_CONTEXT#kind-}}
 KUBE_CONTEXT=${KUBE_CONTEXT:-kind-$CLUSTER}
 KUBECTL=${KUBECTL:-kubectl}
@@ -116,6 +120,9 @@ if [ "$BESIDE" = 1 ] && [ -z "${VALUES_FILE:-}" ]; then
   die "--beside-full-demo needs VALUES_FILE: the same list of files you installed the full demo with. Helm replaces the release values on every run, so a list that is missing would drop what it set. Nothing was changed."
 fi
 
+# Helm reads the release (and renders for --beside-full-demo): a missing helm must stop the install, never read as "no release".
+if [ "$SKIP_PLATFORM" = 0 ]; then command -v "$HELM" >/dev/null 2>&1 || die "helm is required (HELM=$HELM is not a command). Nothing was changed."; fi
+
 ctx_exists() { local c; c=$("${KC[@]}" config get-contexts -o name 2>/dev/null) || return 1; printf '%s\n' "$c" | grep -qx "$KUBE_CONTEXT"; }
 
 # ---- 0a. with the bank: the bank use case must be there (this script only reads it) ----------------------------------------------
@@ -128,43 +135,39 @@ if [ "$WITH_BANK" = 1 ]; then
 fi
 
 # ---- 0b. the release must not lose anything -----------------------------------------------------------------------------------------
-# The platform installer replaces the release values. Without --beside-full-demo this script installs the quick start plus this use case (plus the bank's
-# with --with-bank), so a release that has more than that would lose it (and, offline, every provider key is removed, so the model would become the stub).
-# Refuse, and say what would be lost.
-release_extras() { # prints what the existing release has beyond the quick start and this use case, one thing per line; fails when it cannot tell
-  local out
+# The platform installer replaces the release values on every run. This script composes the values it hands over (the quick start plus this use case, the quick
+# start plus the bank and this use case with --with-bank, or your own list plus values-full-demo.yaml). A release that holds a key path, or a named list entry,
+# that those values lack would lose it (and, offline, every provider key is removed, so the model would become the stub). So the user-supplied values of the
+# release are compared with the composed values as an ALLOWLIST: anything the release has that the composed values do not have is refused, and named. Keys the
+# platform installer sets itself (image tag, digest and repository, source hashes, the API server addresses, the scenario files, the service account issuer, the
+# skill reference, notify.requireReady) are not compared. It compares key paths and entry names, not values; a list of plain values counts as one path.
+release_values() { # prints the user-supplied values of the release as JSON, or nothing when there is no release; fails (stopping the install) when it cannot tell
+  local out err; err="$TMP/helm.err"
   ctx_exists || return 0   # no such context yet: the cluster is made below, nothing can be lost
-  if ! out=$("$HELM" get values "$RELEASE" -n "$RELEASE_NS" --kube-context "$KUBE_CONTEXT" -o json 2>&1); then
-    case "$out" in *"not found"*) return 0 ;; esac
-    echo "cannot read the values of the release $RELEASE in $KUBE_CONTEXT: $(printf '%s' "$out" | head -1)" >&2
+  if ! out=$("$HELM" get values "$RELEASE" -n "$RELEASE_NS" --kube-context "$KUBE_CONTEXT" -o json 2>"$err"); then
+    # only helm's own, exact line means "no such release"; any other failure (a missing command, a wrong storage driver, an unreachable cluster) stops the install
+    if [ "$(head -n 1 "$err" 2>/dev/null)" = "Error: release: not found" ]; then return 0; fi
+    echo "cannot read the values of the release $RELEASE in $KUBE_CONTEXT: $(head -n 1 "$err" 2>/dev/null | cut -c1-300)" >&2
     return 1
   fi
-  printf '%s' "$out" | jq -r --argjson bank "$WITH_BANK" '
-    ($bank == 1) as $b
-    | [ (if ((.schedules // []) | map(.name) - ["fleet-sweep"] - (if $b then ["deadline-sweep"] else [] end) | length) > 0 then "schedules" else empty end),
-      (if (.bridge.enabled // false) == true then "the Telegram bridge" else empty end),
-      (if ((.channels.kourier.enabled // false) == true) or (((.channels.bindings // []) | length) > 0) then "channels" else empty end),
-      (if (.notify.enabled // false) == true then "notify" else empty end),
-      (if (.memory.enabled // false) == true then "memory" else empty end),
-      (if (.diagnostics.enabled // false) == true then "diagnostics" else empty end),
-      (if (.mcp.virtual.codeMode.enabled // false) == true then "code mode on the shared tool server" else empty end),
-      (((.agents // []) | map(.name) - ["service-agent"] - (if $b then ["dispute-agent"] else [] end)) | if length > 0 then "agents: " + join(", ") else empty end),
-      (((.mcp.profiles // []) | map(.name) - ["lookup", "dealer"] - (if $b then ["disputes"] else [] end)) | if length > 0 then "tool profiles: " + join(", ") else empty end),
-      (((.mcp.servers // []) | map(.name) - ["osv"]) | if length > 0 then "tool servers: " + join(", ") else empty end),
-      (((.mcp.endpoints // []) | map(.name) - ["dealer-records"] - (if $b then ["records"] else [] end)) | if length > 0 then "endpoints: " + join(", ") else empty end),
-      (((.governance.a2a.callers // []) | map(.name) - ["quickstart-ask", "service-desk"] - (if $b then ["disputes-desk"] else [] end)) | if length > 0 then "gate callers: " + join(", ") else empty end)
-    ] | .[]'
+  printf '%s' "$out"
 }
-if [ "$SKIP_PLATFORM" != 1 ] && [ "$BESIDE" != 1 ]; then
-  EXTRAS=$(release_extras) || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
-  if [ -n "$EXTRAS" ]; then
-    die "the release $RELEASE in $KUBE_CONTEXT has more than the quick start: $(printf '%s' "$EXTRAS" | tr '\n' ';' | sed 's/;/; /g'). The platform installer would replace those values and drop them. Use a cluster of its own, add the agent to your install with: VALUES_FILE=\"<your files>\" CLUSTER=<its cluster> $0 --beside-full-demo, or, when the extra is the bank use case, run $0 --with-bank. Nothing was changed."
-  fi
-fi
+release_extras() { # release_extras <json file of the values this script will hand over>: prints the paths the release has and those values lack, one per line
+  local rel; rel=$(release_values) || return 1
+  [ -n "$rel" ] || return 0
+  printf '%s' "$rel" | jq -r --slurpfile exp "$1" '
+    def flat($pre):
+      if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
+      elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
+      else $pre end;
+    ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
+    | map(select(test("[.]image[.](tag|digest|repository)$|[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs|^[.]gateway[.]stubModel[.]scenarios[.]|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary|^[.]notify[.]requireReady$") | not))
+    | .[]'
+}
 
 # ---- 1. compose the values (local work only: nothing in the cluster has changed yet) --------------------------------------------
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-VALUES_COMPOSED="$TMP/equipment-values.yaml"
+VALUES_COMPOSED="$TMP/equipment-values.yaml"; VALUES_BASE="$TMP/your-values.yaml"
 SCENARIOS="$HERE/eval/scenario.json"
 SCN_KEY=scenario.json
 if [ "$SKIP_PLATFORM" != 1 ]; then
@@ -175,7 +178,6 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     # list and from the merged file. Only then is values-full-demo.yaml composed after it by compose-values.sh, without --later-wins: it joins the lists by
     # name and never drops an entry of yours, and a name or a security key that clashes is refused, and nothing is installed.
     cd "$ROOT"
-    VALUES_BASE="$TMP/your-values.yaml"
     command -v yq >/dev/null || die "yq (the Python wrapper) is required for --beside-full-demo"
     : > "$TMP/your-values.json"
     for f in $VALUES_FILE; do
@@ -200,6 +202,19 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
   else
     say "composing the values (components/quickstart/values.yaml and examples/use-cases/equipment/values.yaml)"
     "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+  fi
+fi
+
+# ---- 1b. the release (read only; nothing in the cluster has changed yet) ------------------------------------------------------------------
+if [ "$SKIP_PLATFORM" != 1 ]; then
+  if [ "$BESIDE" = 1 ]; then EXP_FILE="$VALUES_BASE"; else yq . "$VALUES_COMPOSED" > "$TMP/expected.json" || die "cannot read the composed values. Nothing was changed."; EXP_FILE="$TMP/expected.json"; fi
+  EXTRAS=$(release_extras "$EXP_FILE") || die "refusing to run the platform installer on a release I cannot read. Nothing was changed."
+  if [ -n "$EXTRAS" ]; then
+    if [ "$BESIDE" = 1 ]; then
+      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list does not have: $(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g'). The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files you installed with. Nothing was changed."
+    else
+      die "the release $RELEASE in $KUBE_CONTEXT has more than the quick start and this use case: $(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g'). The platform installer would replace those values and drop them. Use a cluster of its own, add the agent to your install with: VALUES_FILE=\"<your files>\" CLUSTER=<its cluster> $0 --beside-full-demo, or, when the extra is the bank use case, run $0 --with-bank. Nothing was changed."
+    fi
   fi
 fi
 
@@ -230,8 +245,12 @@ say "namespaces $NS and $MCPNS"
 "${KC[@]}" get namespace "$NS" >/dev/null 2>&1 || "${KC[@]}" create namespace "$NS" >/dev/null   # the labels (restricted pod security) come with the manifest below
 "${KC[@]}" get namespace "$MCPNS" >/dev/null 2>&1 || "${KC[@]}" create namespace "$MCPNS" >/dev/null   # the chart's header Secret reference needs the Secret before the chart is applied
 HAVE=0; ALL=1
-for s in "records-approvers:$NS" "records-approver-token:$NS" "records-mcp-expected:$NS" "$AUTH_SECRET:$MCPNS"; do
-  if "${KC[@]}" get secret "${s%%:*}" -n "${s##*:}" >/dev/null 2>&1; then HAVE=1; else ALL=0; fi
+# Only a NotFound answer means a Secret is absent. Any other error (a timeout, throttling, a restarted API server) stops the install before anything is
+# deleted or made again: a read error must never rotate the values.
+for sec in "records-approvers:$NS" "records-approver-token:$NS" "records-mcp-expected:$NS" "$AUTH_SECRET:$MCPNS"; do
+  if sec_out=$("${KC[@]}" get secret "${sec%%:*}" -n "${sec##*:}" -o name 2>&1); then HAVE=1
+  elif printf '%s' "$sec_out" | grep -q 'NotFound'; then ALL=0
+  else die "cannot read the Secret ${sec%%:*} in ${sec##*:}: $(printf '%s' "$sec_out" | head -n 1 | cut -c1-300). Nothing was deleted or made again."; fi
 done
 REGENERATED=0
 if [ "$ALL" = 1 ]; then

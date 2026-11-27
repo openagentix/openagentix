@@ -32,14 +32,15 @@
 # It never prints a token or a header value. Exit 1 when a check fails.
 # Env: KUBECTL, EQUIPMENT_AUDIT_SETTLE (default 6s), EQUIPMENT_CASE_TIMEOUT (default 300s), EQUIPMENT_OUT (a directory for the report and the audit file; default a
 #      temporary one, kept when EQUIPMENT_OUT is set), EQUIPMENT_USER_ID (default service:eval), EQUIPMENT_INSTALL_LOG (a file: checked for secret values too),
+#      EQUIPMENT_INSTALL_LOG2 (the log of the second install), EQUIPMENT_LIVE_LOG (this script's own log: checked for secret values too),
 #      EQUIPMENT_WITH_BANK=1 (the bank use case is installed on this cluster: the isolation checks run in both directions).
 set -u
 [ "${EQUIPMENT_LIVE:-0}" = 1 ] || { echo "equipment-live: set EQUIPMENT_LIVE=1 to run this against the current cluster (it is opt-in)"; exit 0; }
-K=${KUBECTL:-kubectl}
+KBASE=${KUBECTL:-kubectl}
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 UC=$ROOT/examples/use-cases/equipment
-CTX_NOW=$($K config current-context 2>/dev/null || true)
+CTX_NOW=$($KBASE config current-context 2>/dev/null || true)
 case "$CTX_NOW" in
   kind-*) ;;
   *) echo "equipment-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind context. Nothing was changed." >&2; exit 2;;
@@ -52,6 +53,9 @@ if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${EQUIPMENT_CI_CONTEXT:-}" != "$CTX_N
   echo "equipment-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and EQUIPMENT_CI_CONTEXT does not name this context. This script changes the cluster; do not run it on a cluster you use. Nothing was changed." >&2
   exit 2
 fi
+# Every call below names the context that was checked, so a change of the current context during the run (another shell, another install) cannot send an
+# order approval, a patch of the identity settings or a ClusterRoleBinding to another cluster.
+K="$KBASE --context=$CTX_NOW"
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; KNS=${KAGENT_NAMESPACE:-kagent}; GATE_NS=${GATE_NAMESPACE:-openagentix-gateway}; RNS=kestrel-records; DESK_NS=openagentix-system
 PROFILE=dealer; USER_ID=${EQUIPMENT_USER_ID:-service:eval}; EP=dealer-records; KBM=knowledge-dealer; AUTH_SECRET=dealer-records-mcp-auth
 WITH_BANK=${EQUIPMENT_WITH_BANK:-0}
@@ -74,7 +78,8 @@ restore_oidc() {
   OIDC_PATCHED=0
 }
 cleanup() {
-  rm -f "$TD/token"   # the gate token (60 minutes) never stays on disk, even when EQUIPMENT_OUT keeps the directory
+  # the gate token (60 minutes), the tool server tokens (10 minutes) and their header dumps never stay on disk, even when EQUIPMENT_OUT keeps the directory
+  rm -f "$TD/token" "$TD/tg" "$TD/ts" "$TD/tl" "$TD/tb" "$TD"/*.h "$TD"/*.h.* "$TD/secret.patterns"
   for p in $PF $REF $PFR $PFM $PFG $PFS $PFL $PFB; do kill "$p" 2>/dev/null; done
   $K delete pod egress-probe egress-control nettest -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
   $K delete pod egress-target -n default --ignore-not-found --wait=false >/dev/null 2>&1
@@ -252,18 +257,22 @@ kill $PFM 2>/dev/null; PFM=""
 echo "# the header value and the approver token are in no log, and the header value is in no object"
 HV=$($K get secret -n "$MCPNS" "$AUTH_SECRET" -o jsonpath='{.data.value}' | base64 -d); HRAW=${HV#Bearer }
 AT=$($K get secret -n "$RNS" records-approver-token -o jsonpath='{.data.token}' | base64 -d)
-printf '%s\n%s\n' "$HRAW" "$AT" > "$TD/secret.patterns"; unset HV HRAW AT
-[ "$(wc -l < "$TD/secret.patterns" | tr -d ' ')" = 2 ] && ok "two patterns to look for (the control is not empty)" || bad "the pattern file is not what was expected" "$(wc -l < "$TD/secret.patterns")"
+# the two values are kept in a shell variable and given to grep through a process substitution: they are never written to a file
+PATS=$(printf '%s\n%s' "$HRAW" "$AT"); unset HV HRAW AT
+[ "$(printf '%s\n' "$PATS" | grep -c .)" = 2 ] && ok "two patterns to look for (the control is not empty)" || bad "the pattern list is not what was expected" "$(printf '%s\n' "$PATS" | grep -c .)"
 LEAKS=0; WHERE=""
-scan() { local n; n=$(eval "$2" 2>/dev/null | grep -cF -f "$TD/secret.patterns"); if [ "$n" != 0 ]; then LEAKS=$((LEAKS+n)); WHERE="$WHERE $1($n)"; fi; }
+scan() { local n; n=$(eval "$2" 2>/dev/null | grep -cF -f <(printf '%s\n' "$PATS")); if [ "$n" != 0 ]; then LEAKS=$((LEAKS+n)); WHERE="$WHERE $1($n)"; fi; }
 for ns in "$MCPNS" toolhive-system "$RNS" "$GATE_NS" "$KNS" agentgateway-system ate-system openagentix-knowledge openagentix-system; do
-  for p in $($K get pods -n "$ns" -o name 2>/dev/null); do scan "$ns:$p" "$K logs -n $ns $p --all-containers --tail=-1"; done
+  for p in $($K get pods -n "$ns" -o name 2>/dev/null); do
+    scan "$ns:$p" "$K logs -n $ns $p --all-containers --tail=-1"
+    scan "$ns:$p (previous)" "$K logs -n $ns $p --all-containers --previous --tail=-1"
+  done
 done
 scan "objects" "$K get virtualmcpserver,mcpserverentry,mcpgroup,mcpexternalauthconfig,mcpoidcconfig,networkpolicy,configmap,agents.api.kagent.dev,agenttemplates.api.kagent.dev,remotemcpservers.kagent.dev -A -o yaml"
-[ -z "${EQUIPMENT_INSTALL_LOG:-}" ] || [ ! -f "$EQUIPMENT_INSTALL_LOG" ] || scan "install.log" "cat $EQUIPMENT_INSTALL_LOG"
+for f in "${EQUIPMENT_INSTALL_LOG:-}" "${EQUIPMENT_INSTALL_LOG2:-}" "${EQUIPMENT_LIVE_LOG:-}"; do [ -z "$f" ] || [ ! -f "$f" ] || scan "$f" "cat $f"; done
 scan "oa-eval report" "cat $TD/report.json"
-check "no header value and no approver token in any log, in any object, in the install log or in the report${WHERE:+: $WHERE}" "$LEAKS" 0
-rm -f "$TD/secret.patterns"
+check "no header value and no approver token in any log (current and previous container logs of ten namespaces), in any object, in the two install logs, in this script's own log so far or in the report${WHERE:+: $WHERE}" "$LEAKS" 0
+unset PATS
 
 # --- 9. isolation ---------------------------------------------------------------------------------------------------------------------------
 echo "# isolation"
@@ -275,6 +284,8 @@ check "the pod of the group's tool server holds the header Secret by reference (
 SA=$(jq -r '.items[0].spec.serviceAccountName // ""' <<<"$SHP")
 CAN=$($K auth can-i get "secret/$AUTH_SECRET" -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
 obs "kubectl auth can-i get secret/$AUTH_SECRET -n $MCPNS, as the shared tool server's ServiceAccount ($SA): '${CAN:-no answer}' (ADR 0026 A3 expects yes: the ToolHive operator gives every tool server read access to Secrets in the tools namespace; the header Secret is as safe as that namespace)"
+CANPOD=$($K auth can-i create pods -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
+check "the shared tool server's ServiceAccount cannot create pods in the tools namespace (so it cannot copy the labels that the records ingress policy admits)" "${CANPOD:-no answer}" no
 check "the records service does not listen for REST on the network: the REST port is on the pod's loopback (the pod's own spec sets no RECORDS_REST_ADDR)" "$($K get deployment records -n "$RNS" -o json | jq '[.spec.template.spec.containers[0].env[]|select(.name=="RECORDS_REST_ADDR")]|length')" 0
 $K delete pod nettest -n default --ignore-not-found >/dev/null 2>&1
 CODE=$($K run nettest -n default --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet --command -- curl -s -m 8 -o /dev/null -w '%{http_code}' "http://records.$RNS.svc.cluster.local:8080/healthz" 2>/dev/null | tail -1)

@@ -30,6 +30,9 @@ check "the context kind-openagentix (the full demo cluster) is refused outside G
 run EQUIPMENT_LIVE=1 EQUIPMENT_CI_CONTEXT=kind-openagentix FAKE_CTX=kind-openagentix; rc=$?
 check "EQUIPMENT_CI_CONTEXT cannot allow kind-openagentix: the name is refused outside GitHub Actions whatever the variable says" "[ $rc = 2 ] && grep -q 'full demo' '$TMP/out' && [ \"\$(wc -l < '$TMP/calls' | tr -d ' ')\" = 1 ]" "rc=$rc $(cat "$TMP/out")"
 check "the script restores the identity settings in the exit trap, and the trap is set" "grep -n 'restore_oidc' '$LIVE' | head -1 | grep -q . && grep -q '^trap cleanup EXIT' '$LIVE'"
+check "every kubectl call of the script names the context it checked (K carries --context)" "grep -q '^K=\"\$KBASE --context=\$CTX_NOW\"' '$LIVE' && ! grep -nE '^[^#]*(\\\$KBASE|kubectl) ' '$LIVE' | grep -v 'KBASE config current-context' | grep -v '^[0-9]*:K=' | grep -v 'KBASE=' | grep -v 'obs \"kubectl' | grep -q ."
+check "the leak patterns are never written to a file, and the cleanup removes the token files" "! grep -q '> *\"\$TD/secret' '$LIVE' && grep -q 'rm -f \"\$TD/token\" \"\$TD/tg\" \"\$TD/ts\" \"\$TD/tl\"' '$LIVE'"
+check "the leak scan covers previous container logs, both install logs and the script's own log" "grep -q -- '--previous' '$LIVE' && grep -q 'EQUIPMENT_INSTALL_LOG2' '$LIVE' && grep -q 'EQUIPMENT_LIVE_LOG' '$LIVE'"
 check "bash -n and shellcheck" "bash -n '$LIVE' && { ! command -v shellcheck >/dev/null || shellcheck -S warning '$LIVE'; }"
 
 echo; echo "$PASS passed, $FAIL failed"
