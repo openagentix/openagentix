@@ -130,6 +130,13 @@ check "no scenario calls a tool that could move money or send a letter" "! grep 
 check "every scenario that asks for approval first sets a route and drafts a letter" "jq -e 'all(.scenarios[] | select(any(.steps[]; .tool==\"request_approval\")); ([.steps[].tool] | index(\"set_route\")) < ([.steps[].tool] | index(\"draft_letter\")) and ([.steps[].tool] | index(\"draft_letter\")) < ([.steps[].tool] | index(\"request_approval\")))' '$SC' >/dev/null"
 check "request_approval is always the last step" "jq -e 'all(.scenarios[] | select(any(.steps[]; .tool==\"request_approval\")); .steps[-1].tool==\"request_approval\")' '$SC' >/dev/null"
 check "the scenario file holds no URL, address, token or credential" "! grep -Eqi 'https?://|@|bearer|password|token' '$SC'"
+helm template t "$CHART" -f "$QS" -f "$VALS" --set-file 'gateway.stubModel.scenarios.files.scenario\.json'="$SC" > "$T/bank-scn.yaml" 2> "$T/bank-scn.err"; SCN_RC=$?
+check "the scenario file is shipped through the chart contract (ADR 0026): quick start, bank values and --set-file render" "[ $SCN_RC = 0 ]" "$(cat "$T/bank-scn.err")"
+check "the chart ConfigMap stub-model-scenarios holds eval/scenario.json byte for byte" "[ \"\$(doc '$T/bank-scn.yaml' ConfigMap stub-model-scenarios | jq -j '.data[\"scenario.json\"]' | shasum -a 256 | cut -c1-64)\" = \"\$(cat '$SC' | shasum -a 256 | cut -c1-64)\" ]"
+check "the stub model Deployment reads the mounted directory and rolls on a change" "doc '$T/bank-scn.yaml' Deployment stub-model | jq -e '(.spec.template.spec.containers[0].env[0].value == \"/etc/stub-model/scenarios\") and (.spec.template.metadata.annotations | has(\"openagentix.io/scenarios-checksum\"))' >/dev/null"
+check "without the scenario file the bank render has no scenario ConfigMap (off by default)" "! grep -q 'stub-model-scenarios' '$T/bank.yaml'"
+check "install.sh does not patch the stub model or make a scenario ConfigMap any more" "! grep -Eq 'patch deployment|create configmap|bank-scenarios' '$HERE/install.sh'"
+check "the README ships the scenarios with STUB_SCENARIOS and says a run with them is scripted" "grep -q 'STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json' '$HERE/README.md' && grep -qi 'scripted' '$HERE/README.md'"
 CS="$HERE/eval/cases.yaml"
 yq -c . "$CS" > "$T/cases.json"
 check "the evaluation set has the three required cases and two more" "[ \"\$(jq '.cases | length' '$T/cases.json')\" = 5 ] && jq -e '[.cases[].id] | contains([\"duplicate-charge\",\"out-of-time-declined\",\"injected-instruction-refused\"])' '$T/cases.json' >/dev/null"

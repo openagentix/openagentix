@@ -2046,6 +2046,80 @@ eq "stub-model NetworkPolicy has no egress rule"       "$(q "$D" '.[]|select(.ki
 eq "stub-model sourceHash annotates the pod"           "$(q "$(docs --set gateway.stubModel.enabled=true --set-string gateway.stubModel.sourceHash=abc)" '.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")|.spec.template.metadata.annotations["openagentix.io/source-hash"]')" abc
 eq "stub-model off when the gateway is off"            "$(count "$(docs --set gateway.stubModel.enabled=true --set gateway.enabled=false)" "$SM")" 0
 
+echo "# stub model scenarios (ADR 0026, B): off by default, a ConfigMap, a mount, an env value, a checksum, refusals"
+SCD=$(mktemp -d)
+printf '{"scenarios":[{"name":"one"}]}' > "$SCD/bank.json"
+printf '{"scenarios":[{"name":"two"}]}' > "$SCD/other.json"
+printf '{"scenarios":[{"name":"one-changed"}]}' > "$SCD/bank-changed.json"
+SMD='.[]|select(.kind=="Deployment" and .metadata.name=="stub-model")'
+SMC="$SMD|.spec.template.spec.containers[0]"
+D0=$(docs --set gateway.stubModel.enabled=true)
+eq "scenarios off: no scenario ConfigMap"                "$(count "$D0" '.kind=="ConfigMap" and .metadata.name=="stub-model-scenarios"')" 0
+eq "scenarios off: no env value on the stub"             "$(q "$D0" "$SMC|has(\"env\")")" false
+eq "scenarios off: no volume and no mount on the stub"   "$(q "$D0" "$SMD|.spec.template.spec|has(\"volumes\")")/$(q "$D0" "$SMC|has(\"volumeMounts\")")" false/false
+eq "scenarios off: no pod annotations without a source hash" "$(q "$D0" "$SMD|.spec.template.metadata|has(\"annotations\")")" false
+eq "scenarios off: an explicit empty map renders byte for byte the same" "$(cmp -s <(helm template openagentix "$CHART" -n openagentix-system --set gateway.stubModel.enabled=true) <(helm template openagentix "$CHART" -n openagentix-system --set gateway.stubModel.enabled=true --set-json 'gateway.stubModel.scenarios.files={}') && echo same || echo different)" same
+eq "scenarios off: the default values have an empty files map" "$(yq -c '.gateway.stubModel.scenarios.files' "$CHART/values.yaml")" '{}'
+D1=$(docs --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank.json")
+eq "one file: one ConfigMap stub-model-scenarios in the gateway namespace" "$(count "$D1" '.kind=="ConfigMap" and .metadata.name=="stub-model-scenarios" and .metadata.namespace=="agentgateway-system"')" 1
+eq "one file: the key is the file name and the value is its text, unchanged" "$(q "$D1" '.[]|select(.kind=="ConfigMap" and .metadata.name=="stub-model-scenarios")|.data|keys|join(",")')/$(q "$D1" '.[]|select(.kind=="ConfigMap" and .metadata.name=="stub-model-scenarios")|.data["bank.json"]')" "bank.json/$(cat "$SCD/bank.json")"
+eq "one file: a read-only volume from that ConfigMap"    "$(q "$D1" "$SMD|.spec.template.spec.volumes|map(select(.name==\"scenarios\"))|.[0]|[.configMap.name,(.configMap.optional//false)]|join(\" \")")" "stub-model-scenarios false"
+eq "one file: mounted read-only at /etc/stub-model/scenarios" "$(q "$D1" "$SMC|.volumeMounts|map(select(.name==\"scenarios\"))|.[0]|[.mountPath,.readOnly]|join(\" \")")" "/etc/stub-model/scenarios true"
+eq "one file: STUB_MODEL_SCENARIOS names the directory"  "$(q "$D1" "$SMC|.env|map(select(.name==\"STUB_MODEL_SCENARIOS\"))|.[0].value")" /etc/stub-model/scenarios
+eq "one file: the checksum annotation is a SHA-256 (64 hex digits)" "$(q "$D1" "$SMD|.spec.template.metadata.annotations[\"openagentix.io/scenarios-checksum\"]" | /usr/bin/grep -cE '^[0-9a-f]{64}$')" 1
+eq "one file: the stub still has no egress and a read-only root" "$(q "$D1" "$SMC|.securityContext.readOnlyRootFilesystem")/$(q "$D1" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="stub-model")|(.spec.egress//[])|length')" true/0
+eq "one file: the Deployment, Service, PDB and NetworkPolicy are unchanged in number" "$(count "$D1" "$SM")" 4
+CK1=$(q "$D1" "$SMD|.spec.template.metadata.annotations[\"openagentix.io/scenarios-checksum\"]")
+CK1B=$(q "$(docs --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank.json")" "$SMD|.spec.template.metadata.annotations[\"openagentix.io/scenarios-checksum\"]")
+CKC=$(q "$(docs --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank-changed.json")" "$SMD|.spec.template.metadata.annotations[\"openagentix.io/scenarios-checksum\"]")
+eq "the checksum is the same for the same content"       "$([ "$CK1" = "$CK1B" ] && echo same || echo different)" same
+eq "the checksum changes when the content changes (the pod rolls)" "$([ "$CK1" != "$CKC" ] && echo changed || echo same)" changed
+D2=$(docs --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank.json" --set-file 'gateway.stubModel.scenarios.files.other\.json'="$SCD/other.json")
+eq "two files: one ConfigMap with both keys"             "$(q "$D2" '.[]|select(.kind=="ConfigMap" and .metadata.name=="stub-model-scenarios")|.data|keys|join(",")')" bank.json,other.json
+CK2=$(q "$D2" "$SMD|.spec.template.metadata.annotations[\"openagentix.io/scenarios-checksum\"]")
+eq "two files: a different checksum from one file"       "$([ "$CK2" != "$CK1" ] && echo different || echo same)" different
+D2S=$(docs --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/other.json" --set-file 'gateway.stubModel.scenarios.files.other\.json'="$SCD/bank.json")
+eq "two files: swapping the content between the names changes the checksum" "$([ "$(q "$D2S" "$SMD|.spec.template.metadata.annotations[\"openagentix.io/scenarios-checksum\"]")" != "$CK2" ] && echo changed || echo same)" changed
+eq "two files: the source hash annotation stays next to the checksum" "$(q "$(docs --set gateway.stubModel.enabled=true --set-string gateway.stubModel.sourceHash=abc --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank.json")" "$SMD|.spec.template.metadata.annotations|keys|join(\",\")")" "openagentix.io/scenarios-checksum,openagentix.io/source-hash"
+SCF='gateway.stubModel.scenarios.files'
+ERR=$(render_err --set gateway.stubModel.enabled=false --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank.json")
+eq "refused: files while the stub is off"                "$(/usr/bin/grep -c "$SCF has no effect while gateway.stubModel.enabled is false" <<<"$ERR")" 1
+ERR=$(render_err --set gateway.stubModel.enabled=true --set gateway.enabled=false --set-file 'gateway.stubModel.scenarios.files.bank\.json'="$SCD/bank.json")
+eq "refused: files while the gateway is off"             "$(/usr/bin/grep -c "$SCF has no effect" <<<"$ERR")" 1
+LONG63=$(printf 'a%.0s' $(seq 63)); LONG64=${LONG63}a
+for n in 'Bank.json' 'bank.txt' 'bank' '-bank.json' 'bank_one.json' '.json' 'bank.JSON' "$LONG64.json" 'a.b.json'; do
+  ERR=$(render_err --set gateway.stubModel.enabled=true --set-json "$SCF={\"$n\":\"{\\\"scenarios\\\":[]}\"}")
+  eq "refused: the file name '${n:0:20}'"                "$(/usr/bin/grep -c "$SCF: the file name \"$n\" is not allowed" <<<"$ERR")" 1
+done
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-json "$SCF={\"$LONG63.json\":\"{\\\"scenarios\\\":[]}\"}")
+eq "allowed: a 63 character name before the dot"         "$ERR" ""
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-json "$SCF={\"b.json\":\"{\\\"scenarios\\\":[]}\"}")
+eq "allowed: a one character name"                       "$ERR" ""
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-json "$SCF={\"bank.json\":5}")
+eq "refused: a value that is not a string"               "$(/usr/bin/grep -c "$SCF.bank.json must be a string with the JSON text of a scenario file" <<<"$ERR")" 1
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-json "$SCF={\"bank.json\":{\"scenarios\":[]}}")
+eq "refused: a YAML map instead of JSON text"            "$(/usr/bin/grep -c "$SCF.bank.json must be a string" <<<"$ERR")" 1
+printf 'nope' > "$SCD/bad.json"; printf '[1,2]' > "$SCD/array.json"; printf '"text"' > "$SCD/scalar.json"; printf '{"other":[]}' > "$SCD/noscen.json"; printf '{"scenarios":{"a":1}}' > "$SCD/mapscen.json"; printf '{"scenarios":"x"}' > "$SCD/strscen.json"; printf '' > "$SCD/empty.json"
+for f in bad array scalar empty; do
+  ERR=$(render_err --set gateway.stubModel.enabled=true --set-file "gateway.stubModel.scenarios.files.$f\\.json=$SCD/$f.json")
+  eq "refused: $f.json does not parse as a JSON object"  "$(/usr/bin/grep -c "$SCF.$f.json is not a JSON object" <<<"$ERR")" 1
+done
+for f in noscen mapscen strscen; do
+  ERR=$(render_err --set gateway.stubModel.enabled=true --set-file "gateway.stubModel.scenarios.files.$f\\.json=$SCD/$f.json")
+  eq "refused: $f.json has no scenarios list"            "$(/usr/bin/grep -c "$SCF.$f.json has no \"scenarios\" list" <<<"$ERR")" 1
+done
+bigfile() { { printf '{"scenarios":[],"pad":"'; head -c $(($2-25)) /dev/zero | tr '\0' a; printf '"}'; } > "$SCD/$1"; }   # bigfile NAME TOTAL-BYTES
+bigfile max.json 262144
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.max\.json'="$SCD/max.json")
+eq "allowed: exactly 256 KiB in total ($(wc -c < "$SCD/max.json" | tr -d ' ') bytes)" "$ERR" ""
+bigfile over.json 262145
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.over\.json'="$SCD/over.json")
+eq "refused: one byte over 256 KiB"                      "$(/usr/bin/grep -c "$SCF hold 262145 bytes, more than the limit of 262144 (256 KiB)" <<<"$ERR")" 1
+bigfile half1.json 140000; bigfile half2.json 140000
+ERR=$(render_err --set gateway.stubModel.enabled=true --set-file 'gateway.stubModel.scenarios.files.half1\.json'="$SCD/half1.json" --set-file 'gateway.stubModel.scenarios.files.half2\.json'="$SCD/half2.json")
+eq "refused: two files that are over 256 KiB together"   "$(/usr/bin/grep -c "$SCF hold 280000 bytes" <<<"$ERR")" 1
+rm -rf "$SCD"
+
 echo "# quick start profile (components/quickstart/values.yaml)"
 QS="$CHART/../../components/quickstart/values.yaml"
 D=$(docs -f "$QS")
