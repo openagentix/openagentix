@@ -87,7 +87,7 @@ image_digest(){
   printf '%s\n' "$d"
 }
 # images_render_check <rendered documents, one JSON per line> [<built path>...]: the rule for platform images on remote (ADR 0022), run on the
-# final render before helm upgrade. For the images of the eight installer-built paths: an unqualified name (no dot or port in the first part,
+# final render before helm upgrade. For the images of the nine installer-built paths: an unqualified name (no dot or port in the first part,
 # so Docker Hub) is refused; with IMAGE_REGISTRY every one must be under it; an image the installer built must have a digest; an image the
 # operator supplies by tag is allowed with a warning. Errors and warnings go to stderr; returns 1 on an error.
 images_render_check(){
@@ -112,7 +112,7 @@ images_render_check(){
       | (if .kind=="CronJob" and .metadata.labels["openagentix.io/schedule"]!=null then ["scheduling", .spec.jobTemplate.spec.template.spec.containers[0].image]
          elif .kind=="Deployment" then
            ({"telegram-bridge":"bridge","stub-model":"gateway.stubModel","kb":"knowledge.kb","notify":"notify","a2a-gate":"governance.a2a",
-             "openagentix-control-plane":"controlPlane","openagentix-console":"console"}[.metadata.name]) as $p
+             "openagentix-control-plane":"controlPlane","openagentix-console":"console","cluster-read":"diagnostics"}[.metadata.name]) as $p
            | if $p then [$p, .spec.template.spec.containers[0].image] else empty end
          else empty end) | select(.[1]!=null) | @tsv' <<<"$rendered" | sort -u)
   # every image the installer built must run in a rendered workload: a renamed Deployment or another container position must not skip the checks above

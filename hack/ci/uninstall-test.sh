@@ -23,6 +23,7 @@ EOS
 cat > "$D/bin/helm" <<EOS
 #!/usr/bin/env bash
 echo "helm \$*" >> "$D/calls"
+case "\$*" in *"get manifest"*) [ -z "\${FAKE_MANIFEST:-}" ] || cat "\$FAKE_MANIFEST"; exit 0;; esac
 case "\$*" in *" status "*|"status "*) exit 1;; esac
 exit 0
 EOS
@@ -69,4 +70,31 @@ t "remote: every helm call names KUBE_CONTEXT" "$(calls | grep '^helm ' | grep -
 t "remote: no cluster delete is attempted (no kind, k3d, docker, gcloud)" "$(calls | grep -cE '^(kind|k3d|docker|gcloud) ')" 0
 t "remote: removes the opt-in node-settings namespace (privileged DaemonSet) on that context" "$(calls | grep -c "^kubectl --context=$R delete namespace openagentix-node-settings --ignore-not-found")" 1
 t "remote: prints the cloud teardown reminder" "$(grep -c 'load balancers and disks' <<<"$OUT")" 1
+echo "# diagnostics (cluster-read, ADR 0025): the two bearer Secrets go with PURGE_SECRETS=1 only"
+cat > "$D/manifest.yaml" <<'YAML'
+---
+apiVersion: toolhive.stacklok.dev/v1beta1
+kind: MCPServerEntry
+metadata: {name: cluster-read, namespace: mcp-tools}
+spec:
+  groupRef: {name: diagnostics}
+  headerForward:
+    addHeadersFromSecret:
+      - {headerName: Authorization, valueSecretRef: {name: diagnostics-bearer-cluster-read, key: authorization}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cluster-read, namespace: openagentix-diagnostics}
+spec:
+  template:
+    spec:
+      volumes:
+        - {name: bearer, secret: {secretName: cluster-read-bearer}}
+YAML
+OUT=$(u FAKE_CONTEXTS="kind-openagentix" FAKE_MANIFEST="$D/manifest.yaml")
+t "no purge: no Secret is deleted" "$(calls | grep -c ' delete secret ')" 0
+OUT=$(u FAKE_CONTEXTS="kind-openagentix" FAKE_MANIFEST="$D/manifest.yaml" PURGE_SECRETS=1)
+t "PURGE_SECRETS=1: the entry's header Secret in the tools namespace is deleted" "$(calls | grep -c 'delete secret -n mcp-tools diagnostics-bearer-cluster-read --ignore-not-found')" 1
+t "PURGE_SECRETS=1: the server's own Secret is deleted" "$(calls | grep -c 'delete secret -n openagentix-diagnostics cluster-read-bearer --ignore-not-found')" 1
+t "the namespace openagentix-diagnostics is not deleted" "$(calls | grep -c 'delete namespace openagentix-diagnostics')" 0
 exit $F
