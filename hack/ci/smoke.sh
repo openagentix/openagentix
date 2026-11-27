@@ -165,6 +165,15 @@ if [ "${SMOKE_BYO:-0}" = 1 ]; then
     || { bad "echo-go could not list the profile's tools" "$(printf '%s' "$TOOLS" | cut -c1-300)"
          $K logs -n mcp-tools -l toolhive-name=tools-lookup-workload --tail=400 2>&1 | grep -v '"AUDIT"\|cache sync' | tail -20 | cut -c1-400 | sed 's/^/      workload vMCP log: /'
          $K logs -n "$WNS" -l openagentix.io/agent=echo-go --tail=10 2>&1 | cut -c1-300 | sed 's/^/      echo-go log: /'; }
+  # One tool CALL through the workload variant, with the agent's own pod-bound token. The policy of a profile server is an allow list (call_tool on the profile's
+  # tools, list_tools), and in the workload variant every permit carries the pod-bound condition. The agent sends empty arguments: a real answer of the tool (its own
+  # argument error) proves that the policy let the call through; a tool the profile does not list must be refused.
+  CALL=$(hack/ask.sh echo-go "/call osv_query_vulnerability" 2>&1); echo "      /call osv_query_vulnerability answered: $(printf '%s' "$CALL" | tr '\n' ' ' | cut -c1-300)"
+  if grep -q 'call osv_query_vulnerability: ' <<<"$CALL" && ! grep -q 'denied' <<<"$CALL"; then ok "echo-go called the profile's tool through the workload tool server (the allow list lets a listed call through for the pod-bound token)"
+  else bad "echo-go could not call the profile's tool through the workload tool server" "$(printf '%s' "$CALL" | cut -c1-300)"; fi
+  CALL=$(hack/ask.sh echo-go "/call osv_get_vulnerability" 2>&1); echo "      /call osv_get_vulnerability answered: $(printf '%s' "$CALL" | tr '\n' ' ' | cut -c1-300)"
+  if grep -q 'call osv_get_vulnerability: refused' <<<"$CALL"; then ok "echo-go's call of a tool that its profile does not list was refused"
+  else bad "echo-go's call of a tool that its profile does not list was not refused" "$(printf '%s' "$CALL" | cut -c1-300)"; fi
   # The identity, from outside: the port-forward goes around network policy on purpose, so only the token decides here.
   VPF=$((20000 + RANDOM % 20000)); $K port-forward -n mcp-tools svc/vmcp-tools-lookup-workload "$VPF:4483" >/dev/null 2>&1 & VPID=$!; sleep 3
   # The positive control of this flow is the /tools answer above: the agent ran the same initialize, initialized and tools/list with its
