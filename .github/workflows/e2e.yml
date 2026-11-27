@@ -23,6 +23,9 @@ on:
       - hack/ci/bank-audit-tools.jq
       - examples/use-cases/bank/**
       - examples/use-cases/records/**
+      - hack/ci/equipment-live.sh
+      - hack/ci/equipment-audit-tools.jq
+      - examples/use-cases/equipment/**
       - hack/ci/phases.sh
       - hack/demo.sh
       - hack/ask.sh
@@ -40,6 +43,14 @@ on:
         description: 'Run the live check of mcp.endpoints (ADR 0026, slice 2) instead of the profiles: two tiny endpoints, then the quick start plus hack/ci/endpoints-ci-values.yaml'
         type: boolean
         default: false
+      equipment:
+        description: 'Run the live proof of the equipment use case on mcp.endpoints (ADR 0026, issue #229) instead of the profiles: the quick start plus the use case, the stub model with its scenarios, real agent sessions through the A2A gate, tools/oa-eval, the events and the approver path'
+        type: boolean
+        default: false
+      equipment_with_bank:
+        description: 'Like equipment, but the bank use case is installed first and the equipment use case is added with --with-bank, so the isolation of the two tool sets is checked in both directions'
+        type: boolean
+        default: false
       bank:
         description: 'Run the live proof of the bank use case on mcp.endpoints (ADR 0026, slice 5, issue #229) instead of the profiles: the quick start plus the use case, the stub model with its scenarios, real agent sessions through the A2A gate, tools/oa-eval, the approver path'
         type: boolean
@@ -55,7 +66,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.equipment && !inputs.equipment_with_bank) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -412,6 +423,116 @@ jobs:
             bank-live.log
             install.log
             install2.log
+            kind-logs
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Opt-in (workflow_dispatch with the input `equipment` or `equipment_with_bank`; EQUIPMENT_LIVE=1 for the script): the equipment use case on mcp.endpoints through
+  # REAL agent sessions (ADR 0026, issue #229). examples/use-cases/equipment/install.sh makes a kind cluster of its own, starts the records service and its Secrets BEFORE
+  # the platform values, installs the quick start with the use case values and the stub model scenarios (no key, no token), and loads the knowledge base. It runs twice, to
+  # show that the scenarios stay. With `equipment_with_bank` the bank use case is installed first on the same cluster and the equipment use case is added with --with-bank.
+  # hack/ci/equipment-live.sh asks the service agent about the cases through the A2A gate, runs tools/oa-eval, sends the events and walks the approver path with ctl.sh, and
+  # checks the isolation of the endpoint. The run is scripted by the stub model: it proves the wiring, not a model.
+  e2e-equipment:
+    name: e2e (equipment, mcp.endpoints)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.equipment || inputs.equipment_with_bank) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: tools/oa-eval/go.mod
+          cache: true
+          cache-dependency-path: tools/oa-eval/go.sum
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install the bank use case first (only with equipment_with_bank)
+        if: ${{ inputs.equipment_with_bank }}
+        env:
+          CLUSTER: oa-equipment-demo
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          examples/use-cases/bank/install.sh 2>&1 | tee install-bank.log
+      - name: install (the records service first, then the quick start plus the equipment values, the stub model with the scenarios, no key, no token)
+        env:
+          CLUSTER: oa-equipment-demo
+          AGENT_WAIT: 300s
+          WITH_BANK_FLAG: ${{ inputs.equipment_with_bank && '--with-bank' || '' }}
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2086
+          examples/use-cases/equipment/install.sh $WITH_BANK_FLAG 2>&1 | tee install.log
+      - name: install again with the same values (the scenarios and the credential stay)
+        env:
+          CLUSTER: oa-equipment-demo
+          AGENT_WAIT: 300s
+          WITH_BANK_FLAG: ${{ inputs.equipment_with_bank && '--with-bank' || '' }}
+        run: |
+          set -o pipefail
+          # shellcheck disable=SC2086
+          examples/use-cases/equipment/install.sh $WITH_BANK_FLAG 2>&1 | tee install2.log
+          grep -q 'Secrets exist' install2.log
+          ! grep -q 'created the Secrets' install2.log
+      - name: live check of the equipment use case
+        env:
+          EQUIPMENT_LIVE: "1"
+          EQUIPMENT_OUT: equipment-out
+          EQUIPMENT_INSTALL_LOG: install.log
+          EQUIPMENT_WITH_BANK: ${{ inputs.equipment_with_bank && '1' || '0' }}
+        run: |
+          set -o pipefail
+          hack/ci/equipment-live.sh 2>&1 | tee equipment-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Equipment use case on mcp.endpoints, real agent sessions (issue #229, ADR 0026)"
+            echo "The stub model played examples/use-cases/equipment/eval/scenario.json: the run is SCRIPTED, not the behaviour of a model."
+            echo '```'
+            cat equipment-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo "--- the records service (its log holds no secret value)"
+          kubectl get pods,svc,networkpolicy -n kestrel-records || true
+          kubectl logs -n kestrel-records deploy/records --tail=80 | cut -c1-400 || true
+          echo "--- the agent and what kagent says about its tool server"
+          kubectl get agents.api.kagent.dev service-agent -n kagent -o json | jq -c '.status' || true
+          kubectl get remotemcpserver -n kagent -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason,message}],tools:[.status.discoveredTools[]?.name]}' || true
+          echo "--- the vMCPs, the groups, the entries and their conditions"
+          kubectl get virtualmcpserver,mcpserverentry,mcpgroup -n mcp-tools || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}],backends:[.status.discoveredBackends[]?|{name,status}]}' || true
+          kubectl logs -n mcp-tools -l app=virtualmcpserver,toolhive-name=tools-dealer --all-containers --tail=150 | cut -c1-500 || true
+          kubectl get networkpolicy -n mcp-tools -o json | jq -c '.items[]|select(.metadata.name|test("egress"))|{name:.metadata.name,egress:(.spec.egress|length)}' || true
+          echo "--- kagent, the stub model and the gate"
+          kubectl logs -n kagent deploy/kagent-controller --tail=150 | cut -c1-500 || true
+          for p in $(kubectl get pods -n kagent -o name 2>/dev/null | grep -v kagent-controller); do echo "--- $p"; kubectl logs -n kagent "$p" --all-containers --tail=60 | cut -c1-500 || true; done
+          kubectl logs -n agentgateway-system deploy/stub-model --tail=60 | cut -c1-300 || true
+          kubectl logs -n openagentix-gateway -l app=a2a-gate --tail=60 | cut -c1-300 || true
+          kind export logs ./kind-logs --name oa-equipment-demo || true
+      - name: upload the report, the audit file and the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: equipment-live
+          path: |
+            equipment-out/report.json
+            equipment-out/audit.jsonl
+            equipment-out/eval.out
+            equipment-live.log
+            install.log
+            install2.log
+            install-bank.log
             kind-logs
           retention-days: 14
           if-no-files-found: ignore

@@ -1,0 +1,21 @@
+# Fault Code Handling Guide
+
+This guide is invented for a demonstration.
+
+How the service agent works one fault or one service request, in order.
+
+1. Read the case and the machine. A fault code that shows more than once in the last 90 days is a repeated fault. Say so in the diagnosis.
+2. Read the fault code. If it is safety critical, stop and send the case to a person.
+3. Read the service bulletins that match the fault code and the model.
+4. Read the telematics for the last 14 days. Look for a steady rise (a real fault) or single spikes (a sensor or a connector).
+5. Ask the record for the warranty decision. Do not decide it yourself.
+6. Find the part. If it is superseded, use the replacement. Ask the record for the stock at every dealer and take the nearest dealer that has the quantity.
+7. Record the diagnosis and create the work order.
+8. Draft the parts order, the warranty claim (only when the record says covered) and the customer notice.
+9. Hold a technician slot at the case's dealer.
+10. Ask the dealer manager for approval. Then stop.
+
+## Rules
+
+- The agent never orders a part, submits a claim, sends a notice or confirms a slot. The dealer manager approves first.
+- A fault code that is not in the table, or a case you cannot work, goes to a person. Say "needs human review".
