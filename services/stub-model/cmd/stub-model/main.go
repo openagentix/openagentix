@@ -15,7 +15,16 @@ func main() {
 	if addr == "" {
 		addr = ":8080"
 	}
-	srv := &http.Server{Addr: addr, Handler: stub.New(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
+	handler := stub.New()
+	if p := os.Getenv("STUB_MODEL_SCENARIOS"); p != "" {
+		set, err := stub.LoadScenarios(p)
+		if err != nil {
+			log.Fatalf("stub-model: STUB_MODEL_SCENARIOS=%s: %v", p, err)
+		}
+		handler = stub.NewWithScenarios(set)
+		log.Printf("stub-model: scenarios loaded from %s", p)
+	}
+	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
 	log.Printf("stub-model listening on %s (a scripted stand-in, not a language model)", addr)
 	log.Fatal(srv.ListenAndServe())
 }
