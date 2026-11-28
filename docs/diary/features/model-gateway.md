@@ -73,6 +73,7 @@ A request to `/v1/embeddings` without a key, or with a wrong key, gets 401.
 - Failover: a 402 from Gemini was retried to the stub model (`retry.attempt=2`).
 - Embedding routes answered with `user_id="kb"` and `user_id="memory"` in the access log.
 - Footprint: controller 36 MiB and proxy 18 MiB at idle (spike measurement).
+- Budget classes, live (run 46104644820 of the `e2e` workflow, input `budget_classes`; the stub model behind a recording stand-in; one kind node, one proxy replica; the policy is the one the chart rendered): a key of class `tight` (300 tokens an hour) was admitted 4 times, then got 429 with `x-ratelimit-limit: 300`; a key of class `wide` (100000) passed 30 of 30 calls while `tight` was refused; a key with no class got the default of 800 and was admitted 11 times; 10 more calls with the spent key were refused and none reached the model (the model saw 47 requests, the number of 200 answers). Parallel calls against a bucket with room for one more call: 5 of 5, 10 of 10 and 2 of 20 were admitted. The number varies from run to run: the ADR 0029 spike saw 20 of 20.
 
 ## Known limits
 
@@ -91,3 +92,41 @@ Calls from `assistant` carry about 8,000 prompt tokens and no call reported a ca
 Measured on a calm node, new conversation per run, 8,000-token prompts: cache read 6,635 tokens on every call (7 of 7, seven different users), a second call in the same turn reads 8,036 of 8,070, cost per call from the gateway's price catalog 0.000803 USD before and 0.000209 USD after (74% less). The model call time did not change (median 0.715 s before, 0.753 s after), so the gain is cost, not speed. The gateway keeps `cache_creation` and `cache_read` in its spans and metrics; kagent's own usage shows 0 because its chat adapter does not read the cached count. Read cache numbers from the gateway.
 
 Limits: an entry lives 5 minutes, and the call that writes it costs 25% more. kagent puts the recalled memories into the system prompt after the static text, so when a memory is recalled only the tools and the static head of the prompt are cached. The per-key token budget counts the full prompt: about 125 calls of 8,000 tokens used the 1,000,000 tokens per hour of one key, and the next answer was `429 Too Many Requests`.
+
+## Budget classes (2026-11-28, ADR 0029, slice 3)
+
+Every key had the same budget. A class gives some agents a smaller or a larger one, or one budget that several agents share. The decision and its limits are in [ADR 0029](../../decisions/0029-per-agent-token-budgets.md).
+
+How to set it, in the chart values:
+
+```yaml
+gateway:
+  policy:
+    tokenBudget: {tokens: 1000000, unit: Hours}   # the budget of a key with no class, as before
+    budgetClasses:
+      - {name: bank-agents, tokens: 300000, unit: Hours, per: agent}    # one bucket for each key of the class
+      - {name: fernvale-all, tokens: 500000, unit: Hours, per: class}   # one bucket shared by every key of the class
+agents:
+  - name: dispute-agent
+    budgetClass: bank-agents      # optional; it must name a class
+controlPlane:
+  policy:
+    budgetClasses:
+      definitions: ""             # the class of every AgentDefinition: empty, or a per: agent class
+```
+
+What the chart does:
+
+- It renders one conditional entry for each class in the one gateway policy, `apiKey.budget_class == "<name>"`, and puts the `tokenBudget` entry last, for a key with no class.
+- It adds the annotation `openagentix.io/budget-class` to the `ModelConfig` of an agent that names a class. `install.sh` reads it and writes `"budget_class":"<name>"` after `user_id` in the key entry of that agent (`hack/key-entry.sh`).
+- It refuses, at render time: more than 15 classes, a name that is not a DNS label of at most 40 characters, the name `default`, a duplicate name, `tokens` outside 1 to 2147483647, a `unit` other than `Hours`, `Minutes` or `Seconds`, a missing or unknown `per`, a field it does not know, an agent that names a class that does not exist, and a `definitions` class that does not exist or has `per: class`.
+- With no class set the render is the one it was, byte for byte (checked against the chart of `main`, see "What was proven").
+
+The `definitions` value is in the chart in this slice, and the admission guard uses it: the key ConfigMap of the controller may then hold one more optional member, `budget_class`, at the end of the metadata, and only that one class. The controller does not write the member yet. That is the next slice of the ADR, so today a definition still gets the default budget.
+
+Limits, from the ADR, stated plainly:
+
+- **Soft.** The count is per gateway replica: two replicas allow twice the class. A restart of the gateway empties every counter.
+- **Late.** Tokens are counted when a call ends. The call that crosses the limit passes, and so do all the calls that are in flight at that moment.
+- **Not a spend cap.** It counts tokens, not money, in windows of seconds, minutes or hours.
+- **A shared class is shared.** One agent of a `per: class` class can use the budget of the others. That is why `definitions` refuses one.
