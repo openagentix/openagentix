@@ -78,6 +78,9 @@ type GraphConfig struct {
 	TokensPerHour         int // budget for extraction calls, from the usage in responses
 	MaxHops               int // longest traversal queries may ask for, 1..3
 	PromptVersion         string
+	// Schemas turns on graph schemas (ADR 0030, section 5): the admin routes, the checks on fact set load, no extraction in a collection with a schema, and
+	// the tool kb_graph_schema. Needs Enabled.
+	Schemas bool
 }
 
 // Graph defaults.
@@ -283,6 +286,13 @@ func loadMetrics(getenv func(string) string, c *Config) error {
 }
 
 func loadGraph(getenv func(string) string, g *GraphConfig) error {
+	switch v := getenv("KB_GRAPH_SCHEMAS_ENABLED"); v {
+	case "", "false":
+	case "true":
+		g.Schemas = true
+	default:
+		return fmt.Errorf("KB_GRAPH_SCHEMAS_ENABLED: must be true or false, got %q", v)
+	}
 	switch v := getenv("KB_GRAPH_ENABLED"); v {
 	case "", "false":
 	case "true":
@@ -291,6 +301,9 @@ func loadGraph(getenv func(string) string, g *GraphConfig) error {
 		return fmt.Errorf("KB_GRAPH_ENABLED: must be true or false, got %q", v)
 	}
 	if !g.Enabled {
+		if g.Schemas {
+			return fmt.Errorf("KB_GRAPH_ENABLED=true is required when KB_GRAPH_SCHEMAS_ENABLED=true")
+		}
 		if g.ExtractModel != "" || g.GatewayURL != "" || g.APIKey != "" {
 			return fmt.Errorf("KB_GRAPH_ENABLED=true is required when other KB_GRAPH_* settings are set")
 		}
@@ -338,7 +351,7 @@ func (c Config) LogAttrs() []any {
 		"query_embed_timeout", c.QueryEmbedTimeout.String(),
 		"embeddings", c.EmbeddingsEnabled(), "embeddings_model", c.EmbeddingsModel, "embeddings_dim", c.EmbeddingsDim,
 		"metrics_addr", c.MetricsAddr, "graph", c.Graph.Enabled, "graph_extract_model", c.Graph.ExtractModel, "graph_prompt_version", c.Graph.PromptVersion,
-		"graph_window_chars", c.Graph.WindowChars, "graph_tokens_per_hour", c.Graph.TokensPerHour,
+		"graph_schemas", c.Graph.Schemas, "graph_window_chars", c.Graph.WindowChars, "graph_tokens_per_hour", c.Graph.TokensPerHour,
 		"access_file", c.AccessFile,
 	}
 }

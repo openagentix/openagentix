@@ -35,6 +35,9 @@ type Options struct {
 	// the graph methods. With false no graph table is created and those methods
 	// return store.ErrGraphDisabled.
 	Graph bool
+	// GraphSchemas creates the table of graph schemas (migration 7) and enables the schema methods and the checks that use them. It needs Graph. With
+	// false no table is created and the schema methods return store.ErrSchemasDisabled.
+	GraphSchemas bool
 }
 
 // Store implements store.Store on PostgreSQL.
@@ -43,6 +46,8 @@ type Store struct {
 	schema string // quoted identifier
 	dim    int
 	graph  bool
+	// schemas is true when the table of graph schemas exists (Options.GraphSchemas and graph).
+	schemas bool
 	// vecSchema is the quoted schema holding the pgvector extension. All
 	// vector types and operators are referenced qualified with it, so the
 	// extension can live in any schema (by default "public", shared by every
@@ -70,7 +75,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("database unreachable: %w", err)
 	}
-	s := &Store{pool: pool, schema: quoted, dim: o.VectorDim, graph: o.Graph}
+	s := &Store{pool: pool, schema: quoted, dim: o.VectorDim, graph: o.Graph, schemas: o.Graph && o.GraphSchemas}
 	if err := s.migrate(ctx, o.Schema); err != nil {
 		pool.Close()
 		return nil, err
@@ -122,6 +127,7 @@ func (s *Store) migrate(ctx context.Context, rawSchema string) error {
 		{4, "migrations/0004_graph_vector.sql", s.graph && s.dim > 0, nil, nil},
 		{5, "migrations/0005_graph_canonical.sql", s.graph, nil, s.backfillCanonNames},
 		{6, "migrations/0006_graph_factsets.sql", s.graph, nil, nil},
+		{7, "migrations/0007_graph_schemas.sql", s.schemas, nil, nil},
 	}
 	for _, st := range steps {
 		if !st.enabled {

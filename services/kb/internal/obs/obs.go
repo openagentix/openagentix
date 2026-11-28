@@ -17,7 +17,7 @@ const Prefix = "openagentix_kb"
 
 var (
 	methods      = []string{"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}
-	tools        = []string{"kb_search", "kb_get_document", "kb_list_collections", "kb_graph_search", "kb_graph_entity", "kb_graph_paths"}
+	tools        = []string{"kb_search", "kb_get_document", "kb_list_collections", "kb_graph_search", "kb_graph_entity", "kb_graph_paths", "kb_graph_schema"}
 	toolOutcomes = []string{"ok", "invalid", "not_found", "ambiguous", "timeout", "error"}
 	searchModes  = []string{"lexical", "vector", "hybrid"}
 	searchOut    = []string{"ok", "invalid", "timeout", "canceled", "error"}

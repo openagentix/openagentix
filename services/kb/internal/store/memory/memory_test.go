@@ -13,6 +13,7 @@ func TestConformance(t *testing.T) {
 		Vectors: true,
 		Dim:     3,
 		Graph:   true,
+		Schemas: true,
 	})
 }
 

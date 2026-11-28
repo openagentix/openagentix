@@ -44,7 +44,11 @@ func bad(format string, a ...any) error { return &FactSetError{fmt.Sprintf(forma
 // (see store.CanonicalForm) of an entity declared in the same fact set, which
 // keeps a fact set self-contained and its meaning independent of what else is in
 // the collection.
-func ValidateFactSet(in store.FactSet) (store.FactSet, error) {
+func ValidateFactSet(in store.FactSet) (store.FactSet, error) { return ValidateFactSetFor(in, false) }
+
+// ValidateFactSetFor is ValidateFactSet for a collection that has (withSchema) or has not a graph schema. With a schema the entity types are the
+// schema's, so only their form is checked here (lower case letters, digits and '_'); the schema itself is checked by the store, under the collection's lock.
+func ValidateFactSetFor(in store.FactSet, withSchema bool) (store.FactSet, error) {
 	if len(in.Entities) > MaxFactEntities {
 		return store.FactSet{}, fmt.Errorf("%w: %d entities, the limit is %d", ErrFactSetTooLarge, len(in.Entities), MaxFactEntities)
 	}
@@ -60,7 +64,11 @@ func ValidateFactSet(in store.FactSet) (store.FactSet, error) {
 			return store.FactSet{}, bad("entities[%d]: name must be valid text of 1 to %d characters without control characters", i, MaxNameRunes)
 		}
 		typ := strings.ToLower(strings.TrimSpace(e.Type))
-		if !isEntityType(typ) {
+		if withSchema {
+			if !IsSchemaTypeName(typ) {
+				return store.FactSet{}, bad("entities[%d]: type must be a type name of the schema (lower case letters, digits and '_')", i)
+			}
+		} else if !isEntityType(typ) {
 			return store.FactSet{}, bad("entities[%d]: type must be one of %s", i, strings.Join(EntityTypes, ", "))
 		}
 		key := store.MergeKey(name, typ, "")

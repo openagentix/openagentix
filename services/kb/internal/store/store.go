@@ -136,6 +136,10 @@ type Store interface {
 	// GraphStats counts the graph rows of a collection.
 	GraphStats(ctx context.Context, collection string) (GraphStats, error)
 
+	// ReplaceFactSet takes fs.SchemaSHA, the SHA-256 of the schema of the collection that fs was shaped for ("" for none). Under the collection's graph
+	// lock it reads the schema: a different one gives ErrSchemaMoved (the caller reads the schema again), and a fact set that does not fit the schema
+	// gives a *SchemaViolationError of Kind "factset", with nothing stored.
+	//
 	// ReplaceFactSet atomically replaces the fact set of fs.Collection and fs.ID
 	// (creating it if new) with the curated entities and relations of fs, which
 	// must be valid: every relation names entities declared in fs. Entities are
@@ -153,6 +157,20 @@ type Store interface {
 	// existed. Its entities are un-marked and removed only if unused.
 	DeleteFactSet(ctx context.Context, collection, id string) (bool, error)
 
+	// The graph schema of a collection (ADR 0030, section 5). All of them return ErrSchemasDisabled on a store opened without schema support.
+
+	// PutGraphSchema stores the schema of a collection (g is the parsed schema, body its canonical JSON, sha the SHA-256 of body). The same body again
+	// changes nothing and reports changed=false. Another body needs a higher version, else ErrSchemaVersion. Under the collection's graph lock and in
+	// one transaction, every fact already in the collection (each stored fact set and every extracted fact) is checked against g: a violation refuses the
+	// change with a *SchemaViolationError of Kind "change" and stores nothing.
+	PutGraphSchema(ctx context.Context, collection string, g GraphSchema, body []byte, sha string) (changed bool, err error)
+	// GetGraphSchema returns the schema of a collection, or ErrSchemaNotFound.
+	GetGraphSchema(ctx context.Context, collection string) (StoredSchema, error)
+	// DeleteGraphSchema removes the schema of a collection and reports whether it had one. The facts stay.
+	DeleteGraphSchema(ctx context.Context, collection string) (bool, error)
+	// ListGraphSchemas returns the schemas of the collections the scope allows, sorted by collection.
+	ListGraphSchemas(ctx context.Context, scope Scope) ([]StoredSchema, error)
+
 	// SyncExtractionJobs makes the extraction jobs of a document match specs. If
 	// the document already has exactly these jobs for promptVersion nothing
 	// changes and it returns 0. Otherwise the document's graph rows and jobs are
@@ -160,10 +178,12 @@ type Store interface {
 	SyncExtractionJobs(ctx context.Context, collection, documentID, promptVersion string, specs []JobSpec) (int, error)
 	// ClaimJob leases the oldest runnable pending job for the given duration. A
 	// job whose lease expired (its worker died) is claimable again. ok is false
-	// when nothing is runnable.
+	// when nothing is runnable. A job of a collection that has a graph schema is
+	// not runnable: it stays pending and resumes if the schema is deleted.
 	ClaimJob(ctx context.Context, lease time.Duration) (job Job, ok bool, err error)
 	// ApplyExtraction stores a result and marks its job done in one transaction.
-	// It returns ErrJobGone if the job is not pending any more.
+	// It returns ErrJobGone if the job is not pending any more, or if the
+	// collection has a graph schema (checked under the collection's graph lock).
 	ApplyExtraction(ctx context.Context, res ExtractionResult) error
 	// FailJob records a failed attempt. With final, or when it is not final but
 	// the caller decided so, the job becomes failed; otherwise it is retried

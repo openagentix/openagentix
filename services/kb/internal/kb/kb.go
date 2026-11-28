@@ -77,6 +77,7 @@ type Service struct {
 type GraphOptions struct {
 	WindowChars   int    // extraction window size in characters
 	PromptVersion string // jobs of another version are redone
+	Schemas       bool   // graph schemas are on (ADR 0030): a collection may have one, and then has curated facts only
 	MaxHops       int    // longest traversal graph queries accept, 1..store.MaxHops; zero means store.MaxHops
 	FanOut        int    // edges followed out of one entity by graph queries; zero means store.DefaultFanOut
 }
@@ -224,8 +225,15 @@ func (s *Service) put(ctx context.Context, collection, id string, in DocInput) (
 		return 0, err
 	}
 	if s.Graph != nil {
-		if _, err := graph.Enqueue(ctx, s.Store, collection, id, pieces, s.Graph.WindowChars, s.Graph.PromptVersion); err != nil {
-			return 0, fmt.Errorf("queueing graph extraction: %w", err)
+		// A collection with a graph schema has curated facts only (ADR 0030): no extraction is queued. The document is still chunked and searchable.
+		has, err := s.hasSchema(ctx, collection)
+		if err != nil {
+			return 0, err
+		}
+		if !has {
+			if _, err := graph.Enqueue(ctx, s.Store, collection, id, pieces, s.Graph.WindowChars, s.Graph.PromptVersion); err != nil {
+				return 0, fmt.Errorf("queueing graph extraction: %w", err)
+			}
 		}
 	}
 	return len(chunks), nil

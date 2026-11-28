@@ -77,7 +77,7 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	var st store.Store
 	switch cfg.Store {
 	case "postgres":
-		st, err = postgres.Open(ctx, postgres.Options{URL: cfg.DatabaseURL, Schema: cfg.DBSchema, VectorDim: embedder.Dimensions(), Graph: cfg.Graph.Enabled})
+		st, err = postgres.Open(ctx, postgres.Options{URL: cfg.DatabaseURL, Schema: cfg.DBSchema, VectorDim: embedder.Dimensions(), Graph: cfg.Graph.Enabled, GraphSchemas: cfg.Graph.Schemas})
 		if err != nil {
 			return fmt.Errorf("postgres store: %w", err)
 		}
@@ -94,7 +94,7 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 		Metrics: m,
 	}
 	if cfg.Graph.Enabled {
-		svc.Graph = &kb.GraphOptions{WindowChars: cfg.Graph.WindowChars, PromptVersion: cfg.Graph.PromptVersion, MaxHops: cfg.Graph.MaxHops}
+		svc.Graph = &kb.GraphOptions{WindowChars: cfg.Graph.WindowChars, PromptVersion: cfg.Graph.PromptVersion, MaxHops: cfg.Graph.MaxHops, Schemas: cfg.Graph.Schemas}
 		extractor, err := graph.NewGateway(graph.GatewayConfig{
 			BaseURL: cfg.Graph.GatewayURL, Model: cfg.Graph.ExtractModel, APIKey: string(cfg.Graph.APIKey),
 			Limits: graph.Limits{MaxEntities: cfg.Graph.MaxEntitiesPerChunk, MaxRelations: cfg.Graph.MaxRelationsPerWindow},

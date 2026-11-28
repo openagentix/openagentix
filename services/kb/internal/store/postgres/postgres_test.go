@@ -44,7 +44,7 @@ func openAt(t *testing.T, url string, dim int, graph bool) (*Store, string) {
 	schema := randomSchema()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	s, err := Open(ctx, Options{URL: url, Schema: schema, VectorDim: dim, Graph: graph})
+	s, err := Open(ctx, Options{URL: url, Schema: schema, VectorDim: dim, Graph: graph, GraphSchemas: graph})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -63,13 +63,13 @@ func openAt(t *testing.T, url string, dim int, graph bool) (*Store, string) {
 func TestConformanceLexical(t *testing.T) {
 	testURL(t)
 	url := testURL(t)
-	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openAt(t, url, 0, true); return s }, Graph: true})
+	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openAt(t, url, 0, true); return s }, Graph: true, Schemas: true})
 }
 
 func TestConformanceHybrid(t *testing.T) {
 	testURL(t)
 	url := testURL(t)
-	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openAt(t, url, 3, true); return s }, Vectors: true, Dim: 3, Graph: true})
+	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openAt(t, url, 3, true); return s }, Vectors: true, Dim: 3, Graph: true, Schemas: true})
 }
 
 func TestMigrationsAreIdempotent(t *testing.T) {

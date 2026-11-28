@@ -21,6 +21,8 @@ type Factory struct {
 	Dim     int
 	// Graph reports that the stores support the knowledge-graph methods.
 	Graph bool
+	// Schemas reports that the stores were opened with graph schema support (needs Graph).
+	Schemas bool
 }
 
 func ch(texts ...string) []store.Chunk {
@@ -387,6 +389,9 @@ func Run(t *testing.T, f Factory) {
 
 	if f.Graph {
 		runGraph(t, f, run)
+	}
+	if f.Graph && f.Schemas {
+		runSchemas(t, f, run)
 	}
 	if !f.Vectors {
 		return
