@@ -128,6 +128,7 @@ if [ "\$1" = upgrade ]; then n=0; prev=""; for a in "\$@"; do [ "\$prev" = -f ] 
   "$REAL_HELM" template "\${a[@]}" | yq -r 'select(.!=null)|(.spec.template.spec.containers[]?.image, .spec.jobTemplate.spec.template.spec.containers[]?.image)' | sort -u > "$RT/rendered-images"
   exit "\${FAKE_HELM_UPGRADE:-1}"
 fi
+[ "\$1 \$2" = "get values" ] && { echo "Error: release: not found" >&2; exit 1; }   # a first install: no release (the check of removed values, issue #212, reads it)
 [ "\$1 \$2" = "get manifest" ] && [ "\${FAKE_HELM_UPGRADE:-1}" = 0 ] && exit 0   # after a good upgrade: an empty manifest
 exit 1
 EOS

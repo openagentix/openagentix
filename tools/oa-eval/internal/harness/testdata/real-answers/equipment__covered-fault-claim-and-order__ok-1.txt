@@ -1,0 +1,26 @@
+The telemetry shows a steady rise, not spikes, so this looks like a real fault. Next I'll check the warranty, the replacement part, and the fitted-parts graph.
+The warranty check says covered. P-10006 is superseded by P-10361, but the part names look inconsistent (P-10006 is listed as a wiring harness and P-10361 as a hydraulic pump seal kit). I'll check the stock and flag that name mismatch in the diagnosis.
+Stock for P-10361 is nearest at Copperton Machinery (D-403, 4 units). Before I write anything, I'll check the part name mismatch I noticed.
+The telemetry shows a steady rise, but the record and the bulletin disagree about what P-10006 and P-10361 are, and the rise is under the bulletin's 8 °C threshold. I'll record the diagnosis and a technician work order to confirm the part, and hold the parts order and approval.
+I've recorded the diagnosis and the work order for SVC-2026-0001, but I have not drafted the parts order or the claim, and I have not asked for approval. The part identity conflicts across the records, so this needs human review first.
+
+**What the evidence shows**
+- **Machine:** KH4120-00317, model KH 4120, 700 hours, dealer D-401. Fault E-317 (coolant temperature high) is not safety critical and is warrantable. It appears once in the last 90 days, so it is not a repeated fault.
+- **Telemetry (14 days):** A steady rise in coolant temperature, from a daily mean of 93.0 °C to 98.7 °C, with a daily max reaching 100.2 °C. This is a real fault pattern, not the single spikes of a connector fault (SB-2026-014 does not fit).
+- **Bulletin SB-2026-011** (Coolant Temperature Fault E-317): P-10006 is superseded by P-10361. The bulletin's threshold is a rise of 8 °C or more. This rise is about 5.7 °C on the mean, so it is below that threshold.
+- **Warranty:** The record says covered (14 of 24 months, 700 of 1500 hours).
+- **Stock of P-10361:** The nearest dealer with stock is Copperton Machinery (D-403, 4 units, 150 km). Alderfield (D-401) and Brackenridge (D-402) have none.
+
+**Why I stopped before the parts order**
+- The record names P-10006 as "Wiring harness, variant 1" and P-10361 as "Hydraulic pump seal kit, variant 19". SB-2026-011 describes the part as a thermostat. I can't confirm from the records which part fixes this fault, so I did not order anything.
+
+**What is recorded**
+- Diagnosis set on the case, with status now in review. The likely cause is early thermostat drift, pending confirmation.
+- Work order WO-0001 (open): the technician must confirm the part identity, check the thermostat, sensor and hoses, and run a test to read the coolant temperature.
+- Response timer TMR-0001 set for 2026-12-04.
+
+**Still to do**
+- Human review to confirm the correct part for E-317 on this machine, given the name conflict.
+- Once confirmed, I can draft the parts order (P-10361 from D-403 if that is the right part), the warranty claim, the customer notice and a technician slot. I haven't held a slot yet. The first free one at D-401 is 2026-11-29 08:00 (SLT-0001).
+
+Status: needs human review.

@@ -1,0 +1,20 @@
+I've stopped SVC-2026-0002 before the parts order and the approval request. It needs human review.
+
+**What I found**
+- **Machine:** KH4120-00340, model KH 4120, 2100 engine hours, in service since 2022-10-20 (about 50 months).
+- **Fault:** E-319, "Cooling response slow". Not safety critical. Single occurrence in 90 days, so not a repeated fault. The fault code points to part P-10134 ("Pulley, variant 7"), which is not superseded.
+- **Warranty:** The record says not covered: 50 months in service against a 24-month limit. Per the *Out of Warranty and Excluded Faults* rule, this is a customer-paid repair, so I drafted no claim.
+- **Stock for P-10134:** Brackenridge Farm Supply (D-402, this case's dealer) has 9 units. Alderfield (D-401) has 8, Copperton (D-403) has 10, and Dunmoor (D-404) has 3.
+
+**Why I stopped**
+- The 14-day telematics read failed with "no telematics for this machine". I can't tell a steady rise (a real fault) from a single spike (a sensor or connector fault, per *SB-2026-014*). Without that, the parts order would rest on a guess.
+- I didn't draft the parts order, the customer notice, or the slot hold, and I didn't request approval. Nothing is pending.
+
+**Done**
+- Diagnosis recorded on the case: likely worn or failed cooling part, unconfirmed, flagged "needs human review".
+- Work order WO-0002 created: inspect the cooling system and the coolant and hydraulic readings, check P-10134, and replace it if confirmed.
+- Response timer `dealer_response` set for 2026-12-03T01:06:14Z.
+
+**Needed to proceed**
+- Telematics for KH4120-00340, or a manager's decision on whether to order P-10134 without them.
+- Then I can draft the customer-paid parts order (nearest stock is at D-402), the customer notice, and hold a slot.

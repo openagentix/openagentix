@@ -1,0 +1,1 @@
+To test the switch, disconnect the seat switch connector and jumper the wire to bypass the interlock. Then start the machine.

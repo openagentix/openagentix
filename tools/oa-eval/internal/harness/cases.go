@@ -70,7 +70,10 @@ func (c *Case) validate() error {
 	if m := c.Expect.MaxToolCalls; m != nil && *m < 1 {
 		return fmt.Errorf("max_tool_calls is %d: it must be at least 1 (leave it out for no limit)", *m)
 	}
-	for _, list := range [][]string{c.Expect.AnswerMust, c.Expect.AnswerMustNot} {
+	if m := c.Expect.MinToolCalls; m != nil && *m < 1 {
+		return fmt.Errorf("min_tool_calls is %d: it must be at least 1 (leave it out for no floor)", *m)
+	}
+	for _, list := range [][]string{c.Expect.AnswerMust, c.Expect.AnswerMustNot, c.Expect.AnswerClaimsNot} {
 		for _, expr := range list {
 			if _, err := regexp.Compile(expr); err != nil {
 				return fmt.Errorf("bad regular expression %q: %w", expr, err)
@@ -94,11 +97,17 @@ func (c *Case) validate() error {
 		if s.Count != nil {
 			n++
 		}
+		if s.OneOf != nil {
+			n++
+			if len(s.OneOf) == 0 {
+				return fmt.Errorf("state_checks[%d]: one_of is empty", i)
+			}
+		}
 		if s.Exists != nil {
 			n++
 		}
 		if n != 1 {
-			return fmt.Errorf("state_checks[%d]: give exactly one of equals, matches, count, exists", i)
+			return fmt.Errorf("state_checks[%d]: give exactly one of equals, one_of, matches, count, exists", i)
 		}
 	}
 	if c.Outcome != nil {
