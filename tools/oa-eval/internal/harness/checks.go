@@ -238,11 +238,15 @@ func hasUndeniedMatch(expr, ans string) bool {
 
 // stateChecks reads the system of record after the run. The values are not copied into the detail (they may be
 // personal data); the detail says what was wrong.
-func stateChecks(ctx context.Context, hc *http.Client, e Expect, base, tokenFile string) []Check {
+func stateChecks(ctx context.Context, hc *http.Client, e Expect, base, tokenFile, answer string) []Check {
 	var out []Check
 	tok, tokErr := readToken(tokenFile)
 	for i, s := range e.StateChecks {
 		name := fmt.Sprintf("state_checks[%d]", i)
+		if s.WhenAnswer != "" && !hasUndeniedMatch(s.WhenAnswer, answer) {
+			out = append(out, Check{Name: name, Pass: true, Detail: "not applied: the answer does not make the claim of when_answer (no match, or only in a denying clause)"})
+			continue
+		}
 		if base == "" {
 			out = append(out, Check{Name: name, Detail: "no state base URL given"})
 			continue

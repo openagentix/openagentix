@@ -16,7 +16,7 @@ A combine reports fault `E-317` through telematics, or a dealer's front desk sen
 6. records the diagnosis, creates the work order, drafts the parts order, the warranty claim (only when the record says covered) and the customer notice, and holds a technician slot;
 7. asks for approval with the kind that follows the warranty decision: `parts_order_with_claim` when covered, `parts_order` when not.
 
-It stops there. It has no tool that orders a part, submits a claim, sends a notice or confirms a slot. The dealer manager reads the exact request and approves it with `ctl.sh approve`. Only then does the records service queue the order, the claim and the notice, take the stock and confirm the slot.
+It stops there. It has no tool that orders a part, submits a claim, sends a notice or confirms a slot. A named approver (an id with the role dealer manager, whoever holds its token) reads the payload the records service shows and decides it, here with `ctl.sh approve`. Only then does the records service queue the order, the claim and the notice, take the stock and confirm the slot.
 
 The cases the agent handles differently:
 
@@ -242,6 +242,17 @@ Not done yet: three clean runs, a pass rate, tokens per case, and the sweep thro
 ## Uninstall one of two use cases
 
 `install.sh --uninstall` removes the records namespace, the header Secret and the desk ServiceAccount. It does not remove the chart values, which are in the release. The other use case's `install.sh` then refuses (on your own cluster, because it finds this use case's endpoint in the release and its namespace is gone). The way out: run the platform installer again with only the quick start and the use case you keep, for example `hack/compose-values.sh -o values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml`, then `PROFILE=quickstart VALUES_FILE=values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh`. Beside a full demo, leave the other use case out of `ALSO_COMPOSE` and give the same list of files. Not run live. The platform installer now refuses to drop values of the release without a word (issue #212), and this is a removal on purpose: add `ALLOW_VALUE_REMOVAL=1` to that command. It prints the list of what it removes and goes on.
+
+## What "stops at an approval" means
+
+The agent stops at an approval request in the records service, the system of record of this use case ([ADR 0028](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0028-approval-at-the-system-of-record.md), [the rules and the result convention](../../../docs/diary/guide/approval-at-the-system-of-record.md)). The result of `request_approval` and `get_approval` follows the convention `v1alpha1` (an `approval` member with `id`, `status`, `payload_hash`, `proposed_by`, `decided_by` and `trace_id`, and `superseded_approvals` on a write that cancelled a request), and a test validates the real results against its JSON Schema. What this does not mean:
+
+- OpenAgentix has no human approval, no approval gate, and holds no tool call. The platform does not check the rules in a running system.
+- The approver is whoever holds, or can read from a Secret, an approver token. Nothing shows that a person decided, and the separation of duties goes only as far as the records service enforces it (its own proposals cannot be decided by the same id; a proposal from the pod's loopback needs no token).
+- The approver reads the payload the service shows. It holds drafts and reasons that the agent wrote, which may carry text aimed at the approver. A matching `payload_hash` shows that the approver's client fetched the same text, not that a person read it. In this service the drafts (order, claim, notice) and the diagnosis are all in the hashed payload; the approver still reads text that the agent wrote.
+- An agent cannot act without approval only in the sense that the tools of this profile cannot do the act. An endpoint that is given a write tool with no approval is the builder's risk. Not every write waits for approval: `create_work_order`, `open_proactive_case`, `set_diagnosis` and `set_timer` write without one.
+- The approval audit is not complete and not tamper-evident. Requests do not expire: a pending request waits until someone decides it.
+- `trace_id` is `unknown`: the link from an approval to the run that asked for it is not built. When it is, it is a lookup hint, not evidence of which run or caller proposed.
 
 ## Tests (all offline)
 

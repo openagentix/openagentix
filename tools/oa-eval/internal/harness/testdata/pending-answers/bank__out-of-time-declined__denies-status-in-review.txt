@@ -1,0 +1,1 @@
+The case status is in_review. The earlier request was superseded and none is waiting.

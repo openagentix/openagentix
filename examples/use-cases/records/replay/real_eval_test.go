@@ -199,3 +199,41 @@ func TestRealModelSetsArePlainFiles(t *testing.T) {
 		}
 	}
 }
+
+// ADR 0028: the defect of the first real run. The agent requested the decline, retried a write, the write superseded the request, and the answer still said
+// the request was pending. The scripted set (case 0005) and the set for a real model both hold the rule "when the answer says the request is pending, a
+// pending request must exist", so each fails an agent that does that, on that rule.
+func TestWhenAnswerRuleFailsTheAnswerOfTheRealModelDefect(t *testing.T) {
+	raw, err := os.ReadFile(scenarioFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Scenarios []map[string]any `json:"scenarios"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	for _, sc := range f.Scenarios {
+		if sc["name"] != "out-of-time-decline" {
+			continue
+		}
+		retry := map[string]any{"tool": "attach_evidence", "args": map[string]any{"case_id": "{{user.id}}", "kind": "transaction", "ref": "{{result.0.output.case.transaction_id}}", "note": "a retried write after the request"}}
+		sc["steps"] = append(sc["steps"].([]any), retry) // the answer text is unchanged: it still says the request is pending approval
+	}
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	out, _ := json.Marshal(f)
+	if err := os.WriteFile(bad, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, set := range []string{casesFile, realCasesFile} {
+		e := newEnvWith(t, bad)
+		res, code := runEval(t, buildEval(t), newGateServer(t, e), newStateServer(t, e), set, "--only", "out-of-time-declined")
+		if code != 1 {
+			t.Fatalf("%s: want exit 1, got %d:\n%s", set, code, res)
+		}
+		if !strings.Contains(res, "status=pending approvals: count is 0, expected 1") {
+			t.Errorf("%s: the failure lines must show the pending-approval rule (no pending request exists):\n%s", set, res)
+		}
+	}
+}

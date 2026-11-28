@@ -156,14 +156,14 @@
             "result.18.output.approval.id": "^APR-",
             "result.7.output.results.0.title": "^Service Bulletin SB-2026-011",
             "result.8.output.results.0.title": "^Kestrel Warranty Policy",
-            "result.19.output.status": "^pending$"
+            "result.19.output.approval.status": "^pending$"
           },
           "text": "Case {{user.id}}: fault {{result.0.output.case.fault_code}} on {{result.0.output.case.serial}}. Warranty, as the record decides: {{result.3.output.reason}}. I applied {{result.7.output.results.0.title}} and {{result.8.output.results.0.title}}. The fitted part {{result.4.output.id}} is superseded, so I drafted the order for {{result.4.output.superseded_by}} from dealer {{result.5.output.stock.2.dealer_id}}, the nearest dealer with stock. I recorded the diagnosis, created the work order, drafted the warranty claim and the customer notice, and held a technician slot. Approval request {{result.18.output.approval.id}} is pending approval by the dealer manager. No part has been ordered, no claim has been submitted, no notice has been sent and the slot is not confirmed."
         },
         {
           "when": {
             "result.18.output.approval.id": "^APR-",
-            "result.19.output.status": "^pending$"
+            "result.19.output.approval.status": "^pending$"
           },
           "text": "Case {{user.id}}: needs human review. The knowledge base results did not include both the bulletin and the warranty policy, so I cannot cite them. Approval request {{result.18.output.approval.id}} is pending approval by the dealer manager: a person must check the rules before it is decided. No part has been ordered, no claim has been submitted, no notice has been sent and the slot is not confirmed."
         },
@@ -171,7 +171,7 @@
           "when": {
             "result.18.output.approval.id": "^APR-"
           },
-          "text": "Case {{user.id}}: needs human review. Approval request {{result.18.output.approval.id}} has the status {{result.19.output.status}}, not pending, so I do not report it as waiting. A person must look at it. Nothing has been ordered, submitted or sent."
+          "text": "Case {{user.id}}: needs human review. Approval request {{result.18.output.approval.id}} has the status {{result.19.output.approval.status}}, not pending, so I do not report it as waiting. A person must look at it. Nothing has been ordered, submitted or sent."
         },
         {
           "text": "Case {{user.id}}: needs human review. The record refused one of my steps, so I stopped and asked for no approval. Nothing has been ordered, submitted or sent."
@@ -310,14 +310,14 @@
           "when": {
             "result.14.output.approval.id": "^APR-",
             "result.6.output.results.0.title": "^Out of Warranty",
-            "result.15.output.status": "^pending$"
+            "result.15.output.approval.status": "^pending$"
           },
           "text": "Case {{user.id}}: fault {{result.0.output.case.fault_code}} on {{result.0.output.case.serial}}. The record says the machine is not covered: {{result.3.output.reason}}. I applied {{result.6.output.results.0.title}}: I drafted no warranty claim. The repair goes ahead as a customer-paid order, so I drafted the order for {{result.4.output.id}} from dealer {{result.5.output.stock.0.dealer_id}} and a customer notice that says the repair is not covered, and I held a technician slot. Approval request {{result.14.output.approval.id}} is pending approval by the dealer manager. No part has been ordered, no notice has been sent and the slot is not confirmed."
         },
         {
           "when": {
             "result.14.output.approval.id": "^APR-",
-            "result.15.output.status": "^pending$"
+            "result.15.output.approval.status": "^pending$"
           },
           "text": "Case {{user.id}}: needs human review. The record says the machine is not covered, but the knowledge base results did not include the out of warranty rule, so I cannot cite it. I drafted no warranty claim. Approval request {{result.14.output.approval.id}} is pending approval by the dealer manager: a person must check the rule before it is decided. No part has been ordered and no notice has been sent."
         },
@@ -325,7 +325,7 @@
           "when": {
             "result.14.output.approval.id": "^APR-"
           },
-          "text": "Case {{user.id}}: needs human review. Approval request {{result.14.output.approval.id}} has the status {{result.15.output.status}}, not pending, so I do not report it as waiting. A person must look at it. Nothing has been ordered, submitted or sent."
+          "text": "Case {{user.id}}: needs human review. Approval request {{result.14.output.approval.id}} has the status {{result.15.output.approval.status}}, not pending, so I do not report it as waiting. A person must look at it. Nothing has been ordered, submitted or sent."
         },
         {
           "text": "Case {{user.id}}: needs human review. The record refused one of my steps, so I stopped and asked for no approval. Nothing has been ordered or sent."

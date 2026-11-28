@@ -56,13 +56,14 @@ func eqKBAnswer(tool, args string) string {
 }
 
 type eqEnv struct {
-	t      *testing.T
-	rest   http.Handler
-	mcp    *mcp.ClientSession
-	stub   string
-	tools  []string // names as the agent sees them: dealer-records_<tool>, knowledge-dealer_<tool>
-	called []string
-	kb     func(tool, args string) string
+	t       *testing.T
+	rest    http.Handler
+	mcp     *mcp.ClientSession
+	stub    string
+	tools   []string // names as the agent sees them: dealer-records_<tool>, knowledge-dealer_<tool>
+	called  []string
+	kb      func(tool, args string) string
+	results []toolResult // every tool result of the run, in order, for the tests of the approval convention
 }
 
 func newEqEnv(t *testing.T) *eqEnv { return newEqEnvWith(t, eqScenarioFile) }
@@ -180,6 +181,7 @@ func (e *eqEnv) run(user string) string {
 				}
 			}
 			result = sb.String()
+			e.results = append(e.results, toolResult{Name: short, Text: result, Structured: res.StructuredContent})
 			if res.IsError {
 				e.t.Fatalf("tool %s failed: %s (arguments %s)", name, result, tc.Function.Arguments)
 			}

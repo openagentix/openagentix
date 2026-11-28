@@ -112,6 +112,16 @@ func TestExitCodeThreeWhenTheModelRefusedACase(t *testing.T) {
 	}
 }
 
+func TestABadWhenAnswerPatternIsAUsageError(t *testing.T) {
+	ans := "x"
+	gate := fakeGate(t, &ans)
+	set := write(t, "cases.yaml", "cases:\n  - id: a\n    input: x\n    expect:\n      state_checks:\n        - {url: /x, path: s, equals: a, when_answer: '('}\n")
+	var out, errb bytes.Buffer
+	if rc := run([]string{"run", "--cases", set, "--gate-url", gate}, &out, &errb); rc != 2 || !strings.Contains(errb.String(), "when_answer") {
+		t.Fatalf("want exit 2 naming when_answer, got %d: %s", rc, errb.String())
+	}
+}
+
 func TestTokenIsReadFromEnvFileOnly(t *testing.T) {
 	// there is no --token flag: a token on the command line would show in the process list
 	var out, errb bytes.Buffer
