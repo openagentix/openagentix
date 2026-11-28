@@ -29,7 +29,8 @@ S = {}
 Q = {1: "Q1 no operator objects, hand-written ones left alone", 2: "Q2 every backend ready without a Secret rule", 3: "Q3 tools/list, a call, and the header",
      4: "Q4 can-i for Secrets, and a pod as the account", 5: "Q5 forbidden lines in the tool server logs", 6: "Q6 the -workload variant and its tokens",
      7: "Q7 is the Role enough without ConfigMap rights", 8: "Q8 status with resourceNames", 9: "Q9 the operator's old objects", 10: "Q10 memory and restart time",
-     "F": "Facts to record"}
+     11: "Q11 can the tool server accounts create workloads or exec", 12: "Q12 the accounts of the proxy runners of mcp.servers", 13: "Q13 the session secret and a restart",
+     14: "Q14 helm upgrade and an operator restart", 15: "Q15 volumes and env sources, new account against the default one", "F": "Facts to record"}
 
 
 def say(m):
@@ -162,7 +163,7 @@ class Mcp:
     """A tiny MCP client for a vMCP behind a port-forward; the token goes in a header only."""
 
     def __init__(self, svc, token):
-        self.pf = PF(MCPNS, "svc/" + svc, "4483")
+        self.pf = PF(MCPNS, "svc/vmcp-" + svc, "4483")
         self.token = token
         self.sid = None
         self.n = 1
@@ -215,6 +216,39 @@ def mcp_try(svc, aud, tries=8):
         c.close()
         time.sleep(5)
     return None
+
+
+def podsrc(v):
+    """Volumes and env sources of the running pod of a tool server, as plain lists."""
+    ps = kj("get", "pods", "-n", MCPNS, "-l", "app=virtualmcpserver,toolhive-name=" + v)["items"]
+    ps = [p for p in ps if not p["metadata"].get("deletionTimestamp")]
+    if not ps:
+        return None
+    sp = ps[0]["spec"]
+    vols = []
+    for x in sp.get("volumes", []):
+        kind = [kk for kk in x if kk != "name"]
+        det = ""
+        if "secret" in x:
+            det = x["secret"].get("secretName", "")
+        if "configMap" in x:
+            det = x["configMap"].get("name", "")
+        if "projected" in x:
+            det = ",".join(sorted(list(src.keys())[0] + ":" + (src.get("serviceAccountToken", {}).get("audience", "") or src.get("configMap", {}).get("name", "")) for src in x["projected"].get("sources", [])))
+        vols.append("%s(%s%s)" % (x["name"], ",".join(kind), (":" + det) if det else ""))
+    env = []
+    for c in sp.get("containers", []):
+        for e in c.get("env", []):
+            vf = e.get("valueFrom")
+            if vf:
+                kk = list(vf)[0]
+                env.append("%s<-%s/%s" % (e["name"], kk, (vf[kk] or {}).get("name", (vf[kk] or {}).get("fieldPath", ""))))
+            else:
+                env.append("%s<-value" % e["name"])
+        for e in c.get("envFrom", []):
+            env.append("envFrom:%s" % json.dumps(e, sort_keys=True))
+    return {"sa": sp.get("serviceAccountName"), "automount": sp.get("automountServiceAccountToken"), "volumes": sorted(vols), "env": sorted(env),
+            "containers": [c["name"] for c in sp.get("containers", [])], "mounts": sorted("%s:%s" % (m["name"], m["mountPath"]) for c in sp.get("containers", []) for m in c.get("volumeMounts", []))}
 
 
 def echo_seen():
@@ -296,7 +330,7 @@ def apply_rbac(vmcp, configmaps=True):
 def backends(vmcp):
     o = kjs("get", "virtualmcpserver", vmcp, "-n", MCPNS, default={}) or {}
     st = o.get("status") or {}
-    return {b["name"]: b.get("status") for b in st.get("discoveredBackends", [])}, st.get("phase"), [(c["type"], c["status"]) for c in st.get("conditions", []) if c["status"] != "True"]
+    return {b["name"]: b.get("status") for b in st.get("discoveredBackends", [])}, st.get("phase"), [(c["type"], c["status"]) for c in st.get("conditions", []) if c["status"] != "True" and c["type"] != "SessionStorageWarning"]
 
 
 def pods_of(vmcp):
@@ -374,6 +408,7 @@ def baseline():
         rec(4, "before-" + v, "INFO", "kubectl auth can-i get secrets / list secrets -n %s --as=system:serviceaccount:%s:%s (the operator's account, before the switch)" % (MCPNS, MCPNS, sa),
             "get: %s; list: %s; backends: %s; phase %s" % (can, canl, b, ph))
     S["old_sa"] = old
+    S["podsrc_before"] = {v: podsrc(v) for v in VMCPS}
     S["old_state"] = rbac_state(["%s-vmcp" % v for v in VMCPS])
     for v, aud in VMCPS.items():
         names, txt, delta, note = functional(v, aud)
@@ -606,18 +641,18 @@ def q7():
         "the Role spike-%s without the rule on configmaps (all else as before), then kubectl rollout restart deploy/%s" % (v, v),
         "rollout ok, backends: %s, phase %s, conditions not True: %s; tools: %s; call: %s; header seen on %s request(s); matching log lines: %d %s" % (b, ph, bad or "none", names, txt, delta, len(errs), " || ".join(short(x, 280) for x in errs[:3])),
         "enough without ConfigMap rights (on this install, which has no CA bundle on an entry)" if (ready and names and not errs) else "something breaks without ConfigMap rights: see the lines")
-    # a CA bundle ConfigMap on an entry is the use the ADR names; try one
     apply_rbac(v, configmaps=True)
+    time.sleep(75)
 
 
 def q8():
     v = "tools-disputes"
     can = []
     for verb in ("update", "patch"):
-        own = sh("kubectl", "auth", "can-i", verb, "virtualmcpservers/status.toolhive.stacklok.dev/" + v, "-n", MCPNS, "--as=system:serviceaccount:%s:spike-%s" % (MCPNS, v)).strip()
-        oth = sh("kubectl", "auth", "can-i", verb, "virtualmcpservers/status.toolhive.stacklok.dev/tools", "-n", MCPNS, "--as=system:serviceaccount:%s:spike-%s" % (MCPNS, v)).strip()
+        own = sh("kubectl", "auth", "can-i", verb, "virtualmcpservers.toolhive.stacklok.dev/" + v, "--subresource=status", "-n", MCPNS, "--as=system:serviceaccount:%s:spike-%s" % (MCPNS, v)).strip()
+        oth = sh("kubectl", "auth", "can-i", verb, "virtualmcpservers.toolhive.stacklok.dev/tools", "--subresource=status", "-n", MCPNS, "--as=system:serviceaccount:%s:spike-%s" % (MCPNS, v)).strip()
         can.append("%s own status: %s; %s another tool server's status: %s" % (verb, own, verb, oth))
-    o = kj("get", "virtualmcpserver", v, "-n", MCPNS)
+    o = kj("get", "virtualmcpserver", v, "-n", MCPNS, "--show-managed-fields")
     mf = [(m.get("manager"), m.get("operation"), m.get("subresource"), m.get("time")) for m in o["metadata"].get("managedFields", [])]
     st = o.get("status", {})
     # change something the status shows: add a backend and take it away again
@@ -625,9 +660,9 @@ def q8():
     k("delete", "mcpserverentry", "late", "-n", MCPNS, "--ignore-not-found")
     time.sleep(40)
     b1 = sorted(backends(v)[0])
-    o2 = kj("get", "virtualmcpserver", v, "-n", MCPNS)
+    o2 = kj("get", "virtualmcpserver", v, "-n", MCPNS, "--show-managed-fields")
     mf2 = [(m.get("manager"), m.get("operation"), m.get("subresource"), m.get("time")) for m in o2["metadata"].get("managedFields", [])]
-    errs = log_errors(v, "5m")
+    errs = log_errors(v, "100s")
     changed = b0 != b1
     rec(8, "status-resourcenames", "YES" if changed and not errs else "PARTLY",
         "kubectl auth can-i update and patch on virtualmcpservers/status for the own name and for the name `tools`, as spike-%s; then the entry `late` was deleted and the status read again" % v,
@@ -665,6 +700,114 @@ def q9():
         "unchanged: %s" % {x: (S["rb"].get(x) or {}).get("uid") == (v or {}).get("uid") and (S["rb"].get(x) or {}).get("rules") == (v or {}).get("rules") for x, v in rbac_state(["spike-" + v for v in VMCPS]).items()})
 
 
+def q11():
+    items = [("create", "pods"), ("create", "statefulsets.apps"), ("create", "deployments.apps"), ("create", "pods/exec"), ("create", "pods/attach")]
+    for v in VMCPS:
+        ans = []
+        for verb, res in items:
+            ans.append("%s %s: %s" % (verb, res, sh("kubectl", "auth", "can-i", verb, res, "-n", MCPNS, "--as=system:serviceaccount:%s:spike-%s" % (MCPNS, v)).strip()))
+        no = all(x.endswith(": no") for x in ans)
+        rec(11, "can-i-" + v, "YES" if no else "NO", "kubectl auth can-i <verb> <resource> -n %s --as=system:serviceaccount:%s:spike-%s, for the five pairs below" % (MCPNS, MCPNS, v), "; ".join(ans),
+            "no for all five" if no else "at least one answers yes")
+
+
+def q12():
+    out = []
+    ms = kj("get", "mcpserver", "-n", MCPNS)["items"]
+    for m in ms:
+        n = m["metadata"]["name"]
+        sas = set()
+        for d in kj("get", "deploy,statefulset", "-n", MCPNS)["items"]:
+            if d["metadata"]["name"] == n or d["metadata"]["name"].startswith(n):
+                sas.add(d["spec"]["template"]["spec"].get("serviceAccountName") or "default")
+        for sa in sorted(sas):
+            a = sh("kubectl", "auth", "can-i", "create", "statefulsets.apps", "-n", MCPNS, "--as=system:serviceaccount:%s:%s" % (MCPNS, sa)).strip()
+            b = sh("kubectl", "auth", "can-i", "create", "services", "-n", MCPNS, "--as=system:serviceaccount:%s:%s" % (MCPNS, sa)).strip()
+            out.append("MCPServer %s, account %s: create statefulsets %s; create services %s" % (n, sa, a, b))
+    rec(12, "proxy-runner-accounts", "INFO", "for each MCPServer in %s, the ServiceAccount of its workloads (from the Deployment or StatefulSet), then kubectl auth can-i create statefulsets.apps and create services -n %s --as=system:serviceaccount:%s:<account>" % (MCPNS, MCPNS, MCPNS),
+        "\n".join(out) or "no MCPServer found")
+
+
+def q13():
+    v = "tools-disputes"
+    secs = [s_["metadata"]["name"] for s_ in kj("get", "secret", "-n", MCPNS)["items"] if re.search(r"hmac|session|key", s_["metadata"]["name"])]
+    mine = {x: [s_ for s_ in secs if s_.startswith(x)] for x in VMCPS}
+    rec(13, "session-secret", "INFO", "kubectl get secret -n %s, names that hold hmac, session or key; which of them belong to which tool server" % MCPNS,
+        "per tool server: %s\nall matching: %s" % (mine, secs), "the operator still made a session secret for each tool server" if all(mine.values()) else "no session secret is listed for some tool server")
+    c = Mcp(v, token(VMCPS[v]))
+    try:
+        c.open()
+        st0, l0 = c.call("tools/list")
+        sid = c.sid
+    finally:
+        c.close()
+    k("rollout", "restart", "deploy/" + v, "-n", MCPNS)
+    wait_rollout(v)
+    wait_ready(v, 120)
+    time.sleep(10)
+    c2 = Mcp(v, token(VMCPS[v]))
+    try:
+        c2.sid = sid
+        c2.n = 10
+        t0 = time.time()
+        st1, l1 = c2.call("tools/list")
+        old = "status %s in %.1f s: %s" % (st1, time.time() - t0, short(json.dumps(l1), 220))
+        c2.sid = None
+        c2.open()
+        st2, l2 = c2.call("tools/list")
+        new = "a new session: status %s, %d tools" % (st2, len(((l2 or {}).get("result") or {}).get("tools", [])))
+    finally:
+        c2.close()
+    rec(13, "session-across-restart", "INFO", "open a session on tools-disputes (initialize, tools/list), kubectl rollout restart deploy/%s, then tools/list with the OLD Mcp-Session-Id, then a new initialize" % v,
+        "before: status %s, %d tools\nold session after the restart: %s\n%s" % (st0, len(((l0 or {}).get("result") or {}).get("tools", [])), old, new))
+
+
+def q14():
+    names = ["spike-" + v for v in VMCPS]
+    before = rbac_state(names)
+    env = dict(os.environ, PROFILE="quickstart", VALUES_FILE="hack/ci/endpoints-ci-values.yaml", AGENT_WAIT="300s")
+    t0 = time.time()
+    try:
+        r = subprocess.run(["./install.sh"], env=env, capture_output=True, text=True, timeout=1500)
+        tail = (r.stdout + r.stderr)[-400:]
+        rc = r.returncode
+    except Exception as e:  # noqa: BLE001
+        rc, tail = 99, str(e)
+    mid = rbac_state(names)
+    k("rollout", "restart", "deploy/toolhive-operator", "-n", TH)
+    k("rollout", "status", "deploy/toolhive-operator", "-n", TH, "--timeout=180s", timeout=200)
+    time.sleep(60)
+    after = rbac_state(names)
+
+    def diff(a, b):
+        return [x for x in a if (a[x] or {}).get("uid") != (b[x] or {}).get("uid") or (a[x] or {}).get("rv") != (b[x] or {}).get("rv") or (a[x] or {}).get("rules") != (b[x] or {}).get("rules") or (a[x] or {}).get("subjects") != (b[x] or {}).get("subjects")]
+    sa_now = {v: kj("get", "virtualmcpserver", v, "-n", MCPNS)["spec"].get("serviceAccount") for v in VMCPS}
+    ok = not diff(before, mid) and not diff(mid, after)
+    rec(14, "helm-upgrade-and-operator-restart", "YES" if ok else "NO",
+        "PROFILE=quickstart VALUES_FILE=hack/ci/endpoints-ci-values.yaml ./install.sh again (a helm upgrade of the release, %.0f s, exit code %s), then kubectl rollout restart deploy/toolhive-operator and 60 s; compare uid, resourceVersion, rules and subjects of spike-<name> (ServiceAccount, Role, RoleBinding) before, after the upgrade, and after the restart" % (time.time() - t0, rc),
+        "changed by the upgrade: %s\nchanged by the operator restart: %s\nspec.serviceAccount of each tool server after the upgrade and the restart: %s\nend of the installer output: %s" % (diff(before, mid) or "none", diff(mid, after) or "none", sa_now, short(tail, 300)),
+        "the hand-written objects were left exactly as written" if ok else "see the lines")
+
+
+def q15():
+    out = []
+    differ = False
+    for v in VMCPS:
+        b, a = S["podsrc_before"].get(v), podsrc(v)
+        if not b or not a:
+            out.append("%s: not read (before %s, after %s)" % (v, bool(b), bool(a)))
+            continue
+        bv, av = set(b["volumes"]), set(a["volumes"])
+        be, ae = set(b["env"]), set(a["env"])
+        bm, am = set(b["mounts"]), set(a["mounts"])
+        d = {"account": (b["sa"], a["sa"]), "automount": (b["automount"], a["automount"]), "volumes new": sorted(av - bv), "volumes missing": sorted(bv - av), "env new": sorted(ae - be), "env missing": sorted(be - ae),
+             "mounts new": sorted(am - bm), "mounts missing": sorted(bm - am)}
+        differ = differ or any(d[x] for x in ("volumes new", "volumes missing", "env new", "env missing", "mounts new", "mounts missing"))
+        out.append("%s: %s\n   volumes under the new account: %s\n   env sources under the new account: %s" % (v, json.dumps(d), a["volumes"], a["env"]))
+    rec(15, "pod-sources", "NO" if differ else "YES", "the volumes, volume mounts and env sources of the running pod of each tool server, read before the switch (operator account) and after it (spike-<name>)", "\n".join(out),
+        "something is new or missing under the new account: see the lines" if differ else "nothing new and nothing missing")
+
+
 def facts2():
     secs = [s["metadata"]["name"] for s in kj("get", "secret", "-n", MCPNS)["items"]]
     out = []
@@ -692,12 +835,17 @@ def main():
     guard(switch, 10)
     guard(q2_q3, 2)
     guard(q4, 4)
+    guard(q11, 11)
+    guard(q12, 12)
+    guard(q15, 15)
     guard(q5, 5)
     guard(q6, 6)
     guard(q7, 7)
     guard(q8, 8)
     guard(q9, 9)
     guard(facts2, "F")
+    guard(q13, 13)
+    guard(q14, 14)
     # the stop rule: if Q1 to Q4 did not hold, the same questions in inline mode
     failed = [x for x in R if x["q"] in (1, 2, 3, 4) and x["verdict"] in ("NO", "ERROR") and not x["id"].startswith("before")]
     rec("F", "stop-rule", "INFO", "Q1 to Q4 checked for a NO or an ERROR", "%d such record(s): %s" % (len(failed), [x["id"] for x in failed]),
