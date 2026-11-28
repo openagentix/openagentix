@@ -10,7 +10,7 @@ governance:
       # words stay in the record, where the agent reads them as untrusted fields. Chart agents only: dispute-agent has no long-term memory, as an event caller requires.
       # The numbers come from the measured runs (README, "Event triggers"): a case takes 25 to 50 seconds and about 100,000 to 180,000 tokens, and the budget class
       # bank-case-agent lets the key of the agent use 800,000 tokens an hour (values.yaml). A burst of 2 starts at most 2 runs at once (at most 360,000 tokens), then one more every 30 seconds, so a ring of five filings is
-      # submitted in about 90 seconds. The rate cannot be lower than 1 a minute and cannot fund the budget on its own: about 4 to 7 cases an hour use it up, and past
+      # submitted in about 90 seconds. The rate cannot be lower than 1 a minute and cannot fund the budget on its own: about 4 to 8 cases an hour use it up, and past
       # that the gateway refuses runs (429, the class bank-case-agent is the real stop; the task ends TASK_STATE_FAILED); the sender asks again up to 3 attempts and no more. maxInFlight 2: a call is over in under a second.
       - name: fernvale-case-events
         serviceAccount: {namespace: fernvale-records, name: records-events}
