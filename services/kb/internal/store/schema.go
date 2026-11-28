@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"time"
@@ -73,13 +74,52 @@ func (g *GraphSchema) Compile() error {
 		if t.Key == "" {
 			continue
 		}
-		re, err := regexp.Compile("^(?:" + t.Key + ")$")
+		re, err := CompileKey(t.Key)
 		if err != nil {
-			return fmt.Errorf("entityTypes[%s].key is not a valid RE2 pattern", t.Name)
+			return fmt.Errorf("entityTypes[%s].key: %v", t.Name, err)
 		}
 		g.keys[t.Name] = re
 	}
 	return nil
+}
+
+// CompileKey compiles an entity key as the pattern the WHOLE name must match: ^(?:key)$, Go's RE2, case sensitive. The wrap is a string, so the key is first required to be
+// a pattern on its own (an unbalanced ")" then fails, and a key cannot close the group from inside and add an alternative that matches any name, review M3); a key
+// that makes the match case insensitive is refused (the record says case sensitive); and the parsed wrapped pattern must still be one concatenation of "^", the key and "$".
+// The error never repeats the key.
+func CompileKey(key string) (*regexp.Regexp, error) {
+	inner, err := syntax.Parse(key, syntax.Perl)
+	if err != nil {
+		return nil, errors.New("is not a valid RE2 pattern on its own")
+	}
+	if foldsCase(inner) {
+		return nil, errors.New("may not change the case rule (a key is case sensitive)")
+	}
+	wrapped, err := syntax.Parse("^(?:"+key+")$", syntax.Perl)
+	if err != nil {
+		return nil, errors.New("is not a valid RE2 pattern")
+	}
+	if wrapped.Op != syntax.OpConcat || len(wrapped.Sub) < 3 || wrapped.Sub[0].Op != syntax.OpBeginText || wrapped.Sub[len(wrapped.Sub)-1].Op != syntax.OpEndText {
+		return nil, errors.New("does not stay inside the match of the whole name")
+	}
+	re, err := regexp.Compile("^(?:" + key + ")$")
+	if err != nil {
+		return nil, errors.New("is not a valid RE2 pattern")
+	}
+	return re, nil
+}
+
+// foldsCase reports whether a parsed pattern matches case insensitively anywhere.
+func foldsCase(r *syntax.Regexp) bool {
+	if r.Flags&syntax.FoldCase != 0 {
+		return true
+	}
+	for _, sub := range r.Sub {
+		if foldsCase(sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // SchemaEntity is an entity to check; At says where it is, for the answer.

@@ -230,7 +230,12 @@ func (s *Service) put(ctx context.Context, collection, id string, in DocInput) (
 		if err != nil {
 			return 0, err
 		}
-		if !has {
+		if has {
+			// The facts extracted from the old text of this document predate the schema and describe text that is gone: they go, and nothing is extracted from the new text (review L6).
+			if err := s.Store.DeleteDocumentGraph(ctx, collection, id); err != nil {
+				return 0, fmt.Errorf("dropping the extracted facts of the old text: %w", err)
+			}
+		} else {
 			if _, err := graph.Enqueue(ctx, s.Store, collection, id, pieces, s.Graph.WindowChars, s.Graph.PromptVersion); err != nil {
 				return 0, fmt.Errorf("queueing graph extraction: %w", err)
 			}

@@ -104,8 +104,8 @@ func ParseSchema(body []byte) (store.GraphSchema, []byte, string, error) {
 			return store.GraphSchema{}, nil, "", schemaBad("entityTypes[%d].key must be valid text of at most %d characters", i, MaxSchemaKeyChars)
 		}
 		if t.Key != "" {
-			if _, err := regexp.Compile("^(?:" + t.Key + ")$"); err != nil {
-				return store.GraphSchema{}, nil, "", schemaBad("entityTypes[%d].key is not a valid RE2 pattern", i)
+			if _, err := store.CompileKey(t.Key); err != nil {
+				return store.GraphSchema{}, nil, "", schemaBad("entityTypes[%d].key %s", i, err)
 			}
 		}
 		if utf8.RuneCountInString(t.Description) > MaxSchemaDescription || !validText(t.Description) {
