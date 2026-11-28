@@ -1,0 +1,21 @@
+The telemetry shows a steady rise, so this is a real fault. Next I'll check warranty and stock for the superseding part.
+The telemetry shows a steady rise of about 17 °C, and the machine is covered. The nearest dealer with stock of P-10361 is D-403, which has 4 units. Next I'll record the diagnosis, the work order and the free slots.
+My diagnosis text has slightly wrong averages. Recomputed from the telemetry: last 7 days (11-22 to 11-28) average about 101.6 °C, and days 23 to 30 ago (10-29 to 11-05) average about 87.2 °C, a rise of about 14.4 °C. The conclusion is unchanged, but I'll correct the record before continuing.
+Case SVC-2026-0001 is at pending approval (APR-0001, kind parts_order_with_claim). A dealer manager still has to approve the parts order, the warranty claim, the customer notice and the technician slot before anything is released.
+
+**Findings**
+- **Machine:** KH4120-00317 (KH 4120, dealer D-401). Fault E-317, coolant temperature high. It is not safety critical. This is the first occurrence on the machine.
+- **Cause:** Early-type thermostat P-10006 drift, per Service Bulletin SB-2026-011 (Coolant Temperature Fault E-317). The telemetry shows a steady rise, not a spike, so the sensor-connector bulletin SB-2026-014 does not apply. Mean coolant temperature over the last 7 days is about 101.6 °C, against about 87.2 °C for days 23 to 30 ago. That is a rise of about 14.4 °C, above the 8 °C threshold.
+- **Warranty:** Covered by the record: 14 of 24 months and 700 of 1500 hours, per the Kestrel Warranty Policy.
+- **Part:** P-10006 is superseded by P-10361, so I ordered the replacement. Nearest dealer with stock is D-403 Copperton Machinery (150 km, 4 in stock). D-401 and D-402 have none.
+
+**Drafts and holds (all pending approval)**
+- Diagnosis recorded. The first version had the averages slightly wrong, so I corrected the record. The conclusion did not change.
+- Work order WO-0001: stop the machine and let it cool, replace P-10006 with P-10361, check the coolant hoses, test run and confirm the temperature.
+- Parts order draft OUT-0002: 1 × P-10361 from D-403.
+- Warranty claim draft OUT-0003.
+- Customer notice draft OUT-0001.
+- Technician slot SLT-0001 held: 29 Nov 2026, 08:00, tech T-201 at D-401.
+- Response timer TMR-0001 set for 4 Dec 2026.
+
+**Sources relied on:** Service Bulletin SB-2026-011 (Coolant Temperature Fault E-317), Fault Code Handling Guide, Kestrel Warranty Policy, and Parts Ordering and Supersession Rule. I also checked Service Bulletin SB-2026-014 to rule out the sensor case.

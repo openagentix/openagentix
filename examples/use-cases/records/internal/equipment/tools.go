@@ -112,7 +112,7 @@ type workOrderOut struct {
 }
 type partsOrderIn struct {
 	CaseID     string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
-	PartID     string `json:"part_id" jsonschema:"the part to order, P- and five digits; a superseded part is refused (the refusal names its replacement), order the replacement"`
+	PartID     string `json:"part_id" jsonschema:"the part to order, P- and five digits; a superseded part is refused (the refusal names its replacement), draft the order for the replacement"`
 	Qty        int    `json:"qty" jsonschema:"whole number, 1 to 20"`
 	FromDealer string `json:"from_dealer" jsonschema:"dealer id: D- and three digits, like D-403, that has the quantity in stock"`
 	Body       string `json:"body" jsonschema:"the order draft text, required, 1 to 4000 characters, plain text"`
@@ -251,7 +251,7 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 			}
 			return out, err
 		})
-	register(d, srv, "get_machine", "Read a machine: model, dealer, hours, configuration, fitted parts and the fault codes seen in the last 90 days. A count above 1 means a repeated fault.", true, func(in machineIn) string { return in.Serial },
+	register(d, srv, "get_machine", "Read a machine: model, dealer, hours, configuration, fitted parts, the fault codes seen in the last 90 days (a count above 1 means a repeated fault) and has_telemetry (false: the machine reports no telematics, so get_telemetry fails and no coolant rise can be read).", true, func(in machineIn) string { return in.Serial },
 		func(ctx context.Context, in machineIn) (MachineView, error) { return s.GetMachine(ctx, in.Serial) })
 	register(d, srv, "get_telemetry", "Daily coolant and hydraulic figures for a machine, up to 30 days.", true, func(in telemetryIn) string { return in.Serial },
 		func(ctx context.Context, in telemetryIn) (telemetryOut, error) {
@@ -268,7 +268,7 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 		})
 	register(d, srv, "get_fault_code", "Read a fault code: description, first cause, the usual part, whether it is safety critical or a warranty item.", true, func(in codeIn) string { return in.Code },
 		func(ctx context.Context, in codeIn) (FaultCodeView, error) { return s.GetFaultCode(ctx, in.Code) })
-	register(d, srv, "get_part", "Read a part. If superseded_by is set, order that part instead.", true, func(in partIn) string { return in.PartID },
+	register(d, srv, "get_part", "Read a part. If superseded_by is set, draft the order for that part instead.", true, func(in partIn) string { return in.PartID },
 		func(ctx context.Context, in partIn) (Part, error) { return s.GetPart(ctx, in.PartID) })
 	register(d, srv, "get_stock", "Stock of a part at every dealer, nearest to the case's dealer first.", true, func(in stockIn) string { return in.CaseID },
 		func(ctx context.Context, in stockIn) (stockOut, error) {
