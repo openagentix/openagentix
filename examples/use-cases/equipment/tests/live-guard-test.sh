@@ -20,7 +20,7 @@ run() { : > "$TMP/calls"; env -u GITHUB_ACTIONS -u EQUIPMENT_CI_CONTEXT -u EQUIP
 run FAKE_CTX=kind-oa-equipment; rc=$?
 check "without EQUIPMENT_LIVE=1 it does nothing, exits 0 and calls nothing" "[ $rc = 0 ] && grep -q 'EQUIPMENT_LIVE=1' '$TMP/out' && [ ! -s '$TMP/calls' ]" "rc=$rc $(cat "$TMP/out")"
 run EQUIPMENT_LIVE=1 FAKE_CTX=gke_example_project; rc=$?
-check "a context that is not kind is refused (exit 2), after reading the context only" "[ $rc = 2 ] && grep -q 'not a kind context' '$TMP/out' && [ \"\$(wc -l < '$TMP/calls' | tr -d ' ')\" = 1 ]" "rc=$rc $(cat "$TMP/out")"
+check "a context that is not kind is refused (exit 2), after reading the context only" "[ $rc = 2 ] && grep -q 'not a kind or k3d context' '$TMP/out' && [ \"\$(wc -l < '$TMP/calls' | tr -d ' ')\" = 1 ]" "rc=$rc $(cat "$TMP/out")"
 run EQUIPMENT_LIVE=1 FAKE_CTX=kind-oa-equipment-demo; rc=$?
 check "a kind context outside GitHub Actions is refused (exit 2), after reading the context only" "[ $rc = 2 ] && grep -q 'not a CI run' '$TMP/out' && [ \"\$(wc -l < '$TMP/calls' | tr -d ' ')\" = 1 ]" "rc=$rc $(cat "$TMP/out")"
 run EQUIPMENT_LIVE=1 EQUIPMENT_CI_CONTEXT=kind-other FAKE_CTX=kind-oa-equipment-demo; rc=$?

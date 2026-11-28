@@ -15,15 +15,10 @@ K=${KUBECTL:-kubectl}
 # This script changes the cluster it runs on (a ClusterRoleBinding, a ConfigMap, a restart of two vMCPs, a throwaway pod) and the cluster must be a CI
 # cluster: the install used values (hack/ci/diagnostics-ci-values.yaml) that break the agents' tool path. It refuses to run anywhere else: on GitHub
 # Actions (GITHUB_ACTIONS=true), or when DIAGNOSTICS_CI_CONTEXT names the current kube context exactly, and only on a kind or k3d context.
-CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "diagnostics-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${DIAGNOSTICS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "diagnostics-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and DIAGNOSTICS_CI_CONTEXT does not name this context. This script changes the cluster; do not run it on a cluster you use. Nothing was changed." >&2
-  exit 2
-fi
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
+require_ci_context diagnostics-live DIAGNOSTICS_CI_CONTEXT
 CHANGED_CRB=0; CHANGED_CM=0; PF=""; PF2=""; PF3=""; TD=""
 # undo what this script changed, on every way out
 cleanup() {

@@ -12,15 +12,10 @@
 set -u
 [ "${ENDPOINTS:-0}" = 1 ] || { echo "endpoints-ci-setup: set ENDPOINTS=1 to run this against the current cluster (it is opt-in)"; exit 0; }
 K=${KUBECTL:-kubectl}
-CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "endpoints-ci-setup: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${ENDPOINTS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "endpoints-ci-setup: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and ENDPOINTS_CI_CONTEXT does not name this context. Nothing was changed." >&2
-  exit 2
-fi
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
+require_ci_context endpoints-ci-setup ENDPOINTS_CI_CONTEXT
 cd "$(dirname "$0")/../.." || exit 1
 NS=endpoint-ci; MCPNS=${MCP_NAMESPACE:-mcp-tools}
 for n in "$NS" "$MCPNS"; do $K get namespace "$n" >/dev/null 2>&1 || $K create namespace "$n" >/dev/null || exit 1; done
