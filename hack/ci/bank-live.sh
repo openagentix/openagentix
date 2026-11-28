@@ -59,12 +59,15 @@ PF=""; REF=""; PFR=""; PFM=""; PFG=""; PFS=""; PFL=""; OIDC_PATCHED=0; OIDC_ORIG
 # Every tool server of the tools namespace (the shared one, each profile's, and any use case's): the identity settings are patched for all of them and
 # restored for all of them, not for a fixed list, so a tool server of another use case cannot keep the patched settings.
 tool_servers() { $K get virtualmcpserver -n "$MCPNS" -o name 2>/dev/null | sed 's#.*/##' | grep -E '^tools(-|$)'; }
-restore_oidc() {
+TOOL_SERVERS=""   # read once, just before the identity patch, and reused by the restore: a server that goes missing meanwhile is still restarted
+restore_oidc() {   # returns 1 when the settings or a restart could not be put back
   [ "$OIDC_PATCHED" = 1 ] || return 0
-  $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p "$OIDC_ORIG" >/dev/null 2>&1
-  for v in $(tool_servers); do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-  for v in $(tool_servers); do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1; done
+  local rc=0 v
+  $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p "$OIDC_ORIG" >/dev/null 2>&1 || { echo "       the identity settings could not be patched back" >&2; rc=1; }
+  for v in $TOOL_SERVERS; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1 || { echo "       tool server $v: restart failed" >&2; rc=1; }; done
+  for v in $TOOL_SERVERS; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || { echo "       tool server $v: not ready after the restart" >&2; rc=1; }; done
   OIDC_PATCHED=0
+  return $rc
 }
 cleanup() {
   # the gate token (60 minutes), the three tool server tokens (10 minutes) and their header dumps never stay on disk, even when BANK_OUT keeps the directory
@@ -331,13 +334,18 @@ $K delete pod egress-target -n default --ignore-not-found --wait=false >/dev/nul
 # on every way out. Agents' calls do not work while the settings are changed: nothing else runs now.
 echo "# the tool servers, called directly (tools/list and calls; the identity settings are changed for this part and restored)"
 OIDC_ORIG=$($K get mcpoidcconfig substrate-actor-jwt -n "$MCPNS" -o json | jq -c '{spec:{inline:(.spec.inline|{issuer,jwksUrl,caBundleRef})}}')
-[ -n "$OIDC_ORIG" ] && ok "the original identity settings are kept in memory, for the restore" || bad "could not read the identity settings" ""
+if [ -n "$OIDC_ORIG" ]; then ok "the original identity settings are kept in memory, for the restore"
+else
+  bad "could not read the identity settings" "nothing was changed, so this section stops here: it cannot put them back"
+  echo; echo "bank-live: passed=$PASS failed=$FAIL"; exit 1
+fi
 $K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-ca '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
 $K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
+TOOL_SERVERS=$(tool_servers)
 OIDC_PATCHED=1
 $K patch mcpoidcconfig substrate-actor-jwt -n "$MCPNS" --type merge -p '{"spec":{"inline":{"issuer":"https://kubernetes.default.svc.cluster.local","jwksUrl":"https://kubernetes.default.svc/openid/v1/jwks","caBundleRef":{"configMapRef":{"name":"ci-apiserver-ca","key":"ca.crt"}}}}}' >/dev/null
-for v in $(tool_servers); do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
-for v in $(tool_servers); do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (tool server $v: restart not confirmed)"; done
+for v in $TOOL_SERVERS; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in $TOOL_SERVERS; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (tool server $v: restart not confirmed)"; done
 mcp_token() { $K create token default -n "$MCPNS" --audience "$1" --duration 10m 2>/dev/null; }
 mcp_post() {  # mcp_post <port> <token file> <session id or -> <json>: prints the JSON-RPC answer (the data line of an event stream, or the body)
   local port=$1 tf=$2 sid=$3 body=$4 out hdr=()
@@ -384,7 +392,7 @@ CALL=$(mcp_call "$LPORT" "$TD/tl" "$SID_L" 3 tools/call '{"name":"records_get_ca
 check "another agent's profile (lookup, the quick start agent) cannot call a records tool (refused)" "$(jq -r '((.error!=null) or (.result.isError==true))|tostring' <<<"$CALL" 2>/dev/null)" true
 check "every backend of the group's tool server is still ready after the calls" "$($K get virtualmcpserver -n "$MCPNS" "tools-$PROFILE" -o json | jq -r '[.status.discoveredBackends[]?|select(.status!="ready")|.name]|join(",")')" ""
 kill $PF $PFS $PFL 2>/dev/null; PF=""; PFS=""; PFL=""
-restore_oidc
+if restore_oidc; then ok "the identity settings were put back and every tool server was restarted and is ready"; else bad "the identity settings were NOT restored" "see the lines above: tool servers may still trust the API server tokens until they restart"; fi
 check "after the restore every tool server is Ready again" "$($K get virtualmcpserver -n "$MCPNS" -o json | jq -r '[.items[]|select(([.status.conditions[]?|select(.type=="Ready")|.status]|first // "Unknown")!="True")|.metadata.name]|join(",")')" ""
 
 echo
