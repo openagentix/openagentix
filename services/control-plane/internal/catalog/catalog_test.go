@@ -95,6 +95,10 @@ func TestLoadPolicyRefusals(t *testing.T) {
 		"in-cluster entry, not namespaced":   {`{"maxAgents": 1, "egress": {"inClusterDestinations": ["registry:5000"]}}`, "inClusterDestinations"},
 		"in-cluster entry listed twice":      {`{"maxAgents": 1, "egress": {"inClusterDestinations": ["registry.ci.svc:5000", "registry.ci.svc:5000"]}}`, "twice"},
 		"reserved name with a bad namespace": {`{"maxAgents": 1, "reservedNames": ["Bad/x"]}`, "reservedNames"},
+		"class in upper case":                {`{"maxAgents": 1, "budgetClass": "Bank"}`, "budgetClass"},
+		"class with a quote":                 {`{"maxAgents": 1, "budgetClass": "a\"b"}`, "budgetClass"},
+		"class default is reserved":          {`{"maxAgents": 1, "budgetClass": "default"}`, "budgetClass"},
+		"class of 41 characters":             {`{"maxAgents": 1, "budgetClass": "a2345678901234567890123456789012345678901"}`, "budgetClass"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadPolicy(write(t, c.in))

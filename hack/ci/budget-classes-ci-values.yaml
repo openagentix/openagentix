@@ -15,6 +15,12 @@ gateway:
       - {name: wide, tokens: 100000, unit: Hours, per: agent}
       - {name: pool, tokens: 300, unit: Hours, per: class}   # shared by every key of the class: the live script makes two test keys of it
 
+# AgentDefinition agents (the quick start agent, and the one the live script creates) get the class `tight`: the operator's one class for definitions
+controlPlane:
+  policy:
+    budgetClasses:
+      definitions: tight
+
 # a list replaces the quick start's empty list
 agents:
   - name: budget-tight

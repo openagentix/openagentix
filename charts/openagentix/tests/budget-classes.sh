@@ -27,8 +27,11 @@ eq "full demo: explicit empty classes render byte-identical" "$(helm template op
 if [ -n "${OA_BASELINE_CHART:-}" ]; then   # the chart as it was before this feature (CI: a checkout of main)
   BL() { helm template openagentix "$OA_BASELINE_CHART" -n openagentix-system "$@" 2>&1 | shasum -a 256; }
   eq "the default render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$B0" "$(BL)"
-  eq "the quick start render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$BQ0" "$(BL -f "$RCQ")"
-  eq "the full demo render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$BF0" "$(BL "${CP9[@]}" --set gateway.stubModel.enabled=true)"
+  # With the control plane on, the render holds the AgentDefinition CRD, which gained status.budget (ADR 0029, slice 4). That one document differs from the
+  # baseline of before that slice; every other document is byte-identical, which is what these two checks compare (the default render has no CRD).
+  NOCRD() { helm template openagentix "$1" -n openagentix-system "${@:2}" 2>&1 | yq -c 'select(.!=null and .kind!="CustomResourceDefinition")' | shasum -a 256; }
+  eq "the quick start render, but for the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOCRD "$CHART" -f "$RCQ")" "$(NOCRD "$OA_BASELINE_CHART" -f "$RCQ")"
+  eq "the full demo render, but for the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOCRD "$CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)" "$(NOCRD "$OA_BASELINE_CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)"
 fi
 GUARD_CM='.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name=="openagentix-control-plane-guard-configmaps")'
 DG0=$(docs "${CP9[@]}")
@@ -144,3 +147,11 @@ bc_fail "gateway off: a class that is a map is refused" "budgetClass" "${GOFF[@]
 bc_fail "gateway off: a class that no class list defines is refused" "agents[a]: budgetClass \"wide\"" "${GOFF[@]}" --set-json "agents=$HOSTILE_C"
 HOSTILE_D='[{"name":"a","description":"x","model":"claude-haiku","systemPrompt":"x","tools":[]}]'
 eq "gateway off: an agent with no class renders" "$([ -z "$(render_err "${GOFF[@]}" --set-json "agents=$HOSTILE_D")" ] && echo rendered || echo failed)" rendered
+
+echo "# budget classes: the class of definitions reaches the controller's policy (ADR 0029, slice 4)"
+PJ='.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-policy")|.data["policy.json"]|fromjson'
+eq "definitions empty: the controller's policy has no budgetClass" "$(q "$DG0" "$PJ|has(\"budgetClass\")")" false
+D4=$(docs "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=bank-agents)
+eq "definitions=bank-agents: the controller's policy names it" "$(q "$D4" "$PJ|.budgetClass")" bank-agents
+eq "definitions=bank-agents: nothing else in the policy file changes" "$(q "$D4" "$PJ|del(.budgetClass)|tojson" | shasum -a 256)" "$(q "$DG0" "$PJ|tojson" | shasum -a 256)"
+eq "definitions=bank-agents: the controller rolls on the change (the policy checksum is on the pod template)" "$([ "$(q "$D4" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")|.spec.template.metadata.annotations["checksum/policy"]')" != "$(q "$DG0" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")|.spec.template.metadata.annotations["checksum/policy"]')" ] && echo differs || echo same)" differs

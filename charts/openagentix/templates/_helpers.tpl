@@ -642,6 +642,9 @@ the users from the render and fails if one is missing. */ -}}
     "egress" (dict "allowedOrigins" ($e.allowedOrigins | default list) "inClusterDestinations" ($e.inClusterDestinations | default list))
     "reservedNames" ($p.reservedNames | default list)
     "suspendAll" (default false $p.suspendAll) -}}
+{{- /* ADR 0029: the one budget class of definitions; the key is absent when there is none, so the file is what it was */ -}}
+{{- $def := (($p.budgetClasses | default dict).definitions | default "") -}}
+{{- if $def }}{{ $_ := set $pol "budgetClass" $def }}{{ end -}}
 {{- if include "oa.caOn" . -}}
 {{- $c := $p.runtimes.container -}}
 {{- $_ := set $pol "allowedRuntimes" ($p.allowedRuntimes | default (list "builtin")) -}}

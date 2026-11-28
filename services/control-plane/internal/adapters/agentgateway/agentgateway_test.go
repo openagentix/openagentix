@@ -24,7 +24,7 @@ var _ keys.Registry = (*Adapter)(nil)
 
 func TestRegisterWritesTheInstallersEntryFormat(t *testing.T) {
 	s, a := setup(t)
-	if err := a.Register(context.Background(), "kagent.researcher", "sha256:abc", nil); err != nil {
+	if err := a.Register(context.Background(), "kagent.researcher", "sha256:abc", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	cm, _ := s.Get("configmaps", "agentgateway-system", ConfigMapName)
@@ -52,8 +52,8 @@ func TestEntriesAndUnregister(t *testing.T) {
 	if m, err := a.Entries(ctx); err != nil || len(m) != 0 {
 		t.Fatalf("%v %v", m, err)
 	}
-	_ = a.Register(ctx, "ns.x", "sha256:1", nil)
-	_ = a.Register(ctx, "ns.y", "sha256:2", nil)
+	_ = a.Register(ctx, "ns.x", "sha256:1", nil, "")
+	_ = a.Register(ctx, "ns.y", "sha256:2", nil, "")
 	m, err := a.Entries(ctx)
 	if err != nil || m["ns.x"].Hash != "sha256:1" || m["ns.y"].Hash != "sha256:2" || len(m) != 2 {
 		t.Fatalf("%v %v", m, err)
@@ -104,7 +104,7 @@ func TestMissingConfigMapIsAnError(t *testing.T) {
 	s := kubetest.New()
 	defer s.Close()
 	a := New(kube.New(s.URL, s.Client(), func() (string, error) { return "t", nil }), "agentgateway-system")
-	if err := a.Register(context.Background(), "ns.x", "sha256:1", nil); err == nil {
+	if err := a.Register(context.Background(), "ns.x", "sha256:1", nil, ""); err == nil {
 		t.Fatal("the chart creates the ConfigMap; a missing one is an error, not something to create")
 	}
 	if err := a.Unregister(context.Background(), "ns.x"); err != nil {
@@ -115,7 +115,7 @@ func TestMissingConfigMapIsAnError(t *testing.T) {
 func TestUserNamesThatCouldBreakTheEntryAreRefused(t *testing.T) {
 	_, a := setup(t)
 	for _, bad := range []string{`x","y`, "researcher", "kagent.", ".x", "a.b.c", "KAGENT.x", "kagent.x y", "kagent.x\n"} {
-		if err := a.Register(context.Background(), bad, "sha256:1", nil); err == nil {
+		if err := a.Register(context.Background(), bad, "sha256:1", nil, ""); err == nil {
 			t.Errorf("%q must be refused: a definition's user is <namespace>.<name>", bad)
 		}
 	}
@@ -124,7 +124,7 @@ func TestUserNamesThatCouldBreakTheEntryAreRefused(t *testing.T) {
 func TestRegisterCarriesTeamAndProjectAsMetadataNextToTheUserID(t *testing.T) {
 	s, a := setup(t)
 	labels := map[string]string{"openagentix.io/team": "payments", "openagentix.io/project": "ledger", "openagentix.io/work-item": "wi-1", "other": "x"}
-	if err := a.Register(context.Background(), "kagent.r", "sha256:abc", labels); err != nil {
+	if err := a.Register(context.Background(), "kagent.r", "sha256:abc", labels, ""); err != nil {
 		t.Fatal(err)
 	}
 	cm, _ := s.Get("configmaps", "agentgateway-system", ConfigMapName)
