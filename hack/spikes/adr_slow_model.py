@@ -58,7 +58,7 @@ class H(BaseHTTPRequestHandler):
         if "SLOWRUN" in text:
             time.sleep(SLOW)
         try:
-            c = http.client.HTTPConnection(UP, timeout=120)
+            c = http.client.HTTPConnection(UP, timeout=60)
             c.request("POST", self.path, raw, {"Content-Type": "application/json"})
             r = c.getresponse()
             body = r.read()
@@ -66,6 +66,7 @@ class H(BaseHTTPRequestHandler):
             self._send(r.status, body, r.getheader("Content-Type") or "application/json")
         except Exception as e:  # noqa: BLE001
             ev["status"], ev["t1"] = "error: %s" % e, time.time()
+            print("upstream error:", e, flush=True)
             self._send(502, b'{"error":"upstream"}')
 
 

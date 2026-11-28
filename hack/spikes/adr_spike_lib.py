@@ -166,6 +166,11 @@ def ensure_slow_proxy(here):
                                           "volumes": [{"name": "src", "configMap": {"name": "slow-model-src"}}]}}}})
     apply({"apiVersion": "v1", "kind": "Service", "metadata": {"name": "slow-model", "namespace": SPIKE_NS},
            "spec": {"selector": {"app": "slow-model"}, "ports": [{"port": 8080, "targetPort": 8080}]}})
+    # the stub model's own NetworkPolicy admits only the gateway pods: an extra, additive policy lets the stand-in reach it
+    apply({"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": {"name": "spike-allow-stand-in", "namespace": "agentgateway-system"},
+           "spec": {"podSelector": {"matchLabels": {"app": "stub-model"}}, "policyTypes": ["Ingress"],
+                    "ingress": [{"ports": [{"protocol": "TCP", "port": 8080},],
+                                 "from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": SPIKE_NS}}, "podSelector": {"matchLabels": {"app": "slow-model"}}}]}]}})
     rc, out, err = k("rollout", "status", "deploy/slow-model", "-n", SPIKE_NS, "--timeout=240s", timeout=260)
     if rc:
         raise RuntimeError("slow-model not ready: " + (out + err)[-400:])
