@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openagentix/openagentix/services/kb/internal/access"
 	"github.com/openagentix/openagentix/services/kb/internal/api"
 	"github.com/openagentix/openagentix/services/kb/internal/config"
 	"github.com/openagentix/openagentix/services/kb/internal/kb"
@@ -26,12 +27,14 @@ type Deps struct {
 	Version string
 	// Metrics, when non-nil, counts requests and tool calls. It is exposed on its own listener (RunMetrics), never here.
 	Metrics *obs.Metrics
+	// Access, when non-nil, checks the caller of every /mcp request (ADR 0030).
+	Access *access.Authorizer
 }
 
 // Handler builds the full handler: /mcp, /v1/*, /healthz, /readyz.
 func Handler(d Deps) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpserver.New(d.Svc, d.Log, mcpserver.Options{Stateless: d.Cfg.MCPStateless, Version: d.Version, Timeout: d.Cfg.RequestTimeout, Metrics: d.Metrics}))
+	mux.Handle("/mcp", mcpserver.New(d.Svc, d.Log, mcpserver.Options{Stateless: d.Cfg.MCPStateless, Version: d.Version, Timeout: d.Cfg.RequestTimeout, Metrics: d.Metrics, Access: d.Access}))
 	mux.Handle("/v1/", api.New(d.Svc, api.Config{
 		AdminToken: d.Cfg.AdminToken, AllowAnonymous: d.Cfg.AdminAllowAnonymous, MaxBodyBytes: d.Cfg.MaxBodyBytes,
 	}, d.Log))

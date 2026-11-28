@@ -146,6 +146,75 @@ func Run(t *testing.T, f Factory) {
 		}
 	})
 
+	// A Scope limits every read to a list of collections inside the query itself (ADR 0030).
+	scoped := func(cs ...string) store.Scope { return store.Scope{Limited: true, Collections: cs} }
+	seedScope := func(s store.Store) {
+		_ = s.UpsertDocument(ctx, doc("mine", "m1", "Mine one"), ch("pelican harbour notes"))
+		_ = s.UpsertDocument(ctx, doc("mine", "dup", "Mine dup"), ch("harbour dup text"))
+		_ = s.UpsertDocument(ctx, doc("theirs", "t1", "Theirs one"), ch("pelican pelican pelican harbour"))
+		_ = s.UpsertDocument(ctx, doc("theirs", "dup", "Theirs dup"), ch("harbour dup text"))
+	}
+
+	run("scope limits search inside the query", func(t *testing.T, s store.Store) {
+		seedScope(s)
+		// The other collection ranks better; top_k must still be filled from the allowed one.
+		hits, err := s.Search(ctx, store.Query{Text: "pelican", TopK: 1, Scope: scoped("mine")})
+		if err != nil || len(hits) != 1 || hits[0].Collection != "mine" {
+			t.Fatalf("hits=%+v err=%v", hits, err)
+		}
+		hits, _ = s.Search(ctx, store.Query{Text: "harbour", TopK: 10, Scope: scoped("mine")})
+		for _, h := range hits {
+			if h.Collection != "mine" {
+				t.Fatalf("leaked %+v", h)
+			}
+		}
+		// A named collection outside the list answers like a missing one.
+		out, _ := s.Search(ctx, store.Query{Text: "pelican", Collection: "theirs", TopK: 5, Scope: scoped("mine")})
+		missing, _ := s.Search(ctx, store.Query{Text: "pelican", Collection: "nope", TopK: 5, Scope: scoped("mine")})
+		if len(out) != 0 || len(missing) != 0 {
+			t.Fatalf("outside=%+v missing=%+v", out, missing)
+		}
+		// Limited with an empty list reads nothing.
+		if hits, _ := s.Search(ctx, store.Query{Text: "pelican", TopK: 5, Scope: scoped()}); len(hits) != 0 {
+			t.Fatalf("empty list read %+v", hits)
+		}
+		// The zero scope is no limit.
+		if hits, _ := s.Search(ctx, store.Query{Text: "pelican", TopK: 5}); len(hits) != 2 {
+			t.Fatalf("unscoped hits=%+v", hits)
+		}
+	})
+
+	run("scope limits list and get", func(t *testing.T, s store.Store) {
+		seedScope(s)
+		cols, err := s.ListCollectionsIn(ctx, scoped("mine", "absent"))
+		if err != nil || len(cols) != 1 || cols[0] != (store.CollectionInfo{Name: "mine", Documents: 2}) {
+			t.Fatalf("cols=%+v err=%v", cols, err)
+		}
+		if cols, _ := s.ListCollectionsIn(ctx, scoped()); len(cols) != 0 {
+			t.Fatalf("empty list listed %+v", cols)
+		}
+		if _, err := s.GetDocumentIn(ctx, scoped("mine"), "theirs", "t1"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("outside collection: %v", err)
+		}
+		if _, err := s.GetDocumentIn(ctx, scoped("mine"), "", "t1"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("outside id, no collection: %v", err)
+		}
+		if _, err := s.GetDocumentIn(ctx, scoped("mine"), "nope", "t1"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("missing collection: %v", err)
+		}
+		// "dup" is in two collections, but only one is allowed: it is not ambiguous.
+		d, err := s.GetDocumentIn(ctx, scoped("mine"), "", "dup")
+		if err != nil || d.Collection != "mine" {
+			t.Fatalf("d=%+v err=%v", d, err)
+		}
+		if _, err := s.GetDocumentIn(ctx, scoped("mine", "theirs"), "", "dup"); !errors.Is(err, store.ErrAmbiguous) {
+			t.Fatalf("both allowed: %v", err)
+		}
+		if d, err := s.GetDocumentIn(ctx, store.Scope{}, "theirs", "t1"); err != nil || d.ID != "t1" {
+			t.Fatalf("zero scope: d=%+v err=%v", d, err)
+		}
+	})
+
 	run("lexical ranking", func(t *testing.T, s store.Store) {
 		_ = s.UpsertDocument(ctx, doc("docs", "both", "Both"), ch("kubernetes ingress controller routes traffic"))
 		_ = s.UpsertDocument(ctx, doc("docs", "one", "One"), ch("kubernetes schedules pods onto nodes"))
@@ -368,6 +437,24 @@ func Run(t *testing.T, f Factory) {
 		hits, err = s.Search(ctx, store.Query{Text: "quasar", Embedding: q, TopK: 5})
 		if err != nil || len(hits) != 2 {
 			t.Fatalf("unfiltered hybrid: hits=%+v err=%v", hits, err)
+		}
+	})
+
+	run("scope applies to vector and hybrid search with top_k filled", func(t *testing.T, s store.Store) {
+		// Twenty near chunks in the refused collection, one far chunk in the allowed one.
+		for i := 0; i < 20; i++ {
+			_ = s.UpsertDocument(ctx, doc("refused", fmt.Sprintf("r%d", i), "R"), []store.Chunk{{Text: "quasar close", Embedding: vec(1, 0, 0)}})
+		}
+		_ = s.UpsertDocument(ctx, doc("allowed", "a", "A"), []store.Chunk{{Text: "quasar distant", Embedding: vec(0.2, 0.9, 0.1)}})
+		q := vec(1, 0, 0)
+		sc := store.Scope{Limited: true, Collections: []string{"allowed"}}
+		hits, err := s.Search(ctx, store.Query{Embedding: q, TopK: 1, Scope: sc})
+		if err != nil || len(hits) != 1 || hits[0].Collection != "allowed" {
+			t.Fatalf("vector: hits=%+v err=%v", hits, err)
+		}
+		hits, err = s.Search(ctx, store.Query{Text: "quasar", Embedding: q, TopK: 1, Scope: sc})
+		if err != nil || len(hits) != 1 || hits[0].Collection != "allowed" {
+			t.Fatalf("hybrid: hits=%+v err=%v", hits, err)
 		}
 	})
 

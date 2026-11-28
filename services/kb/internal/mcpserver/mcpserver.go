@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openagentix/openagentix/services/kb/internal/access"
 	"github.com/openagentix/openagentix/services/kb/internal/kb"
 	"github.com/openagentix/openagentix/services/kb/internal/obs"
 	"github.com/openagentix/openagentix/services/kb/internal/store"
@@ -28,6 +29,9 @@ type Options struct {
 	Timeout time.Duration
 	// Metrics, when non-nil, counts tool calls by tool and outcome. Never arguments or results.
 	Metrics *obs.Metrics
+	// Access, when non-nil, identifies the caller of every request and, in enforce mode, refuses unknown callers and
+	// limits every read to the caller's collections (ADR 0030). Nil means no check, as before.
+	Access *access.Authorizer
 }
 
 // SearchInput is the kb_search argument object.
@@ -93,7 +97,7 @@ func New(svc *kb.Service, log *slog.Logger, opts Options) http.Handler {
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
-	h := &handlers{svc: svc, log: log, timeout: opts.Timeout, metrics: opts.Metrics}
+	h := &handlers{svc: svc, log: log, timeout: opts.Timeout, metrics: opts.Metrics, access: opts.Access}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "openagentix-kb", Title: "OpenAgentix Knowledge Base", Version: opts.Version}, &mcp.ServerOptions{
 		Instructions: "Search the organisation's knowledge base. Use kb_search to find relevant passages, then kb_get_document for the full text of a document. Cite the source URI when you use a passage.",
 	})
@@ -116,11 +120,12 @@ func New(svc *kb.Service, log *slog.Logger, opts Options) http.Handler {
 	if svc.GraphEnabled() {
 		h.registerGraph(srv, ro)
 	}
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
+	var next http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
 		Stateless:    opts.Stateless,
 		JSONResponse: true,
 		Logger:       log,
 	})
+	return guard(opts.Access, next)
 }
 
 type handlers struct {
@@ -128,6 +133,7 @@ type handlers struct {
 	log     *slog.Logger
 	timeout time.Duration
 	metrics *obs.Metrics
+	access  *access.Authorizer
 }
 
 // toolOutcome names a tool error with a value from the closed set the metrics accept.
@@ -157,8 +163,9 @@ func (h *handlers) bound(ctx context.Context) (context.Context, context.CancelFu
 
 // done logs one tool call (name, outcome, timing, result count only: never
 // arguments or content) and converts err to a client-safe tool error.
-func (h *handlers) done(tool string, start time.Time, n int, err error) error {
+func (h *handlers) done(c *callInfo, tool string, start time.Time, n int, err error) error {
 	attrs := []any{"tool", tool, "duration_ms", time.Since(start).Milliseconds(), "results", n, "is_error", err != nil}
+	attrs = append(attrs, c.logAttrs()...)
 	h.log.Info("tool call", attrs...)
 	h.metrics.ToolCall(tool, toolOutcome(err), time.Since(start))
 	if err == nil {
@@ -184,15 +191,20 @@ func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
 }
 
-func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in SearchInput) (*mcp.CallToolResult, SearchOutput, error) {
+func (h *handlers) search(ctx context.Context, req *mcp.CallToolRequest, in SearchInput) (*mcp.CallToolResult, SearchOutput, error) {
+	ctx, c := h.begin(ctx, req)
 	ctx, cancel := h.bound(ctx)
 	defer cancel()
 	start := time.Now()
+	c.arg(in.Collection)
 	hits, err := h.svc.Search(ctx, in.Query, in.Collection, in.TopK)
 	if err != nil {
-		return nil, SearchOutput{}, h.done("kb_search", start, 0, err)
+		return nil, SearchOutput{}, h.done(c, "kb_search", start, 0, err)
 	}
 	out := SearchOutput{Results: make([]SearchResult, len(hits))}
+	for _, hit := range hits {
+		c.saw(hit.Collection)
+	}
 	var sb strings.Builder
 	if len(hits) == 0 {
 		sb.WriteString("No results. Try different keywords, or call kb_list_collections to see what is available.")
@@ -216,18 +228,21 @@ func (h *handlers) search(ctx context.Context, _ *mcp.CallToolRequest, in Search
 		sb.WriteString(hit.Text)
 		sb.WriteString("\n")
 	}
-	_ = h.done("kb_search", start, len(hits), nil)
+	_ = h.done(c, "kb_search", start, len(hits), nil)
 	return textResult(strings.TrimRight(sb.String(), "\n")), out, nil
 }
 
-func (h *handlers) get(ctx context.Context, _ *mcp.CallToolRequest, in GetInput) (*mcp.CallToolResult, GetOutput, error) {
+func (h *handlers) get(ctx context.Context, req *mcp.CallToolRequest, in GetInput) (*mcp.CallToolResult, GetOutput, error) {
+	ctx, c := h.begin(ctx, req)
 	ctx, cancel := h.bound(ctx)
 	defer cancel()
 	start := time.Now()
+	c.arg(in.Collection)
 	v, err := h.svc.Get(ctx, in.Collection, in.DocumentID)
 	if err != nil {
-		return nil, GetOutput{}, h.done("kb_get_document", start, 0, err)
+		return nil, GetOutput{}, h.done(c, "kb_get_document", start, 0, err)
 	}
+	c.saw(v.Collection)
 	out := GetOutput{
 		DocumentID: v.ID, Collection: v.Collection, Title: v.Title, SourceURI: v.SourceURI,
 		Text: v.Text, Truncated: v.Truncated, TotalChars: v.TotalChars,
@@ -244,31 +259,33 @@ func (h *handlers) get(ctx context.Context, _ *mcp.CallToolRequest, in GetInput)
 	}
 	sb.WriteString("\n")
 	sb.WriteString(v.Text)
-	_ = h.done("kb_get_document", start, 1, nil)
+	_ = h.done(c, "kb_get_document", start, 1, nil)
 	return textResult(sb.String()), out, nil
 }
 
-func (h *handlers) list(ctx context.Context, _ *mcp.CallToolRequest, _ ListInput) (*mcp.CallToolResult, ListOutput, error) {
+func (h *handlers) list(ctx context.Context, req *mcp.CallToolRequest, _ ListInput) (*mcp.CallToolResult, ListOutput, error) {
+	ctx, c := h.begin(ctx, req)
 	ctx, cancel := h.bound(ctx)
 	defer cancel()
 	start := time.Now()
 	cols, err := h.svc.Collections(ctx)
 	if err != nil {
-		return nil, ListOutput{}, h.done("kb_list_collections", start, 0, err)
+		return nil, ListOutput{}, h.done(c, "kb_list_collections", start, 0, err)
 	}
 	out := ListOutput{Collections: make([]CollectionEntry, len(cols))}
 	var sb strings.Builder
 	if len(cols) == 0 {
 		sb.WriteString("No collections yet: the knowledge base is empty.")
 	}
-	for i, c := range cols {
-		out.Collections[i] = CollectionEntry{Name: c.Name, Documents: c.Documents}
+	for i, col := range cols {
+		c.saw(col.Name)
+		out.Collections[i] = CollectionEntry{Name: col.Name, Documents: col.Documents}
 		noun := "documents"
-		if c.Documents == 1 {
+		if col.Documents == 1 {
 			noun = "document"
 		}
-		fmt.Fprintf(&sb, "%s (%d %s)\n", c.Name, c.Documents, noun)
+		fmt.Fprintf(&sb, "%s (%d %s)\n", col.Name, col.Documents, noun)
 	}
-	_ = h.done("kb_list_collections", start, len(cols), nil)
+	_ = h.done(c, "kb_list_collections", start, len(cols), nil)
 	return textResult(strings.TrimRight(sb.String(), "\n")), out, nil
 }

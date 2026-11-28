@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openagentix/openagentix/services/kb/internal/access"
 	"github.com/openagentix/openagentix/services/kb/internal/chunk"
 	"github.com/openagentix/openagentix/services/kb/internal/config"
 	"github.com/openagentix/openagentix/services/kb/internal/embed"
@@ -53,6 +54,10 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	cfg, err := config.Load(getenv)
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	az, err := access.Load(cfg.AccessFile, cfg.AccessCallersDir, log)
+	if err != nil {
+		return err
 	}
 	var m *obs.Metrics // nil unless KB_METRICS_ADDR is set: every call on it is a no-op
 	if cfg.MetricsAddr != "" {
@@ -110,7 +115,7 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	log.Info("kb starting", append(cfg.LogAttrs(), "version", version, "listen", ln.Addr().String())...)
+	log.Info("kb starting", append(cfg.LogAttrs(), "version", version, "listen", ln.Addr().String(), "access", accessMode(az))...)
 	if cfg.AdminToken == "" && !cfg.AdminAllowAnonymous {
 		log.Warn("admin API disabled: set KB_ADMIN_TOKEN to enable ingestion")
 	}
@@ -138,5 +143,13 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 		}()
 		defer func() { mstop(); mwg.Wait() }()
 	}
-	return server.Run(ctx, server.Deps{Svc: svc, Cfg: cfg, Log: log, Version: version, Metrics: m}, ln)
+	return server.Run(ctx, server.Deps{Svc: svc, Cfg: cfg, Log: log, Version: version, Metrics: m, Access: az}, ln)
+}
+
+// accessMode names the caller check for the start log: "off", "report" or "enforce".
+func accessMode(a *access.Authorizer) string {
+	if a == nil {
+		return "off"
+	}
+	return string(a.Mode())
 }

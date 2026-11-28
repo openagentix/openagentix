@@ -86,10 +86,17 @@ func (s *Store) DeleteDocument(_ context.Context, collection, id string) (bool, 
 	return ok, nil
 }
 
-func (s *Store) GetDocument(_ context.Context, collection, id string) (store.Document, error) {
+func (s *Store) GetDocument(ctx context.Context, collection, id string) (store.Document, error) {
+	return s.GetDocumentIn(ctx, store.Scope{}, collection, id)
+}
+
+func (s *Store) GetDocumentIn(_ context.Context, scope store.Scope, collection, id string) (store.Document, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if collection != "" {
+		if !scope.Allows(collection) {
+			return store.Document{}, store.ErrNotFound
+		}
 		e, ok := s.m[key{collection, id}]
 		if !ok {
 			return store.Document{}, store.ErrNotFound
@@ -98,7 +105,7 @@ func (s *Store) GetDocument(_ context.Context, collection, id string) (store.Doc
 	}
 	var found *entry
 	for k, e := range s.m {
-		if k.id != id {
+		if k.id != id || !scope.Allows(k.collection) {
 			continue
 		}
 		if found != nil {
@@ -112,11 +119,18 @@ func (s *Store) GetDocument(_ context.Context, collection, id string) (store.Doc
 	return found.doc, nil
 }
 
-func (s *Store) ListCollections(context.Context) ([]store.CollectionInfo, error) {
+func (s *Store) ListCollections(ctx context.Context) ([]store.CollectionInfo, error) {
+	return s.ListCollectionsIn(ctx, store.Scope{})
+}
+
+func (s *Store) ListCollectionsIn(_ context.Context, scope store.Scope) ([]store.CollectionInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	counts := map[string]int{}
 	for k := range s.m {
+		if !scope.Allows(k.collection) {
+			continue
+		}
 		counts[k.collection]++
 	}
 	out := make([]store.CollectionInfo, 0, len(counts))
@@ -144,7 +158,7 @@ func (s *Store) Search(_ context.Context, q store.Query) ([]store.Hit, error) {
 
 	var cands []cand
 	for k, e := range s.m {
-		if q.Collection != "" && k.collection != q.Collection {
+		if q.Collection != "" && k.collection != q.Collection || !q.Scope.Allows(k.collection) {
 			continue
 		}
 		for i := range e.chunks {

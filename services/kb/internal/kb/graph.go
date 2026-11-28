@@ -153,14 +153,21 @@ func validateName(field, v string) (string, error) {
 }
 
 // graphCollections returns the collections to query: the named one, or all.
+// Inside a limited scope a named collection outside the list yields no
+// collection at all, which every graph tool answers as it answers a collection
+// that does not exist, and "all" means the scope's existing collections.
 func (s *Service) graphCollections(ctx context.Context, collection string) ([]string, error) {
+	sc := ScopeFrom(ctx)
 	if collection != "" {
 		if err := ValidateCollection(collection); err != nil {
 			return nil, err
 		}
+		if !sc.Allows(collection) {
+			return nil, nil
+		}
 		return []string{collection}, nil
 	}
-	infos, err := s.Store.ListCollections(ctx)
+	infos, err := s.Collections(ctx)
 	if err != nil {
 		return nil, err
 	}

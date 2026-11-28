@@ -275,9 +275,24 @@ func (s *Store) DeleteDocument(ctx context.Context, collection, id string) (bool
 }
 
 func (s *Store) GetDocument(ctx context.Context, collection, id string) (store.Document, error) {
+	return s.GetDocumentIn(ctx, store.Scope{}, collection, id)
+}
+
+// scopeArgs gives the two query arguments of a scope: whether it limits, and the list.
+func scopeArgs(sc store.Scope) (bool, []string) {
+	list := sc.Collections
+	if list == nil {
+		list = []string{}
+	}
+	return sc.Limited, list
+}
+
+func (s *Store) GetDocumentIn(ctx context.Context, scope store.Scope, collection, id string) (store.Document, error) {
+	limited, list := scopeArgs(scope)
 	rows, err := s.pool.Query(ctx, `
 		SELECT collection, id, title, source_uri, text, updated_at FROM `+s.schema+`.documents
-		WHERE id = $1 AND ($2 = '' OR collection = $2) ORDER BY collection LIMIT 2`, id, collection)
+		WHERE id = $1 AND ($2 = '' OR collection = $2) AND (NOT $3::bool OR collection = ANY($4::text[]))
+		ORDER BY collection LIMIT 2`, id, collection, limited, list)
 	if err != nil {
 		return store.Document{}, err
 	}
@@ -304,7 +319,13 @@ func (s *Store) GetDocument(ctx context.Context, collection, id string) (store.D
 }
 
 func (s *Store) ListCollections(ctx context.Context) ([]store.CollectionInfo, error) {
-	rows, err := s.pool.Query(ctx, `SELECT collection, count(*) FROM `+s.schema+`.documents GROUP BY collection ORDER BY collection`)
+	return s.ListCollectionsIn(ctx, store.Scope{})
+}
+
+func (s *Store) ListCollectionsIn(ctx context.Context, scope store.Scope) ([]store.CollectionInfo, error) {
+	limited, list := scopeArgs(scope)
+	rows, err := s.pool.Query(ctx, `SELECT collection, count(*) FROM `+s.schema+`.documents
+		WHERE (NOT $1::bool OR collection = ANY($2::text[])) GROUP BY collection ORDER BY collection`, limited, list)
 	if err != nil {
 		return nil, err
 	}
@@ -371,14 +392,15 @@ func (s *Store) lexical(ctx context.Context, q store.Query, limit int) ([]store.
 	if text == "" || !hasPositiveTerm(q.Text) {
 		return nil, nil
 	}
+	limited, list := scopeArgs(q.Scope)
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+hitColumns+`, ts_rank_cd(c.tsv, tq.query)::float8 AS score
 		FROM `+s.schema+`.chunks c
 		JOIN `+s.schema+`.documents d ON d.collection = c.collection AND d.id = c.doc_id,
 		     websearch_to_tsquery('english', $1) AS tq(query)
-		WHERE c.tsv @@ tq.query AND ($2 = '' OR c.collection = $2)
+		WHERE c.tsv @@ tq.query AND ($2 = '' OR c.collection = $2) AND (NOT $4::bool OR c.collection = ANY($5::text[]))
 		ORDER BY score DESC, c.collection, c.doc_id, c.idx
-		LIMIT $3`, text, q.Collection, limit)
+		LIMIT $3`, text, q.Collection, limit, limited, list)
 	if err != nil {
 		return nil, err
 	}
@@ -397,18 +419,19 @@ func (s *Store) vector(ctx context.Context, q store.Query, limit int) ([]store.H
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if q.Collection != "" {
+	if q.Collection != "" || q.Scope.Limited {
 		s.widenHNSWScan(ctx, tx)
 	}
+	limited, list := scopeArgs(q.Scope)
 	// ORDER BY the distance alone so the planner can use the HNSW index; ties
 	// are ordered deterministically in Go below.
 	rows, err := tx.Query(ctx, `
 		SELECT `+hitColumns+`, (1 - (c.embedding OPERATOR(`+s.vecSchema+`.<=>) $1::`+s.vecSchema+`.vector))::float8 AS score
 		FROM `+s.schema+`.chunks c
 		JOIN `+s.schema+`.documents d ON d.collection = c.collection AND d.id = c.doc_id
-		WHERE c.embedding IS NOT NULL AND ($2 = '' OR c.collection = $2)
+		WHERE c.embedding IS NOT NULL AND ($2 = '' OR c.collection = $2) AND (NOT $4::bool OR c.collection = ANY($5::text[]))
 		ORDER BY c.embedding OPERATOR(`+s.vecSchema+`.<=>) $1::`+s.vecSchema+`.vector
-		LIMIT $3`, vectorLiteral(q.Embedding), q.Collection, limit)
+		LIMIT $3`, vectorLiteral(q.Embedding), q.Collection, limit, limited, list)
 	if err != nil {
 		return nil, err
 	}

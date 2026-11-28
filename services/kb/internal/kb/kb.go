@@ -244,6 +244,9 @@ func (s *Service) Delete(ctx context.Context, collection, id string) (bool, erro
 
 // Collections lists collections with document counts.
 func (s *Service) Collections(ctx context.Context) ([]store.CollectionInfo, error) {
+	if sc := ScopeFrom(ctx); sc.Limited {
+		return s.Store.ListCollectionsIn(ctx, sc)
+	}
 	return s.Store.ListCollections(ctx)
 }
 
@@ -277,7 +280,7 @@ func (s *Service) search(ctx context.Context, query, collection string, topK int
 	if topK > MaxTopK {
 		topK = MaxTopK
 	}
-	q := store.Query{Text: query, Collection: collection, TopK: topK}
+	q := store.Query{Text: query, Collection: collection, TopK: topK, Scope: ScopeFrom(ctx)}
 	if s.Embedder.Dimensions() > 0 {
 		if v, err := s.embedQuery(ctx, query); err != nil {
 			s.Log.Warn("query embedding failed; falling back to lexical search", "err", err)
@@ -300,7 +303,13 @@ func (s *Service) Get(ctx context.Context, collection, id string) (DocView, erro
 	if err := ValidateID(id); err != nil {
 		return DocView{}, err
 	}
-	d, err := s.Store.GetDocument(ctx, collection, id)
+	var d store.Document
+	var err error
+	if sc := ScopeFrom(ctx); sc.Limited {
+		d, err = s.Store.GetDocumentIn(ctx, sc, collection, id)
+	} else {
+		d, err = s.Store.GetDocument(ctx, collection, id)
+	}
 	if err != nil {
 		return DocView{}, err
 	}
