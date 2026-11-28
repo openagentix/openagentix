@@ -87,3 +87,18 @@ The gate keeps no per-caller state today, so this shows the cost of distinct tok
 - The spike sent its calls to the runtime's port. The gate was in the path only for one check of B1 and for B5. The gate passes the body on after reading it; whether a gate-side parser would read the same keys as the runtime was not run, because that parser does not exist yet.
 - B5 used port-forwards, which dropped some connections under load; the numbers are for the connections that were made.
 - `blocking: false` is ignored by kagent 1.0.1. If the ADR needs the call to return at once, the field is `returnImmediately: true` in `configuration`. This needs the ADR's shape check to allow that key and not `blocking`.
+
+## Later check: message id scope per user id
+
+This check was run by hand by the maintainer's session on 2026-11-28. It was not part of the CI spike and has no run id. Setup: a kind cluster, kagent 1.0.1, a real model behind the model gateway, calls through the A2A gate, one agent, and one caller whose rule allows a user id prefix, so two different user ids could be used with the same caller.
+
+What was seen:
+
+- User A sent `SendMessage` with a `messageId` M and got its answer.
+- User B sent the same M with other text and got its own, different answer. That was a second run.
+- User A sent M again with other text and got its first answer back, with no new run.
+- User B sent a message with user A's `contextId` and was refused with JSON-RPC error `-32001`, "task not found". User A could continue that conversation.
+
+So on this version the message id check and the conversation are scoped per user id. This agrees with B3 above (the same id from the same user gives one run) and adds that a second user id with the same id gets its own run.
+
+Not checked: two agents, two different callers mapped to one user id, and a runtime restart.
