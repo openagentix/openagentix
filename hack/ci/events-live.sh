@@ -102,7 +102,7 @@ DEP=$($K get deployment records -n "$RNS" -o json)
 HAS_URL=$(jq -r '[.spec.template.spec.containers[0].env[]|select(.name=="RECORDS_EVENT_GATE_URL")]|length' <<<"$DEP")
 if [ "$PHASE" = off ]; then
   check "the pod has no sender setting and no projected gate token" "$HAS_URL $(jq -r '[.spec.template.spec.volumes[]?|select(.projected)]|length' <<<"$DEP")" "0 0"
-  check "the pod makes no connection (egress is the empty list)" "$($K get networkpolicy records -n "$RNS" -o json | jq -c '.spec.egress')" "[]"
+  check "the pod makes no connection (egress is the empty list)" "$($K get networkpolicy records -n "$RNS" -o json | jq -c '.spec.egress // []')" "[]"
   before=$(gate_audit | jq -c --arg c "$CALLER" 'select(.caller==$c)' | wc -l | tr -d ' ')
   new_case 1; rc=$?
   check "a new case is accepted by the intake route with the sender off (HTTP $HTTP)" "$rc" 0
