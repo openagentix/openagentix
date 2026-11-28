@@ -2555,6 +2555,8 @@ done
 . "$(dirname "$0")/endpoints.sh"     # ADR 0026, slice 2: mcp.endpoints[], own group mode
 # shellcheck source=charts/openagentix/tests/budget-classes.sh
 . "$(dirname "$0")/budget-classes.sh"   # ADR 0029, slice 3: budget classes in the one gateway policy
+# shellcheck source=charts/openagentix/tests/tool-server-accounts.sh
+. "$(dirname "$0")/tool-server-accounts.sh"   # ADR 0031, slice 3: a ServiceAccount, Role and RoleBinding per tool server
 
 echo
 echo "passed=$PASS failed=$FAIL"

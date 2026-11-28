@@ -167,6 +167,12 @@ spec:
           podSelector:
             matchLabels: {app: virtualmcpserver, toolhive-name: {{ printf "%s-%s" $.Values.mcp.virtual.name $p.name | quote }}}
         {{- end }}
+        {{- range $w := (include "oa.caToolProfiles" . | fromJsonArray) }}
+        # the -workload variant of tool profile {{ $w.name }} (ADR 0019) connects to every backend of its group too
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ $.Values.mcp.namespace }}}}
+          podSelector:
+            matchLabels: {app: virtualmcpserver, toolhive-name: {{ printf "%s-%s-workload" $.Values.mcp.virtual.name $w.name | quote }}}
+        {{- end }}
 {{- if and (include "oa.obsOn" .) .Values.observability.bundled.enabled }}
 ---
 # The bundled VictoriaMetrics scrapes the notify metrics port (no authentication, counts and timings by platform kind only).

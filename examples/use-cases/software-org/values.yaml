@@ -29,6 +29,10 @@ diagnostics:
     # explain why a platform pod restarts adds them there: pods, events and workloads, never logs (ADR 0025, section 2).
 
 mcp:
+  virtual:
+    # ADR 0031: the tool servers (the shared one, lookup and rca) run under accounts of the chart that have no right on Secrets, so the tool server of another
+    # group cannot read the bearer value of the diagnostics tool server. A platform switch: components/tools/own-service-accounts-values.yaml sets the same.
+    ownServiceAccounts: true
   # A list replaces the quick start list, so `lookup` is stated again exactly as components/quickstart/values.yaml has it (a test compares them).
   profiles:
     - name: lookup

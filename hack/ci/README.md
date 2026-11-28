@@ -181,12 +181,13 @@ The shared guard is `hack/ci/lib/require-ci-context.sh`, one function, `require_
 | `hack/ci/event-live.sh` | live, guarded | `require_ci_context` (variable `EVENT_LIVE_CI_CONTEXT`); also needs `EVENT_LIVE=1` |
 | `hack/ci/events-live.sh` | live, guarded | `require_ci_context` (variable `EVENTS_CI_CONTEXT`); also needs `EVENTS_LIVE=1` |
 | `hack/ci/msgid-scope.sh` | live, guarded | `require_ci_context` (variable `MSGID_SCOPE_CI_CONTEXT`) |
+| `hack/ci/tool-accounts-live.sh` | live, guarded | `require_ci_context` (variable `TOOL_ACCOUNTS_CI_CONTEXT`); also needs `TOOL_ACCOUNTS_LIVE=1` and a phase (`prepare`, `off`, `on`, `refused`, `back-off`) |
 | `hack/ci/rca-live.sh` | live, guarded | `require_ci_context` (variable `RCA_CI_CONTEXT`); also needs `RCA_LIVE=1` |
 | `hack/ci/recovery-test.sh` | live, guarded | `require_ci_context` (variable `RECOVERY_CI_CONTEXT`) |
 | `hack/ci/upgrade-test.sh` | live, guarded | `require_ci_context` (variable `UPGRADE_CI_CONTEXT`) |
 | `hack/ci/use-case-class-live.sh` | live, guarded | `require_ci_context` (variable `USE_CASE_CLASS_CI_CONTEXT`); also needs `USE_CASE_CLASS_LIVE=1` |
 | `hack/spikes/adr-spikes.sh` | live, guarded | `require_ci_context` (variable `ADR_SPIKES_CI_CONTEXT`) |
-| `hack/ci/lifecycle-test.sh` | live, guard in another pull request | PR 280 adds its guard; adopt hack/ci/lib/require-ci-context.sh there in a follow-up |
+| `hack/ci/lifecycle-test.sh` | live, guarded | `require_ci_context` (variable `LIFECYCLE_CI_CONTEXT`), whatever `KUBECTL` is; the offline test checks it with fakes |
 | `hack/ci/apiserver-test.sh` | live, own cluster | creates the kind cluster oa-ci-test with a kubeconfig of its own in a temp file and exports KUBECONFIG to it before any kubectl or helm call |
 | `hack/spikes/toolhive-diagnostics-spike.sh` | live, own cluster | creates its own kind cluster with a kubeconfig of its own and checks the context it got (kind-<its cluster>) before it goes on |
 | the Makefiles (`make test-integration`, `make docker`, `make test-apiserver`) | docker only, or own cluster | `test-integration` starts throwaway database containers that the Makefile names and stops, and no cluster; `test-apiserver` runs `hack/ci/apiserver-test.sh` (own cluster, above) |
@@ -208,3 +209,5 @@ The shared guard is `hack/ci/lib/require-ci-context.sh`, one function, `require_
 | 56 scripts and tests with fakes, fixtures or no cluster call | offline | listed in `live-scripts.tsv`; the tests put fake tools on `PATH` |
 
 `hack/ci/smoke.sh` and `hack/ci/netpol-test.sh` are user tools on purpose: the README and `hack/gke/README.md` tell people to run them on their own kind cluster or on a GKE cluster, and they only make and delete one throwaway object. For your own local runs of the tests, export `KUBECONFIG=$(mktemp)` and `HELM_KUBECONTEXT=none-such` first, so that no test can reach a real context.
+
+`e2e.yml` has a job `e2e-tool-accounts` that runs only when the workflow is started by hand with the input `tool_accounts` (ADR 0031, slice 3). It installs the quick start with the sample container agent and `hack/ci/tool-accounts-ci-values.yaml` five times as a user would: the switch `mcp.virtual.ownServiceAccounts` off, on, left out of the list (must be refused), turned off on purpose (`ALLOW_TOOL_SECRET_READ=1`) and on again, and runs `hack/ci/tool-accounts-live.sh` after each. A last step fails the job unless every phase reports no failed check. The offline part is `hack/ci/tool-accounts-check-test.sh` (`make test-shell`).

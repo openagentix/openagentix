@@ -89,6 +89,10 @@ on:
         description: 'Run the design spike of ADR 0031 (tool servers that cannot read Secrets, issue #229, hack/spikes/adr0031_tool_server_spike.py) instead of the profiles: the endpoints cluster of the endpoints job, then the spike. It observes a throwaway cluster and never gates a merge'
         type: boolean
         default: false
+      tool_accounts:
+        description: 'Run the live proof of tool server accounts (ADR 0031, slice 3, issue #229, hack/ci/tool-accounts-live.sh) instead of the profiles: the quick start with the sample container agent, an endpoint, the knowledge base, notify and diagnostics, with the switch off, on, refused to turn off, and off on purpose'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -100,7 +104,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none' && !inputs.adr0031) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none' && !inputs.adr0031 && !inputs.tool_accounts) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -1066,3 +1070,152 @@ jobs:
             install.log
           if-no-files-found: ignore
           retention-days: 30
+
+  # Opt-in (workflow_dispatch with the input `tool_accounts`; TOOL_ACCOUNTS_LIVE=1 for the script): the live proof of tool server accounts (ADR 0031, slice 3, issue #229).
+  # One install that renders every kind of tool server (the shared one, a profile on the shared group, the -workload variant of the sample container agent's profile, a
+  # profile on a group of its own with an endpoint and the knowledge base and notify mirrors, a profile on the diagnostics group), run five times as a user would:
+  # the switch off (the old behaviour), on (the upgrade path), a run that must be refused (the switch left out), a run that turns it off on purpose
+  # (ALLOW_TOOL_SECRET_READ=1), and on again. See hack/ci/tool-accounts-ci-values.yaml and hack/ci/tool-accounts-live.sh. Nothing here uses a paid model.
+  e2e-tool-accounts:
+    name: e2e (tool server accounts)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tool_accounts }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TOOL_ACCOUNTS_LIVE: "1"
+      ENDPOINTS: "1"
+      QUICKSTART_BYO: "1"
+      PROFILE: quickstart
+      AGENT_WAIT: 300s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: cluster, the endpoint, the CA of the API server
+        run: |
+          set -o pipefail
+          kind create cluster --name openagentix --config hack/kind-config.yaml
+          hack/ci/endpoints-ci-setup.sh 2>&1 | tee setup.log
+          hack/ci/tool-accounts-live.sh prepare 2>&1 | tee prepare.log
+      - name: install 1, the switch off (the old behaviour)
+        env:
+          VALUES_FILE: hack/ci/tool-accounts-ci-values.yaml
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-off.log
+      - name: live check, off
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
+        env:
+          TA_INSTALL_LOG: install-off.log
+        run: |
+          set -o pipefail
+          hack/ci/tool-accounts-live.sh off 2>&1 | tee live-off.log
+      - name: install 2, the switch on over the existing install (the upgrade path)
+        env:
+          VALUES_FILE: hack/ci/tool-accounts-ci-values.yaml components/tools/own-service-accounts-values.yaml
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-on.log
+      - name: live check, on
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
+        env:
+          TA_INSTALL_LOG: install-on.log
+        run: |
+          set -o pipefail
+          hack/ci/tool-accounts-live.sh on 2>&1 | tee live-on.log
+      - name: install 3, the switch left out of the list (must be refused, nothing changed)
+        env:
+          VALUES_FILE: hack/ci/tool-accounts-ci-values.yaml
+        run: |
+          set +e
+          ./install.sh 2>&1 | tee install-refused.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "install.sh exit code: $rc"
+          [ "$rc" != 0 ] || { echo "install.sh did NOT refuse to turn the switch off"; exit 1; }
+      - name: live check, refused
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
+        env:
+          TA_INSTALL_LOG: install-refused.log
+        run: |
+          set -o pipefail
+          hack/ci/tool-accounts-live.sh refused 2>&1 | tee live-refused.log
+      - name: install 4, the switch turned off on purpose (ALLOW_TOOL_SECRET_READ=1)
+        env:
+          VALUES_FILE: hack/ci/tool-accounts-ci-values.yaml
+          ALLOW_TOOL_SECRET_READ: "1"
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-back-off.log
+      - name: live check, back off (the old behaviour is back)
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
+        env:
+          TA_INSTALL_LOG: install-back-off.log
+        run: |
+          set -o pipefail
+          hack/ci/tool-accounts-live.sh back-off 2>&1 | tee live-back-off.log
+      - name: install 5, the switch on again (the operator's objects made again by install 4 are deleted again)
+        env:
+          VALUES_FILE: hack/ci/tool-accounts-ci-values.yaml components/tools/own-service-accounts-values.yaml
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-on2.log
+      - name: live check, on again
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
+        env:
+          TA_INSTALL_LOG: install-on2.log
+        run: |
+          set -o pipefail
+          hack/ci/tool-accounts-live.sh on 2>&1 | tee live-on2.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Tool server accounts on a real cluster (ADR 0031, slice 3)"
+            for p in off on refused back-off on2; do
+              echo "### live check, $p"
+              echo '```'
+              tail -n 60 "live-$p.log" 2>/dev/null || echo "did not run"
+              echo '```'
+            done
+            echo "### checks that did not run"
+            echo '```'
+            grep -h 'NOT RUN' live-*.log 2>/dev/null | sort -u || true
+            echo '```'
+            echo "### install.sh, tool server account lines (the second install)"
+            echo '```'
+            grep -iE 'tool server account|can get|can list|no right on Secrets|WARNING: mcp.virtual' install-on.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,sa:.spec.serviceAccount,conditions:[.status.conditions[]?|{type,status,reason}],backends:[.status.discoveredBackends[]?|{name,status}]}' || true
+          kubectl get serviceaccount,role,rolebinding -n mcp-tools || true
+          kubectl logs -n toolhive-system deploy/toolhive-operator --tail=300 || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: verdict (every phase must have run and passed)
+        if: always()
+        run: |
+          rc=0
+          for p in off on refused back-off on2; do
+            line=$(grep -E 'tool-accounts-live \(.*\): passed=' "live-$p.log" 2>/dev/null | tail -1)
+            echo "$p: ${line:-did not run}"
+            case "$line" in *"failed=0") ;; *) rc=1;; esac
+          done
+          exit $rc
+      - name: upload cluster logs and the results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs-tool-accounts
+          path: |
+            kind-logs
+            live-*.log
+            install-*.log
+          retention-days: 7

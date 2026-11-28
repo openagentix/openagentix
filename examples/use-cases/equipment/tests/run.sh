@@ -32,6 +32,11 @@ check "the quick start plus the equipment values render" "[ $EQ_RC = 0 ]" "$(cat
 ids "$T/qs.yaml" > "$T/qs.ids"; ids "$T/eq.yaml" > "$T/eq.ids"
 comm -13 "$T/qs.ids" "$T/eq.ids" > "$T/added.ids"; comm -23 "$T/qs.ids" "$T/eq.ids" > "$T/removed.ids"
 check "the values remove no object of the quick start" "[ ! -s '$T/removed.ids' ]" "$(cat "$T/removed.ids")"
+# ADR 0031: the use case turns the switch on, so every tool server names an account of the chart and has a ServiceAccount, a Role and a RoleBinding
+yq -r 'select(.kind=="VirtualMCPServer")|.metadata.name+" "+(.spec.serviceAccount // "none")' "$T/eq.yaml" | sort > "$T/tsa.vmcps"
+yq -r 'select(.kind=="Role" and .metadata.namespace=="mcp-tools")|.metadata.name' "$T/eq.yaml" | sort > "$T/tsa.roles"
+check "the values turn mcp.virtual.ownServiceAccounts on: every tool server names the account openagentix-<name>" "[ -s '$T/tsa.vmcps' ] && ! grep -q ' none\$' '$T/tsa.vmcps' && [ \"\$(awk '{print \"openagentix-\"\$1}' '$T/tsa.vmcps')\" = \"\$(cat '$T/tsa.roles')\" ]" "$(cat "$T/tsa.vmcps") / $(cat "$T/tsa.roles")"
+check "the quick start alone renders no tool server account (the switch is the use case's)" "! grep -q 'name: openagentix-tools' '$T/qs.yaml'"
 for want in "Agent kagent service-agent" "AgentTemplate kagent service-agent-template" "ModelConfig kagent gateway-service-agent" "Harness kagent service-agent-harness" \
             "CronJob openagentix-schedules fleet-sweep" "Deployment openagentix-knowledge kb" "StatefulSet openagentix-knowledge kb-postgres" "MCPServerEntry mcp-tools knowledge" \
             "MCPGroup mcp-tools dealer" "MCPServerEntry mcp-tools dealer-records" "MCPServerEntry mcp-tools knowledge-dealer" "VirtualMCPServer mcp-tools tools-dealer" \
@@ -256,7 +261,7 @@ check "no group, profile or agent name of the bank is reused by the equipment va
 
 echo "# beside the full demo (values-full-demo.yaml, composed after the values of the install you have)"
 FD="$HERE/values-full-demo.yaml"
-DEMO_FILES=(components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml)
+DEMO_FILES=(components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml components/tools/own-service-accounts-values.yaml)
 DEMO_ARGS=(); : > "$T/demo.json"
 for f in "${DEMO_FILES[@]}"; do DEMO_ARGS+=(-f "$ROOT/$f"); yq . "$ROOT/$f" >> "$T/demo.json"; done
 jq -s 'reduce .[] as $x ({}; . * $x)' "$T/demo.json" > "$T/demo-merged.yaml"

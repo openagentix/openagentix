@@ -645,6 +645,49 @@ YAML
   [ "$GOT" = '{"app":"records"} 8080 1' ] && ok "the endpoint's ingress policy is stored as rendered ($GOT)" || bad "the endpoint's ingress policy is stored as rendered" "got '$GOT'"
   GOT=$(kubectl get networkpolicy openagentix-vmcp-egress-disputes -n mcp-tools -o json | jq -r '[(.spec.podSelector.matchExpressions[0]|[.key,.operator,(.values|join(","))]|join(":")),(.spec.egress|length|tostring)]|join(" ")')
   [ "$GOT" = "toolhive-name:In:tools-disputes 6" ] && ok "the egress policy of the group's vMCPs is stored as rendered ($GOT)" || bad "the egress policy of the group's vMCPs is stored as rendered" "got '$GOT'"
+
+  # ---- ADR 0031, slice 3: mcp.virtual.ownServiceAccounts. The tool servers name an account of the chart, and that account has no right on Secrets ----
+  echo "# mcp.virtual.ownServiceAccounts: spec.serviceAccount is accepted by the ToolHive CRD, and the rendered accounts cannot read a Secret (a real API server)"
+  helm template openagentix charts/openagentix -n openagentix-system -f "$TMP/ep-values.yaml" --set mcp.virtual.ownServiceAccounts=true | yq -c 'select(.!=null)' > "$TMP/ta.jsonl"
+  jq -c 'select(.kind=="VirtualMCPServer")' "$TMP/ta.jsonl" > "$TMP/ta-vmcps.jsonl"
+  jq -c 'select(.metadata.namespace=="mcp-tools" and (.kind=="ServiceAccount" or .kind=="Role" or .kind=="RoleBinding"))' "$TMP/ta.jsonl" > "$TMP/ta-rbac.jsonl"
+  [ "$(wc -l < "$TMP/ta-vmcps.jsonl" | tr -d ' ')" = 2 ] && ok "the render has two tool servers (tools and tools-disputes)" || bad "the render has two tool servers" "got $(wc -l < "$TMP/ta-vmcps.jsonl" | tr -d ' ')"
+  [ "$(wc -l < "$TMP/ta-rbac.jsonl" | tr -d ' ')" = 6 ] && ok "the render has six account objects (a ServiceAccount, a Role and a RoleBinding for each)" || bad "the render has six account objects" "got $(wc -l < "$TMP/ta-rbac.jsonl" | tr -d ' ')"
+  allowed "the tool servers with spec.serviceAccount are accepted (server-side dry run, strict validation)" bash -c "kubectl apply --server-side --dry-run=server --validate=strict -f - < '$TMP/ta-vmcps.jsonl'"
+  GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/ta-vmcps.jsonl" 2>/dev/null | jq -s -r '[.[]|.items // [.]|.[]|.metadata.name+"="+(.spec.serviceAccount // "none")]|sort|join(" ")')
+  [ "$GOT" = "tools-disputes=openagentix-tools-disputes tools=openagentix-tools" ] && ok "the API server keeps spec.serviceAccount of each tool server ($GOT)" || bad "spec.serviceAccount is kept" "got '$GOT'"
+  jq -c '.spec.serviceAcount=.spec.serviceAccount|del(.spec.serviceAccount)' <(sed -n 1p "$TMP/ta-vmcps.jsonl") > "$TMP/ta-badfield.json"
+  refused "a wrong field name for the account is refused by the schema (negative control)" "serviceAcount" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/ta-badfield.json"
+  allowed "the three kinds of account objects are applied (strict validation)" bash -c "kubectl apply --server-side --validate=strict -f - < '$TMP/ta-rbac.jsonl'"
+  for TS in tools tools-disputes; do
+    TSA="system:serviceaccount:mcp-tools:openagentix-$TS"
+    for q in "get secrets" "list secrets" "watch secrets" "get secrets/records-mcp-auth" "create pods" "create statefulsets.apps" "create deployments.apps" "create pods --subresource=exec" "create pods --subresource=attach" "update virtualmcpservers.toolhive.stacklok.dev"; do
+      [ "$(kubectl auth can-i $q -n mcp-tools --as="$TSA" 2>/dev/null || true)" = no ] && ok "openagentix-$TS may not: $q" || bad "openagentix-$TS may not: $q" "the API server does not say no"
+    done
+    # positive controls, so that the no answers above are not an account that can do nothing
+    for q in "list mcpgroups.toolhive.stacklok.dev" "watch mcpserverentries.toolhive.stacklok.dev" "list mcpexternalauthconfigs.toolhive.stacklok.dev" "watch configmaps" "get virtualmcpservers.toolhive.stacklok.dev/$TS" "patch virtualmcpservers.toolhive.stacklok.dev/$TS --subresource=status"; do
+      [ "$(kubectl auth can-i $q -n mcp-tools --as="$TSA" 2>/dev/null || true)" = yes ] && ok "openagentix-$TS may: $q" || bad "openagentix-$TS may: $q" "the API server does not say yes"
+    done
+  done
+  # the status of ANOTHER tool server is not its to write (resourceNames), and the account of one is not the account of the other
+  for q in "get virtualmcpservers.toolhive.stacklok.dev/tools-disputes" "patch virtualmcpservers.toolhive.stacklok.dev/tools-disputes --subresource=status"; do
+    [ "$(kubectl auth can-i $q -n mcp-tools --as="system:serviceaccount:mcp-tools:openagentix-tools" 2>/dev/null || true)" = no ] && ok "openagentix-tools may not: $q (only its own object)" || bad "openagentix-tools may not: $q" "the API server does not say no"
+  done
+  # negative control for the whole check: an account that is given get on secrets would show a yes
+  kubectl apply -f - >/dev/null <<YAML
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ta-control, namespace: mcp-tools}
+rules: [{apiGroups: [""], resources: [secrets], verbs: [get]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: ta-control, namespace: mcp-tools}
+subjects: [{kind: ServiceAccount, name: openagentix-tools, namespace: mcp-tools}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ta-control}
+YAML
+  [ "$(kubectl auth can-i get secrets -n mcp-tools --as="system:serviceaccount:mcp-tools:openagentix-tools" 2>/dev/null || true)" = yes ] && ok "negative control: with a binding that gives get on secrets, the same question answers yes" || bad "negative control for the can-i check" "the question did not answer yes with a Secret rule bound"
+  kubectl delete rolebinding ta-control -n mcp-tools >/dev/null 2>&1 || true; kubectl delete role ta-control -n mcp-tools >/dev/null 2>&1 || true
 else
   bad "the ToolHive CRDs could be fetched (needs network: ghcr.io)" "fetch failed (version '$TH_VER'); the endpoint objects were not checked on an API server"
 fi

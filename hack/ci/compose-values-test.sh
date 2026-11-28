@@ -520,6 +520,62 @@ else
   echo "  skip the helm template cases: helm is not installed"
 fi
 
+echo "# mcp.virtual.ownServiceAccounts (ADR 0031): a security key that a later file may turn on and never off"
+w sa-none.yaml <<'EOF'
+mcp: {profiles: [{name: lookup, tools: {osv: [query_vulnerability]}}]}
+EOF
+w sa-on.yaml <<'EOF'
+mcp: {virtual: {ownServiceAccounts: true}}
+EOF
+w sa-off.yaml <<'EOF'
+mcp: {virtual: {ownServiceAccounts: false}}
+EOF
+run "$T/sa-none.yaml" "$T/sa-on.yaml"
+check "a later file turns it on (no earlier file sets it; the chart default is false): composed, exit 0" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true and (.mcp.profiles|length)==1'" "$(cat "$T/err")"
+check "... and the report says it was turned on, with the file" "grep -q 'turned on security key mcp.virtual.ownServiceAccounts' '$T/err' && grep -q 'sa-on.yaml' '$T/err'"
+run "$T/sa-off.yaml" "$T/sa-on.yaml"
+check "an earlier file false and a later file true: composed true, reported" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true' && grep -q 'turned on security key' '$T/err'" "$(cat "$T/err")"
+run "$T/sa-on.yaml" "$T/sa-off.yaml"
+check "an earlier file true and a later file false: refused, exit 1, nothing written" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'turns security key mcp.virtual.ownServiceAccounts off' '$T/err'" "$(cat "$T/err")"
+check "... the refusal names both files and says on, never off" "grep -q 'sa-on.yaml' '$T/err' && grep -q 'sa-off.yaml' '$T/err' && grep -q 'turn it on, never off' '$T/err'"
+run --later-wins "$T/sa-on.yaml" "$T/sa-off.yaml"
+check "--later-wins does not turn it off either: refused, exit 1" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'does not change that' '$T/err'" "$(cat "$T/err")"
+run "$T/sa-on.yaml" "$T/sa-none.yaml"
+check "a later file that does not mention it keeps it on" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true'"
+run "$T/sa-on.yaml" "$T/sa-on.yaml"
+check "true then true: composed, no report about it" "[ $RC = 0 ] && ! grep -q 'turned on security key' '$T/err'"
+run "$T/sa-none.yaml" "$T/sa-off.yaml"
+check "a later file that sets it to the chart default (false) is not a change" "[ $RC = 0 ] && ! grep -qi 'refused' '$T/err'"
+w sa-str.yaml <<'EOF'
+mcp: {virtual: {ownServiceAccounts: "yes"}}
+EOF
+run "$T/sa-none.yaml" "$T/sa-str.yaml"
+check "a value that is not true (a string) from a later file is still a refused change of a security key" "[ $RC = 1 ] && grep -q 'ownServiceAccounts' '$T/err'" "$(cat "$T/err")"
+w sa-vnull.yaml <<'EOF'
+mcp: {virtual: null}
+EOF
+w sa-mcpnull.yaml <<'EOF'
+mcp: null
+EOF
+w sa-name.yaml <<'EOF'
+mcp: {virtual: {name: tools}}
+EOF
+for LW in "" "--later-wins"; do
+  run $LW "$T/sa-on.yaml" "$T/sa-vnull.yaml" "$T/sa-name.yaml"
+  check "true, then mcp.virtual: null, then mcp.virtual.name: the switch may not end off ($LW): refused, exit 1, nothing written" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'ownServiceAccounts' '$T/err' && grep -q 'sa-on.yaml' '$T/err'" "$(cat "$T/err")"
+  run $LW "$T/sa-on.yaml" "$T/sa-mcpnull.yaml" "$T/sa-name.yaml"
+  check "true, then mcp: null, then mcp.virtual.name: refused too ($LW)" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'ownServiceAccounts' '$T/err'" "$(cat "$T/err")"
+  run $LW "$T/sa-on.yaml" "$T/sa-vnull.yaml"
+  check "true, then mcp.virtual: null: refused too ($LW)" "[ $RC = 1 ] && [ ! -s '$T/out' ]" "$(cat "$T/err")"
+done
+run --later-wins "$T/sa-on.yaml" "$T/sa-vnull.yaml" "$T/sa-on.yaml"
+check "true, null, true again with --later-wins: the result is on, so it composes" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true'" "$(cat "$T/err")"
+OWN="$ROOT/components/tools/own-service-accounts-values.yaml"
+run "$QS" "$BANK" "$OWN"
+check "the quick start, the bank values and the platform switch file compose: exit 0, switch on" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true and (.mcp.profiles|map(.name)) == [\"lookup\",\"disputes\"]'" "$(cat "$T/err")"
+run "$QS" "$OWN" "$BANK"
+check "the order of the switch file in the list does not matter to the result" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true'" "$(cat "$T/err")"
+
 echo "# plain English, no personal data"
 check "no em dash in the script or in this test" "! grep -l \$'\xe2\x80\x94' '$SCRIPT' '$ROOT/hack/ci/compose-values-test.sh'"
 if command -v shellcheck >/dev/null; then check "shellcheck (warning level)" "shellcheck -S warning '$SCRIPT'"; fi
