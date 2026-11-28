@@ -89,7 +89,14 @@ done
 sleep 4
 for p in alpha beta sharedkb; do
   SID[$p]=-
-  for _ in $(seq 1 12); do SID[$p]=$(mcp_open "${PORT[$p]}" "$TD/tok-$p"); [ "${SID[$p]}" != - ] && break; sleep 5; done
+  for _ in $(seq 1 6); do SID[$p]=$(mcp_open "${PORT[$p]}" "$TD/tok-$p"); [ "${SID[$p]}" != - ] && break; sleep 5; done
+  if [ "${SID[$p]}" = - ]; then
+    # what the first attempt did, and what the vMCP says: the status and the start of the answer, never a token
+    echo "       no session on $p: the answer to initialize was:"
+    curl -s -i -m 20 -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TD/tok-$p")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"kb-access-live","version":"0"}}}' "http://127.0.0.1:${PORT[$p]}/mcp" 2>&1 | head -c 600 | sed 's/^/         /'
+    echo
+    $K logs -n "$MCPNS" "deploy/tools-$p" --tail=15 2>&1 | cut -c1-300 | sed 's/^/         vmcp: /'
+  fi
   check "a session on the vMCP of $p" "$([ "${SID[$p]}" != - ] && echo open || echo none)" open
 done
 tool_name() { case "$1" in sharedkb) echo "knowledge_$2";; *) echo "knowledge-$1_$2";; esac; }
