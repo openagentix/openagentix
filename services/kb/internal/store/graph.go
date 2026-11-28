@@ -393,6 +393,8 @@ type FactSet struct {
 	SourceURI  string         `json:"source_uri,omitempty"`
 	Entities   []FactEntity   `json:"entities"`
 	Relations  []FactRelation `json:"relations"`
+	// SchemaSHA is the hash of the graph schema this fact set was shaped for ("" when the collection had none). It is not stored.
+	SchemaSHA string `json:"-"`
 }
 
 // Hash identifies the content of a fact set (not its collection or id): two

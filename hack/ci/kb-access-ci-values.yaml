@@ -46,17 +46,17 @@ mcp:
       knowledgeCollections: [ci-alpha]
       tools:
         echo: [echo]
-        knowledge: [kb_search, kb_get_document, kb_list_collections]
+        knowledge: [kb_search, kb_get_document, kb_list_collections, kb_graph_schema]
     - name: beta
       codeMode: false
       knowledgeCollections: [ci-beta]
       tools:
         other: [echo]
-        knowledge: [kb_search, kb_get_document, kb_list_collections]
+        knowledge: [kb_search, kb_get_document, kb_list_collections, kb_graph_schema]
     - name: sharedkb                   # on the shared group: it reads knowledge.access.sharedGroupCollections
       codeMode: false
       tools:
-        knowledge: [kb_search, kb_get_document, kb_list_collections]
+        knowledge: [kb_search, kb_get_document, kb_list_collections, kb_graph_schema]
   virtual:
     incomingAuth:
       # Only for this job: the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/kb-access-live.sh can make a token and make real

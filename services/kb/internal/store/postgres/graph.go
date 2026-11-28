@@ -720,12 +720,17 @@ func (s *Store) ClaimJob(ctx context.Context, lease time.Duration) (store.Job, b
 		return store.Job{}, false, err
 	}
 	var j store.Job
+	// a collection with a graph schema has curated facts only: its jobs wait, and resume if the schema is deleted
+	skip := ""
+	if s.schemas {
+		skip = ` AND NOT EXISTS (SELECT 1 FROM {{schema}}.graph_schemas gs WHERE gs.collection = extraction_jobs.collection)`
+	}
 	err := s.pool.QueryRow(ctx, s.q(`
 		UPDATE {{schema}}.extraction_jobs j
 		SET attempts = attempts + 1, claimed_until = now() + make_interval(secs => $1), updated_at = now()
 		WHERE (j.collection, j.document_id, j.window_idx) = (
 		  SELECT collection, document_id, window_idx FROM {{schema}}.extraction_jobs
-		  WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= now()) AND (not_before IS NULL OR not_before <= now())
+		  WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= now()) AND (not_before IS NULL OR not_before <= now())`+skip+`
 		  ORDER BY created_seq LIMIT 1 FOR UPDATE SKIP LOCKED)
 		RETURNING j.collection, j.document_id, j.window_idx, j.window_hash, j.first_chunk, j.chunk_count, j.prompt_version, j.state, j.attempts, j.last_error_code, j.updated_at`),
 		lease.Seconds()).Scan(&j.Collection, &j.DocumentID, &j.WindowIdx, &j.WindowHash, &j.FirstChunk, &j.ChunkCount, &j.PromptVersion, &j.State, &j.Attempts, &j.LastErrorCode, &j.UpdatedAt)
@@ -775,6 +780,12 @@ func (s *Store) ApplyExtraction(ctx context.Context, res store.ExtractionResult)
 	}
 	coll, doc := res.Job.Collection, res.Job.DocumentID
 	return s.inGraphTx(ctx, coll, func(tx pgx.Tx) error {
+		// the schema may have appeared after the job was claimed: under the lock, nothing is written to a collection that has one
+		if has, err := s.hasSchema(ctx, tx, coll); err != nil {
+			return err
+		} else if has {
+			return store.ErrJobGone
+		}
 		var state string
 		err := tx.QueryRow(ctx, s.q(`
 			SELECT state FROM {{schema}}.extraction_jobs WHERE collection = $1 AND document_id = $2 AND window_idx = $3 FOR UPDATE`),
@@ -871,6 +882,9 @@ func (s *Store) ReplaceFactSet(ctx context.Context, fs store.FactSet) (bool, err
 	hash := fs.Hash()
 	changed := false
 	err = s.inGraphTx(ctx, fs.Collection, func(tx pgx.Tx) error {
+		if err := s.checkFactSetUnderLock(ctx, tx, fs); err != nil {
+			return err
+		}
 		var old string
 		switch err := tx.QueryRow(ctx, s.q(`SELECT body_hash FROM {{schema}}.graph_factsets WHERE collection = $1 AND id = $2`), fs.Collection, fs.ID).Scan(&old); {
 		case err == nil && old == hash:

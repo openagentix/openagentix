@@ -56,6 +56,11 @@ func New(svc *kb.Service, cfg Config, log *slog.Logger) http.Handler {
 		mux.HandleFunc("PUT /v1/collections/{collection}/graph/factsets/{id}", s.auth(s.putFactSet))
 		mux.HandleFunc("GET /v1/collections/{collection}/graph/factsets/{id}", s.auth(s.getFactSet))
 		mux.HandleFunc("DELETE /v1/collections/{collection}/graph/factsets/{id}", s.auth(s.deleteFactSet))
+		if svc.SchemasEnabled() {
+			mux.HandleFunc("PUT /v1/collections/{collection}/graph/schema", s.auth(s.putSchema))
+			mux.HandleFunc("GET /v1/collections/{collection}/graph/schema", s.auth(s.getSchema))
+			mux.HandleFunc("DELETE /v1/collections/{collection}/graph/schema", s.auth(s.deleteSchema))
+		}
 	}
 	return mux
 }
@@ -213,9 +218,14 @@ func (s *server) graphStatsAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if s.failSchema(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, kb.ErrInvalid):
 		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), kb.ErrInvalid.Error()+": "))
+	case errors.Is(err, kb.ErrConflict):
+		writeError(w, http.StatusConflict, strings.TrimPrefix(err.Error(), kb.ErrConflict.Error()+": "))
 	case errors.Is(err, kb.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, strings.TrimPrefix(err.Error(), kb.ErrTooLarge.Error()+": "))
 	case errors.Is(err, kb.ErrUpstream):

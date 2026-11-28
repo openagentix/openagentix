@@ -53,6 +53,7 @@ type graph struct {
 	mentions                     map[mkey]string // value: collection
 	jobs                         map[store.JobKey]*jobRec
 	factsets                     map[fskey]*fsRec
+	schemas                      map[string]*schemaRec
 }
 
 type fskey struct{ collection, id string }
@@ -69,7 +70,7 @@ func newGraph() graph {
 	return graph{
 		entities: map[int64]*ent{}, byKey: map[ekey]int64{}, relations: map[int64]*store.Relation{},
 		relKeys: map[rkey]int64{}, mentions: map[mkey]string{}, jobs: map[store.JobKey]*jobRec{},
-		factsets: map[fskey]*fsRec{},
+		factsets: map[fskey]*fsRec{}, schemas: map[string]*schemaRec{},
 	}
 }
 
@@ -543,6 +544,9 @@ func (s *Store) ClaimJob(_ context.Context, lease time.Duration) (store.Job, boo
 		if j.State != store.JobPending || now.Before(j.claimedUntil) || now.Before(j.notBefore) {
 			continue
 		}
+		if s.g.schemas[j.Collection] != nil {
+			continue // a collection with a graph schema has curated facts only: the job waits, and resumes if the schema is deleted
+		}
 		if best == nil || j.seq < best.seq {
 			best = j
 		}
@@ -593,6 +597,9 @@ func (s *Store) ApplyExtraction(_ context.Context, res store.ExtractionResult) e
 	}
 	if _, ok := s.m[key{res.Job.Collection, res.Job.DocumentID}]; !ok {
 		return store.ErrJobGone
+	}
+	if s.g.schemas[res.Job.Collection] != nil {
+		return store.ErrJobGone // the schema appeared after the job was claimed: nothing is written
 	}
 	coll, doc := res.Job.Collection, res.Job.DocumentID
 	ids := make([]int64, len(res.Entities))
@@ -665,6 +672,9 @@ func (s *Store) ReplaceFactSet(_ context.Context, fs store.FactSet) (bool, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := &s.g
+	if err := s.checkFactSetLocked(fs); err != nil {
+		return false, err
+	}
 	k := fskey{fs.Collection, fs.ID}
 	hash := fs.Hash()
 	if old := g.factsets[k]; old != nil && old.hash == hash {

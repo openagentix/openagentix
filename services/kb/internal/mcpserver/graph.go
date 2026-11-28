@@ -45,6 +45,13 @@ type (
 )
 
 func (h *handlers) registerGraph(srv *mcp.Server, ro *mcp.ToolAnnotations) {
+	if h.svc.SchemasEnabled() {
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "kb_graph_schema",
+			Description: "Show the graph schema of a collection: the entity types, each with the pattern its names must match, and the relation types, each with the entity types allowed at its two ends. Use it before you ask the graph tools about a collection, to know which names and relations to expect. A collection without a schema uses the built-in entity types. Omit the collection to see every collection you may read that has a schema.",
+			Annotations: ro,
+		}, h.graphSchema)
+	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "kb_graph_search",
 		Description: "Search the knowledge graph of facts extracted from the documents, together with facts an operator curated by hand. Finds the entities your question names, then follows their relations up to 'hops' steps, and returns chains like 'Teal -runs_in-> Vane-3', each fact with the document_id, chunk and quote it came from (or, for a curated fact, the fact set and note), plus the supporting passages. Use it for questions that link several things (who owns, what depends on, where does it run). Open a document_id with kb_get_document.",

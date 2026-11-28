@@ -44,7 +44,23 @@ func (s *Service) PutFactSet(ctx context.Context, collection, id string, in stor
 	if err := validateSourceURI(in.SourceURI); err != nil {
 		return FactSetResult{}, err
 	}
-	fs, err := graph.ValidateFactSet(in)
+	// With a graph schema the types are the schema's, and the store checks the fact set against it under the collection's lock (ADR 0030). The schema
+	// may change between the read and the write: the store then says so (ErrSchemaMoved) and the fact set is shaped again.
+	for attempt := 0; ; attempt++ {
+		sha, err := s.schemaSHAOf(ctx, collection)
+		if err != nil {
+			return FactSetResult{}, err
+		}
+		res, err := s.putFactSet(ctx, collection, id, in, sha)
+		if errors.Is(err, store.ErrSchemaMoved) && attempt < 3 {
+			continue
+		}
+		return res, err
+	}
+}
+
+func (s *Service) putFactSet(ctx context.Context, collection, id string, in store.FactSet, schemaSHA string) (FactSetResult, error) {
+	fs, err := graph.ValidateFactSetFor(in, schemaSHA != "")
 	if err != nil {
 		var fe *graph.FactSetError
 		switch {
@@ -55,7 +71,7 @@ func (s *Service) PutFactSet(ctx context.Context, collection, id string, in stor
 		}
 		return FactSetResult{}, err
 	}
-	fs.Collection, fs.ID = collection, id
+	fs.Collection, fs.ID, fs.SchemaSHA = collection, id, schemaSHA
 	changed, err := s.Store.ReplaceFactSet(ctx, fs)
 	if err != nil {
 		return FactSetResult{}, err

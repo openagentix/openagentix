@@ -132,6 +132,7 @@ All routes need `Authorization: Bearer $KB_ADMIN_TOKEN`.
 | `KB_EMBEDDINGS_TIMEOUT` | `30s` | per embeddings request (ingest; retried once on 429/5xx) |
 | `KB_ACCESS_FILE` | empty (off) | absolute path of `access.json` (ADR 0030): `{"mode":"report" or "enforce","callers":[{"name":<tool group>,"collections":[...]}]}`, names only, never a value. Unset means no check on `/mcp`: every caller reads every collection. A bad file, a name that does not fit, or a caller whose value file is missing stops the start and names the item |
 | `KB_ACCESS_CALLERS_DIR` | `/var/run/secrets/openagentix/kb-callers` | one file per caller, named by the caller, holding the whole header value `Bearer <token>`. Read on every request, so a rotated value needs no restart. Compared as SHA-256 digests in constant time |
+| `KB_GRAPH_SCHEMAS_ENABLED` | `false` | graph schemas (ADR 0030; turning it off stops the checks, the stored schemas stay and come back when it is turned on again): the routes `PUT`, `GET` and `DELETE /v1/collections/{collection}/graph/schema`, the check of every fact set load and schema change, no extraction in a collection with a schema, and the tool `kb_graph_schema`. Needs `KB_GRAPH_ENABLED=true`; adds one table (migration 7) |
 | `KB_QUERY_EMBED_TIMEOUT` | `3s` | budget for embedding a search query, single attempt, no retry. On timeout or error search answers lexically with the rest of the request deadline |
 
 Secrets are never logged. The startup log line lists the configuration with secrets omitted. Request logs carry

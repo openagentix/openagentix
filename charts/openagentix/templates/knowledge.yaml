@@ -1,5 +1,9 @@
 {{- /* ADR 0030: the refusals about knowledge.access and the profile lists are made here, whether or not the knowledge base is on */ -}}
 {{- $_ := include "oa.kbCallers" . }}
+{{- if ((((.Values.knowledge | default dict).kb | default dict).graph | default dict).schemas | default dict).enabled }}
+{{- if not (kindIs "bool" .Values.knowledge.kb.graph.schemas.enabled) }}{{ fail "knowledge.kb.graph.schemas.enabled must be true or false" }}{{ end }}
+{{- if not .Values.knowledge.kb.graph.enabled }}{{ fail "knowledge.kb.graph.schemas.enabled needs knowledge.kb.graph.enabled=true: a graph schema is checked on the curated facts of the knowledge graph, and the graph is off" }}{{ end }}
+{{- end }}
 {{- if .Values.knowledge.enabled }}
 {{- $k := .Values.knowledge }}
 {{- $kbAccess := include "oa.kbAccessOn" . }}
@@ -179,6 +183,9 @@ spec:
             - {name: KB_GRAPH_TOKENS_PER_HOUR, value: {{ int $g.tokensPerHour | quote }}}
             - {name: KB_GRAPH_MAX_HOPS, value: {{ int $g.maxHops | quote }}}
             - {name: KB_GRAPH_PROMPT_VERSION, value: {{ $g.promptVersion | quote }}}
+            {{- if (($g.schemas | default dict).enabled) }}
+            - {name: KB_GRAPH_SCHEMAS_ENABLED, value: "true"}
+            {{- end }}
             {{- end }}
           securityContext:
             allowPrivilegeEscalation: false

@@ -57,7 +57,7 @@ func newAccessEnv(t *testing.T, mode string, stateless bool) *accessEnv {
 	log := slog.New(slog.NewJSONHandler(logs, nil))
 	st := memory.New(0)
 	svc := &kb.Service{Store: st, Embedder: embed.None{}, Chunk: chunk.Options{MaxChars: 400}, DocMaxChars: 5000, Log: log,
-		Graph: &kb.GraphOptions{WindowChars: 2400, PromptVersion: "v1", MaxHops: 3}}
+		Graph: &kb.GraphOptions{WindowChars: 2400, PromptVersion: "v1", MaxHops: 3, Schemas: true}}
 	ctx := context.Background()
 	for _, c := range []string{"bank-coll", "equip-coll"} {
 		if _, err := svc.Put(ctx, c, "shared-id", kb.DocInput{Title: "Doc " + c, Text: "pelican harbour " + secretText + " " + c}); err != nil {

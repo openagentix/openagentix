@@ -2557,6 +2557,8 @@ done
 . "$(dirname "$0")/budget-classes.sh"   # ADR 0029, slice 3: budget classes in the one gateway policy
 # shellcheck source=charts/openagentix/tests/kb-access.sh
 . "$(dirname "$0")/kb-access.sh"   # ADR 0030, slice 3: knowledge.access and mcp.profiles[].knowledgeCollections
+# shellcheck source=charts/openagentix/tests/kb-schema.sh
+. "$(dirname "$0")/kb-schema.sh"   # ADR 0030, slice 5: knowledge.kb.graph.schemas
 
 echo
 echo "passed=$PASS failed=$FAIL"
