@@ -101,6 +101,28 @@ t "the namespace is mcp-tools unless given" "$(hdr tools)" "Authorization: Beare
 t "a group with no Secret prints nothing (the mode is off, or the group is not a caller)" "$(hdr nobody mcp-tools)" ""
 t "a cluster that cannot be read prints nothing" "$(FAKE_GET_FAIL=1 hdr tools mcp-tools)" ""
 
+echo "# rotation: both Secrets deleted, the vMCPs of the group exist: the group's vMCPs are restarted (they hold the old value)"
+rm -rf "$D/state"; mkdir -p "$D/state"; : > "$D/openssl-calls"
+run tools disputes >/dev/null
+OLD=$(cat "$K/disputes")
+rm -rf "$K/disputes" "${M}__kb-caller-disputes"; : > "$D/openssl-calls"
+OUT=$(run tools disputes)
+t "the rotated group has a new value, the other is kept" "$([ "$(cat "$K/disputes")" != "$OLD" ] && echo new)/$(cat "$K/tools")" "new/Bearer ${CANARY}1"
+t "the group is named as touched, the other is not" "$(PATH="$D/bin:$PATH" bash -c '. hack/kb-callers.sh; kb_callers_ensure kubectl openagentix-knowledge mcp-tools tools disputes >/dev/null; echo "[$KB_CALLERS_TOUCHED]"')" "[]"
+rm -rf "$K/disputes" "${M}__kb-caller-disputes"
+t "after a rotation KB_CALLERS_TOUCHED names the group" "$(PATH="$D/bin:$PATH" bash -c '. hack/kb-callers.sh; kb_callers_ensure kubectl openagentix-knowledge mcp-tools tools disputes >/dev/null; echo "[$KB_CALLERS_TOUCHED]"')" "[disputes]"
+t "a fresh install touches every group (the restart is then filtered by what runs)" "$(rm -rf "$D/state"; mkdir -p "$D/state"; PATH="$D/bin:$PATH" bash -c '. hack/kb-callers.sh; kb_callers_ensure kubectl openagentix-knowledge mcp-tools tools disputes >/dev/null; echo "[$KB_CALLERS_TOUCHED]"')" "[tools disputes]"
+# verify: the restart and nothing else (a vMCP with no knowledge entry skips the backend check; settle 0 skips the waits)
+cat >> "$D/bin/kubectl" <<'EOS'
+EOS
+RENDERED='{"kind":"VirtualMCPServer","metadata":{"namespace":"mcp-tools","name":"tools-disputes"},"spec":{"groupRef":{"name":"disputes"}}}
+{"kind":"VirtualMCPServer","metadata":{"namespace":"mcp-tools","name":"tools-other"},"spec":{"groupRef":{"name":"other"}}}'
+verify() { : > "$D/calls"; PATH="$D/bin:$PATH" KB_VMCP_SETTLE=0 bash -c '. hack/kb-callers.sh; kb_callers_verify kubectl "$@" >/dev/null 2>&1' _ "$RENDERED" openagentix-knowledge "$@"; /usr/bin/grep -c '^kubectl rollout restart' "$D/calls"; }
+t "a touched group whose vMCP exists is restarted" "$(verify disputes mcp-tools/tools-disputes disputes)" 1
+t "a touched group whose vMCP does not exist yet (a first install) is not" "$(verify disputes '' disputes)" 0
+t "a group that was not touched is not restarted, whatever exists" "$(verify '' 'mcp-tools/tools-disputes mcp-tools/tools-other' disputes other)" 0
+t "only the vMCPs of the touched group are restarted" "$(verify other 'mcp-tools/tools-disputes mcp-tools/tools-other' disputes other)" 1
+
 echo "# the refusal to turn enforce off"
 g() { bash -c '. hack/kb-callers.sh; kb_access_guard "$@"; echo "exit=$?"' _ "$@" 2>&1; }
 t "enforce to enforce passes" "$(g enforce enforce "" | /usr/bin/grep -c '^exit=0$')" 1

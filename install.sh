@@ -295,9 +295,10 @@ fi
 KB_ACCESS_JSON=$(jq -rs '[.[]|select(.kind=="ConfigMap" and .metadata.name=="kb-access")|.data["access.json"]]|first // ""' <<<"$RENDERED")
 KB_ACCESS_MODE=""; [ -z "$KB_ACCESS_JSON" ] || KB_ACCESS_MODE=$(jq -r '.mode' <<<"$KB_ACCESS_JSON")
 KB_PLAN_NS=$(jq -rs '[.[]|select(.kind=="Deployment" and .metadata.name=="kb")|.metadata.namespace]|first // ""' <<<"$RENDERED")
-if [ "$KB_ACCESS_MODE" != enforce ] && [ "$CLUSTER_UP" = 1 ] && [ -n "$KB_PLAN_NS" ]; then
-  # The live mode is what the knowledge base was started with: the ConfigMap kb-access. No such ConfigMap (or no cluster object) means no mode.
-  KB_LIVE_MODE=$($K --context "$CTX" get configmap kb-access -n "$KB_PLAN_NS" -o jsonpath='{.data.access\.json}' 2>/dev/null | jq -r '.mode // ""' 2>/dev/null || true)
+if [ "$KB_ACCESS_MODE" != enforce ] && [ "$CLUSTER_UP" = 1 ]; then
+  # The live mode is read where the live release keeps the knowledge base (helm get values), not where this run would put it. A run that turns the knowledge base off, or
+  # moves it, is compared too. Only "no release" and "no ConfigMap" mean no mode; any other failure stops the run (hack/kb-callers.sh kb_live_mode).
+  KB_LIVE_MODE=$(kb_live_mode helm "$RELEASE" "$RELEASE_NS" "$CTX" "$K") || die "cannot tell whether the live release enforces the isolation of the knowledge base (see above). Nothing was changed."
   kb_access_guard "$KB_LIVE_MODE" "$KB_ACCESS_MODE" "${ALLOW_KB_ACCESS_OFF:-}" || exit 1
 fi
 # With the mode empty and profiles on two or more tool groups that list the knowledge tools, nothing isolates them from each other's collections: a warning, not a
@@ -826,6 +827,8 @@ if [ -n "$KB_ACCESS_JSON" ]; then
   KB_TOOLS_NS=$(jq -rs '[.[]|select(.kind=="MCPServerEntry" and ((.spec.headerForward.addHeadersFromSecret[0].valueSecretRef.name//"")|startswith("kb-caller-")))|.metadata.namespace]|first' <<<"$RENDERED")
   # shellcheck disable=SC2086   # one word per group
   kb_callers_ensure "$K" "$KB_NS" "$KB_TOOLS_NS" $KB_CALLER_GROUPS || die "could not create the values of the knowledge base callers (see above). The chart was not applied."
+  # the vMCPs that run now: after a rotation or a repair of a value they hold the old one as an environment value and are restarted once the chart is applied
+  KB_VMCPS_BEFORE=$(kb_callers_running "$K" "$RENDERED")
 fi
 
 finish_builds   # wait for the background builds, then load the images into the cluster in one call
@@ -1115,7 +1118,7 @@ fi
 if [ -n "$KB_CALLER_GROUPS" ]; then
   log "knowledge base isolation: the vMCPs of the groups that hold a knowledge base entry"
   # shellcheck disable=SC2086   # one word per group
-  kb_callers_verify "$K" "$RENDERED" "$KB_NS" "${KB_CALLERS_CHANGED:-0}" $KB_CALLER_GROUPS || die "a vMCP of a knowledge base caller group dropped the knowledge base (see above)."
+  kb_callers_verify "$K" "$RENDERED" "$KB_NS" "${KB_CALLERS_TOUCHED:-}" "${KB_VMCPS_BEFORE:-}" $KB_CALLER_GROUPS || die "a vMCP of a knowledge base caller group dropped the knowledge base (see above)."
 fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"

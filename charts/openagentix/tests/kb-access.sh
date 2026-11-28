@@ -112,6 +112,11 @@ eq "report: the same objects render with mode report" "$(jq -r '.mode' <<<"$(q "
 echo "# kb access: the ingress policy of the kb stays as it was"
 eq "kb-ingress admits the same peers with the check on and off" "$(q "$D" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="kb-ingress")|.spec.ingress')" "$(q "$(docs -f "$KX" --set knowledge.access.mode=)" '.[]|select(.kind=="NetworkPolicy" and .metadata.name=="kb-ingress")|.spec.ingress')"
 
+echo "# kb access: the admin token and a group's value must not be the same Secret (review L3)"
+kr "the admin Secret may not be the Secret of the callers" 'knowledge.kb.adminSecret.name' -f "$KX" --set knowledge.kb.adminSecret.name=kb-callers
+kr "the admin Secret may not be the Secret of a group either" 'knowledge.kb.adminSecret.name' -f "$KX" --set knowledge.kb.adminSecret.name=kb-caller-tools
+eq "while the mode is empty the admin Secret name is not checked (the render is as before)" "$([ -z "$(render_err -f "$KX" --set knowledge.access.mode= --set knowledge.kb.adminSecret.name=kb-callers)" ] && echo rendered || echo failed)" rendered
+
 echo "# kb access: a mode of report allows empty lists, enforce does not for a profile that lists the tools"
 kv '.knowledge.access.mode="report" | .knowledge.access.sharedGroupCollections=[]'
 eq "report with an empty shared list renders" "$([ -z "$(render_err -f "$KX2")" ] && echo rendered || echo failed)" rendered

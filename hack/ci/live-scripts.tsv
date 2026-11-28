@@ -155,3 +155,5 @@ hack/ci/kb-callers-test.sh	offline	-	-		tests with fakes, fixtures or no cluster
 hack/kb-callers.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
 components/runtime/substrate-helm.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
 components/runtime/substrate-postrender.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+hack/ci/kb-rotate-live.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-live-mode-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call

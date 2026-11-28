@@ -1147,6 +1147,29 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/kb-access-live.sh 2>&1 | tee live-enforce.log
+      - name: rotation, keep the old value of the group alpha and delete both of its Secrets
+        env:
+          KB_ACCESS: "1"
+          KB_ROTATE: prepare
+        run: |
+          set -o pipefail
+          hack/ci/kb-rotate-live.sh 2>&1 | tee live-rotate-prepare.log
+      - name: rotation, install (the new value is made and the vMCPs of the group are restarted)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/kb-access-ci-values.yaml hack/ci/kb-access-enforce-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-rotate.log
+          grep -q 'restarted vMCP mcp-tools/tools-alpha' install-rotate.log
+      - name: rotation, live check
+        env:
+          KB_ACCESS: "1"
+          KB_ROTATE: check
+        run: |
+          set -o pipefail
+          hack/ci/kb-rotate-live.sh 2>&1 | tee live-rotate.log
       - name: turning enforce off by leaving the values file out is refused
         env:
           PROFILE: quickstart
@@ -1164,7 +1187,7 @@ jobs:
         run: |
           {
             echo "## Knowledge base isolation on a real cluster (ADR 0030, slice 3)"
-            for p in off report enforce; do
+            for p in off report enforce rotate; do
               echo "### phase $p"
               echo '```'
               cat "live-$p.log" 2>/dev/null || echo "the live check of this phase did not run"
