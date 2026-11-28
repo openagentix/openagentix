@@ -168,3 +168,30 @@ func TestUnworkedAreOpenCasesOlderThanTheLimit(t *testing.T) {
 	}
 	_ = ev
 }
+
+// The case number has four digits, so the id fits the event id check (SVC-yyyy-nnnn) and the gate's event caller pattern. At the last number the case and its event are
+// made; one past it the intake is refused with a plain error before anything is written, so no case can exist whose event the check would refuse.
+func TestTheLastCaseNumberStillQueuesAnEventAndOnePastItIsRefusedCleanly(t *testing.T) {
+	d, ev := withEvents(t)
+	ctx := context.Background()
+	if _, err := d.db.Exec(`UPDATE service_cases SET n=9998 WHERE n=(SELECT MAX(n) FROM service_cases)`); err != nil {
+		t.Fatal(err)
+	}
+	c, dup, err := d.svc.CreateFault(ctx, "KT260-00130", "E-322")
+	if err != nil || dup {
+		t.Fatalf("the last number: %v %v", dup, err)
+	}
+	if !regexp.MustCompile(`^SVC-[0-9]{4}-9999$`).MatchString(c.ID) {
+		t.Fatalf("id %q is not the last four-digit number", c.ID)
+	}
+	if got := eventSubjects(t, ev); len(got) != 1 || got[0] != c.ID {
+		t.Fatalf("events %v, want [%s]", got, c.ID)
+	}
+	before := count(t, d, `SELECT COUNT(*) FROM service_cases`)
+	if _, err := d.svc.CreateRequest(ctx, "KT260-00130", "the machine stops when it is warm"); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("one past the last number: want a conflict, got %v", err)
+	}
+	if count(t, d, `SELECT COUNT(*) FROM service_cases`) != before || len(eventSubjects(t, ev)) != 1 {
+		t.Fatal("a refused intake left a case or an event behind")
+	}
+}

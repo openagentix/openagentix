@@ -82,21 +82,22 @@ a suffix of one of them. Argument: dict "host" <host> "forms" <list of forms>. *
 {{- end -}}
 
 {{/* Every namespace the chart's values name: each value whose key ends in "namespace" (any case), at any depth, an empty value being the release
-namespace. Recursive. Argument: dict "v" <value> "acc" <dict with the list "l"> "rel" <release namespace>. */}}
+namespace. Recursive. Argument: dict "v" <value> "acc" <dict with the list "l"> "rel" <release namespace> "path" <the dotted key path of v, "" at the top>. */}}
 {{- define "oa.walkNs" -}}
 {{- $acc := .acc -}}{{- $rel := .rel -}}
 {{- if kindIs "map" .v -}}
 {{- range $k, $x := .v -}}
 {{- /* the callers of the A2A gate (their rules and the namespaces admitted to it) are workloads, not platform services: the records service of a use case is a tool endpoint and an event caller in one namespace (ADR 0027) */ -}}
-{{- if or (eq (toString $k) "callers") (eq (toString $k) "extraA2ACallers") -}}
+{{- $kp := ternary (toString $k) (printf "%s.%s" ($.path | default "") (toString $k)) (eq ($.path | default "") "") -}}
+{{- if or (eq $kp "governance.a2a.callers") (eq $kp "networkPolicy.extraA2ACallers") -}}
 {{- else if and (hasSuffix "namespace" (lower (toString $k))) (or (kindIs "string" $x) (kindIs "invalid" $x)) -}}
 {{- $_ := set $acc "l" (append $acc.l (default $rel (toString (default "" $x)))) -}}
 {{- else -}}
-{{- include "oa.walkNs" (dict "v" $x "acc" $acc "rel" $rel) -}}
+{{- include "oa.walkNs" (dict "v" $x "acc" $acc "rel" $rel "path" $kp) -}}
 {{- end -}}
 {{- end -}}
 {{- else if kindIs "slice" .v -}}
-{{- range $x := .v -}}{{- include "oa.walkNs" (dict "v" $x "acc" $acc "rel" $rel) -}}{{- end -}}
+{{- range $x := .v -}}{{- include "oa.walkNs" (dict "v" $x "acc" $acc "rel" $rel "path" ($.path | default "")) -}}{{- end -}}
 {{- end -}}
 {{- end -}}
 

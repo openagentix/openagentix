@@ -132,3 +132,38 @@ func TestBankUnworkedAreOpenCasesOlderThanTheLimit(t *testing.T) {
 		t.Fatal("a case the agent moved on is worked")
 	}
 }
+
+// The case number has four digits, so the id fits the event id check (DSP-yyyy-nnnn) and the gate's event caller pattern. At the last number the case and its event are
+// made; one past it the intake is refused with a plain error before anything is written.
+func TestTheLastDisputeNumberStillQueuesAnEventAndOnePastItIsRefusedCleanly(t *testing.T) {
+	d, _ := newDomain(t)
+	ev, err := core.NewEvents(d.db, d.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetEvents(ev)
+	ctx := context.Background()
+	if _, err := d.db.Exec(`UPDATE cases SET n=9998 WHERE n=(SELECT MAX(n) FROM cases)`); err != nil {
+		t.Fatal(err)
+	}
+	acc, txn := freeTxn(t, d)
+	c, err := d.svc.CreateCase(ctx, NewCase{AccountID: acc, TransactionID: txn, ClaimType: "not_recognised"})
+	if err != nil {
+		t.Fatalf("the last number: %v", err)
+	}
+	if len(c.ID) != len("DSP-2026-9999") || c.ID[len(c.ID)-4:] != "9999" {
+		t.Fatalf("id %q is not the last four-digit number", c.ID)
+	}
+	rows, _ := ev.List(ctx)
+	if len(rows) != 1 || rows[0].Subject != c.ID {
+		t.Fatalf("events %v", rows)
+	}
+	acc2, txn2 := freeTxn(t, d)
+	if _, err := d.svc.CreateCase(ctx, NewCase{AccountID: acc2, TransactionID: txn2, ClaimType: "not_recognised"}); !core.IsKind(err, core.Conflict) {
+		t.Fatalf("one past the last number: want a conflict, got %v", err)
+	}
+	rows, _ = ev.List(ctx)
+	if len(rows) != 1 {
+		t.Fatal("a refused intake left an event behind")
+	}
+}

@@ -171,6 +171,18 @@ def prep($doc; $f):
         | .err += $r.err | .v = (.v | setpath($path; $r.l))
       end);
 
+# The namespaces an entry of networkPolicy.extraA2ACallers may not name: default, kube-*, openagentix-*, and every namespace value of the chart's own values
+# (the platform namespaces, the same walk that the chart's endpoint check makes over its values; the chart defaults are the base here).
+def platns: ([$base[0] | .. | objects | to_entries[] | select((.key | ascii_downcase | endswith("namespace")) and ((.value | type) == "string")) | (if .value == "" then "openagentix-system" else .value end)]
+  + ["default", "kube-system", "kube-public", "kube-node-lease"]) | unique;
+# A new entry of networkPolicy.extraA2ACallers is refused unless it is narrow (the chart admits the namespace's pods to the gate's ingress).
+def xaerrs($e; $fb):
+  ($e.namespace) as $n
+  | ("refused: " + $fb + ": networkPolicy.extraA2ACallers[" + $n + "] ") as $w
+  | ((($e | keys) - ["namespace", "podLabels"]) as $x | if ($x | length) > 0 then [$w + "has keys other than namespace and podLabels (" + ($x | join(", ")) + ")"] else [] end)
+  + (if (($e.podLabels | type) != "object") or (($e.podLabels | length) == 0) then [$w + "needs podLabels that are a non-empty map: without them every pod of the namespace may call the gate"] else [] end)
+  + (if $n == "default" or ($n | startswith("kube-")) or ($n | startswith("openagentix-")) or ((platns | index($n)) != null) then [$w + "names a platform or system namespace (default, kube-*, openagentix-* and the namespaces of the chart's values are refused)"] else [] end);
+
 # Additions that the key list does not refuse but that a reader must see.
 def addnotes($p; $e; $old; $fb):
   (if $p == "governance.a2a.callers" and $old == null then ["SECURITY-RELEVANT: " + $fb + " adds the caller rule " + $e.name + " (a caller rule decides who may ask which agent)"] else [] end)
@@ -185,6 +197,7 @@ def mergelist($p; $a; $b; $fb; $lw; $st; $h):
     | (.v | map(.[lkey($p)]) | index($n)) as $i
     | if $i == null then
         .v += [$e]
+        | (if $p == "networkPolicy.extraA2ACallers" then (.st.err += xaerrs($e; $fb)) | (.st.xa += [$e.namespace]) else . end)
         | .st.src[$ep] = $fb
         | .st.rep += ["added " + $ep + " (from " + $fb + ")"]
         | .st.rep += addnotes($p; $e; null; $fb)
@@ -253,7 +266,11 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
     | ([$ps[].err[]]) as $e1
     | (reduce $ps[1:][] as $nx ({v: $ps[0].doc, st: {src: {"": $ps[0].file}, rep: [], err: []}};
         merge([]; .v; $nx.doc; $nx.file; $lw; .st; false) as $r | .v = $r.v | .st = $r.st))
-    | {result: .v, report: .st.rep, errors: ($e1 + .st.err)}
+    | . as $f
+    # every namespace that a file admitted to the gate needs a caller rule for a ServiceAccount of that namespace in the composed result
+    | ([($f.st.xa // [])[] | . as $n | select(((($f.v.governance.a2a.callers // []) | map(.serviceAccount.namespace?)) | index($n)) == null)
+        | "refused: networkPolicy.extraA2ACallers[" + . + "] has no caller rule for a ServiceAccount of that namespace in the composed result (governance.a2a.callers): an admitted namespace that no rule names would only open the gate's ingress"]) as $e2
+    | {result: $f.v, report: $f.st.rep, errors: ($e1 + $f.st.err + $e2)}
   end
 JQ
 

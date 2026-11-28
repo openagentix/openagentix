@@ -17,12 +17,17 @@ metadata:
     app.kubernetes.io/part-of: openagentix-use-case-bank
     pod-security.kubernetes.io/enforce: restricted
 ---
-# The pod's own ServiceAccount. It has no right in the Kubernetes API (no token is mounted for the API). With the event sender on (install.sh with EVENTS=1) the kubelet
-# projects a short-lived token with the audience of the A2A gate for it, and the gate's caller rule names this ServiceAccount (values.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  #EVENTS-OFF-BEGIN
+  name: records
+  #EVENTS-OFF-END
+  #EVENTS-ON-BEGIN
+  # With the event sender on (install.sh EVENTS=1) the pod runs as its own ServiceAccount records-events: the kubelet projects a short-lived token with the audience of the
+  # A2A gate for it, and the gate's caller rule (values-events.yaml) names it. It has no right in the Kubernetes API. install.sh deletes the account of the other form.
   name: records-events
+  #EVENTS-ON-END
   namespace: fernvale-records
   labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
 automountServiceAccountToken: false
@@ -42,7 +47,12 @@ spec:
     metadata:
       labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
     spec:
+      #EVENTS-OFF-BEGIN
+      serviceAccountName: records
+      #EVENTS-OFF-END
+      #EVENTS-ON-BEGIN
       serviceAccountName: records-events
+      #EVENTS-ON-END
       automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext:

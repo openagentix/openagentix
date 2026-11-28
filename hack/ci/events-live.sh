@@ -103,6 +103,9 @@ HAS_URL=$(jq -r '[.spec.template.spec.containers[0].env[]|select(.name=="RECORDS
 if [ "$PHASE" = off ]; then
   check "the pod has no sender setting and no projected gate token" "$HAS_URL $(jq -r '[.spec.template.spec.volumes[]?|select(.projected)]|length' <<<"$DEP")" "0 0"
   check "the pod makes no connection (egress is the empty list)" "$($K get networkpolicy records -n "$RNS" -o json | jq -c '.spec.egress // []')" "[]"
+  check "the pod runs as the ServiceAccount records (as before the sender existed) and mounts no API token" "$(jq -r '.spec.template.spec.serviceAccountName+" "+(.spec.template.spec.automountServiceAccountToken|tostring)' <<<"$DEP")" "records false"
+  check "the gate has no rule for the event caller $CALLER (the platform values hold none with the sender off)" "$($K get configmap a2a-gate-rules -n "$GATE_NS" -o jsonpath='{.data.rules\.json}' | jq -c --arg c "$CALLER" '[.callers[]?|select(.name==$c)]|length')" 0
+  check "no network policy of the gateway namespace admits the namespace $RNS to the gate" "$($K get networkpolicy -n "$GATE_NS" -o json | jq -c --arg n "$RNS" '[.items[]|select(.spec.ingress != null)|.spec.ingress[]?.from[]?|select(.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]==$n)]|length')" 0
   before=$(gate_audit | jq -c --arg c "$CALLER" 'select(.caller==$c)' | wc -l | tr -d ' ')
   new_case 1; rc=$?
   check "a new case is accepted by the intake route with the sender off (HTTP $HTTP)" "$rc" 0

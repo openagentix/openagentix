@@ -187,6 +187,10 @@ er "a namespace value that is new in the values (zzz.extraNamespace) is refused 
 ev '.governance={a2a: {enabled: true, callers: [{name: "rec-events", serviceAccount: {namespace: "records-ns", name: "records-events"}, agents: ["assistant"], userId: {exact: "rec:events"}}]}} | .networkPolicy={extraA2ACallers: [{namespace: "records-ns", podLabels: {app: "records"}}]}'
 okr "an endpoint in the namespace of a gate caller and of an extraA2ACallers entry renders" -f "$EX2"
 er "a namespace value that is new in the values is still refused when a caller sits in the same namespace" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX2" --set zzz.extraNamespace=records-ns
+# only the two real paths are skipped: a key of the same name anywhere else still counts
+er "a decoy key callers elsewhere (zzz.callers.xNamespace) still counts as a platform namespace" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX2" --set zzz.callers.xNamespace=records-ns
+er "a decoy key extraA2ACallers elsewhere (zzz.extraA2ACallers.xNamespace) still counts" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX2" --set zzz.extraA2ACallers.xNamespace=records-ns
+er "a key callers under another parent (governance.callers.xNamespace) still counts" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX2" --set governance.callers.xNamespace=records-ns
 ev '.governance={a2a: {enabled: true, callers: [{name: "rec-events", serviceAccount: {namespace: "openagentix-system", name: "records-events"}, agents: ["assistant"], userId: {exact: "rec:events"}}]}} | .mcp.endpoints[0].url="http://records.openagentix-system.svc.cluster.local:8080/mcp"'
 er "an endpoint in a platform namespace is refused although a caller sits there too" 'a platform or system namespace' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://kubernetes.default.svc.cluster.local:443/mcp"'

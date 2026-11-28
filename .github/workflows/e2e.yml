@@ -432,14 +432,14 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/events-live.sh bank off 2>&1 | tee events-off.log
-      - name: "turn the sender on (the records service only, EVENTS=1; the platform values already hold the event caller)"
+      - name: "turn the sender on (EVENTS=1: the platform values gain the event caller and the namespace admitted to the gate, the records service gets the sender)"
         env:
           CLUSTER: oa-bank-demo
           AGENT_WAIT: 300s
           EVENTS: "1"
         run: |
           set -o pipefail
-          examples/use-cases/bank/install.sh --skip-platform 2>&1 | tee install-events.log
+          examples/use-cases/bank/install.sh 2>&1 | tee install-events.log
       - name: "events, sender on (a real intake event starts the agent with no person, the rate holds a burst, no tool causes an event)"
         env:
           EVENTS_LIVE: "1"
@@ -701,14 +701,14 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/events-live.sh equipment off 2>&1 | tee events-off.log
-      - name: "turn the sender on (the records service only, EVENTS=1; the platform values already hold the event caller)"
+      - name: "turn the sender on (EVENTS=1: the platform values gain the event caller and the namespace admitted to the gate, the records service gets the sender)"
         env:
           CLUSTER: oa-equipment-demo
           AGENT_WAIT: 300s
           EVENTS: "1"
         run: |
           set -o pipefail
-          examples/use-cases/equipment/install.sh --skip-platform 2>&1 | tee install-events.log
+          examples/use-cases/equipment/install.sh 2>&1 | tee install-events.log
       - name: "events, sender on (a real intake event starts the agent with no person, the rate holds a burst, no tool causes an event)"
         env:
           EVENTS_LIVE: "1"

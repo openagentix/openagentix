@@ -36,7 +36,9 @@
 #      you report it.
 #
 # Env: CLUSTER (kind cluster name, REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  HELM  DOCKER  KIND
-#      EVENTS=1 (the event sender of the records service, off by default; pass the same value on every run: a run without it turns the sender off again)
+#      EVENTS=1 (the event sender of the records service, off by default; pass the same value on every run: a run without it turns the sender off again). With it the platform
+#      values also get values-events.yaml (the gate's rule for the records service and the namespace admitted to the gate); without it they do not, and the composed values
+#      are what they were before the sender existed. Beside a full demo, ALSO_COMPOSE may also list the values-events.yaml of another use case.
 #      ALSO_COMPOSE="<file> <file>" (--beside-full-demo only: the values-full-demo.yaml of other use cases installed beside the same full demo, composed after your list and before
 #      this use case's own file; without it a release that holds such a use case is refused, naming what would be lost)
 #      VALUES_FILE (--beside-full-demo only: the files of the install you have, space separated, relative to the repository root or absolute)
@@ -94,6 +96,7 @@ done
 
 EVENTS=${EVENTS:-0}
 case "$EVENTS" in 0|1) ;; *) die "EVENTS must be 0 or 1 (it is '$EVENTS'). Nothing was changed." ;; esac
+EVF=()   # values-events.yaml files, composed last: the other use case's when the release holds its event caller, and this one's with EVENTS=1
 
 # The name of the full demo cluster: a default run must never reach it. Only --beside-full-demo says "yes, this is my full demo cluster".
 if [ "$KUBE_CONTEXT" = "kind-openagentix" ] && [ "$BESIDE" != 1 ]; then
@@ -146,10 +149,11 @@ release_values() { # prints the user-supplied values of the release as JSON, or 
   fi
   printf '%s' "$out"
 }
+OWN_EVENT_CALLER=fernvale-case-events
 release_extras() { # release_extras <json file of the values this script will hand over>: prints the paths the release has and those values lack, one per line
   local rel; rel=$(release_values) || return 1
   [ -n "$rel" ] || return 0
-  printf '%s' "$rel" | jq -r --argjson comp "${COMPANION:-0}" --slurpfile exp "$1" '
+  printf '%s' "$rel" | jq -r --argjson comp "${COMPANION:-0}" --arg ownev "$OWN_EVENT_CALLER" --arg ownns "$NS" --slurpfile exp "$1" '
     def flat($pre):
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
       elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
@@ -159,8 +163,11 @@ release_extras() { # release_extras <json file of the values this script will ha
     (if ((.gateway.stubModel.scenarios.files["scenario.json"] // "") | test("fernvale dispute desk agent"; "i")) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]scenario[.]json$" else "^$" end) as $mine
     # the equipment use case ships equipment.json; when it is installed beside this one (COMPANION=1) this script passes it again, so it is not a loss
     | (if ($comp == 1 and ((.gateway.stubModel.scenarios.files["equipment.json"] // "") | test("kestrel valley service desk agent"; "i"))) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]equipment[.]json$" else "^$" end) as $companion
+    # an install that had the sender on and now has it off: the release holds the event caller of this use case and the namespace admitted to the gate. They go, on purpose, and
+    # only they: the paths of that one caller and of the list of namespaces, and only when that list holds no namespace but its own
+    | (if ((((.governance.a2a.callers // []) | map(.name) | index($ownev)) != null) and (((.networkPolicy.extraA2ACallers // []) | map(.namespace)) | all(. == $ownns))) then "^[.]governance[.]a2a[.]callers[[]" + $ownev + "[]]|^[.]networkPolicy[.]extraA2ACallers" else "^$" end) as $ownevt
     | ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
-    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine) or test($companion)) | not))
+    | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine) or test($companion) or test($ownevt)) | not))
     | .[]'
 }
 
@@ -176,8 +183,11 @@ if [ "$SKIP_PLATFORM" != 1 ] && [ "$BESIDE" != 1 ]; then
   if [ -n "$REL_NOW" ] && printf '%s' "$REL_NOW" | jq -e '[.mcp.endpoints[]?.name] | index("dealer-records")' >/dev/null 2>&1; then
     "${KC[@]}" get namespace kestrel-records >/dev/null 2>&1 || die "the release holds the equipment use case (endpoint dealer-records) but the namespace kestrel-records is missing in $KUBE_CONTEXT. Install it again with examples/use-cases/equipment/install.sh, or take it out of the release. The other use case's chart values are still in the release. To take them out, run the platform installer again without them: compose the quick start and this use case (hack/compose-values.sh -o /tmp/values.yaml components/quickstart/values.yaml examples/use-cases/bank/values.yaml) and run PROFILE=quickstart VALUES_FILE=/tmp/values.yaml STUB_SCENARIOS=examples/use-cases/bank/eval/scenario.json ./install.sh. See the README, \"Uninstall one of two use cases\". Nothing was changed."
     COMPANION=1
+    # the other use case was installed with its sender on: its event caller and its namespace for the gate are in the release, so they are composed again
+    if printf '%s' "$REL_NOW" | jq -e '[.governance.a2a.callers[]?.name] | index("kestrel-fault-events")' >/dev/null 2>&1; then EVF+=("$ROOT/examples/use-cases/equipment/values-events.yaml"); fi
   fi
 fi
+[ "$EVENTS" != 1 ] || EVF+=("$HERE/values-events.yaml")
 if [ "$SKIP_PLATFORM" != 1 ]; then
   if [ "$BESIDE" = 1 ]; then
     say "composing the values: your list ($VALUES_FILE) first, then examples/use-cases/bank/values-full-demo.yaml (the endpoint, the profile disputes, the agent dispute-agent, the sweep and the caller)"
@@ -204,21 +214,21 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     ALSO_FILES=()
     for f in ${ALSO_COMPOSE:-}; do
       [ -r "$f" ] || die "cannot read $f (ALSO_COMPOSE is read from the repository root). Nothing was changed."
-      case "$(basename "$f")" in values-full-demo.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml files of other use cases, not $f (a use case's own values.yaml replaces lists of the full demo). Nothing was changed." ;; esac
+      case "$(basename "$f")" in values-full-demo.yaml|values-events.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml and values-events.yaml files of other use cases, not $f (a use case's own values.yaml replaces lists of the full demo). Nothing was changed." ;; esac
       ALSO_FILES+=("$f")
     done
-    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO_FILES[@]+"${ALSO_FILES[@]}"} "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
+    "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO_FILES[@]+"${ALSO_FILES[@]}"} "$HERE/values-full-demo.yaml" ${EVF[@]+"${EVF[@]}"} || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."
   else
     if [ "$COMPANION" = 1 ]; then
       say "the equipment use case is installed beside this one: composing the values of the quick start, this use case and the equipment use case, and passing both scenario files (scenario.json and equipment.json)"
-      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" "$ROOT/examples/use-cases/equipment/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" "$ROOT/examples/use-cases/equipment/values.yaml" ${EVF[@]+"${EVF[@]}"} || die "the values did not compose (the reason is above). Nothing was changed."
       mkdir "$TMP/scenarios"
       cp "$HERE/eval/scenario.json" "$TMP/scenarios/scenario.json"
       cp "$ROOT/examples/use-cases/equipment/eval/scenario.json" "$TMP/scenarios/equipment.json"
       SCENARIOS="$TMP/scenarios"
     else
       say "composing the values (components/quickstart/values.yaml and examples/use-cases/bank/values.yaml)"
-      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" || die "the values did not compose (the reason is above). Nothing was changed."
+      "$COMPOSE" -o "$VALUES_COMPOSED" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" ${EVF[@]+"${EVF[@]}"} || die "the values did not compose (the reason is above). Nothing was changed."
     fi
   fi
 fi
@@ -310,9 +320,13 @@ render_records() {
 }
 [ "$EVENTS" = 0 ] || say "the event sender is ON: an intake route of the records service starts the agent through the A2A gate (the gate's caller rule and the namespace are in values.yaml)"
 render_records | "${KC[@]}" apply -f - >/dev/null
+# The pod runs as the ServiceAccount records with the sender off, and as records-events with it on. apply does not prune, so the account of the other form is deleted
+# after the rollout below (nothing uses it then): switching back and forth leaves no stale account.
+if [ "$EVENTS" = 1 ]; then OTHER_SA=records; else OTHER_SA=records-events; fi
 # The service reads its files when it starts (the approvers) and per request (the MCP credential): a new token needs a new pod.
 if [ "$REGENERATED" = 1 ]; then "${KC[@]}" rollout restart deployment/records -n "$NS" >/dev/null; fi
 "${KC[@]}" rollout status deployment/records -n "$NS" --timeout=180s >/dev/null || die "the records pod did not become ready: kubectl --context $KUBE_CONTEXT describe pod -n $NS -l app=records"
+"${KC[@]}" delete serviceaccount "$OTHER_SA" -n "$NS" --ignore-not-found >/dev/null
 
 # ---- 5. the objects of the first version of this use case ----------------------------------------------------------------------
 # Helm refuses to take over an object it did not create. The first version registered the service with an MCPServerEntry and an auth config applied by hand

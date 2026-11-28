@@ -38,7 +38,7 @@ check "every kubectl call of the script names the context it checked (K carries 
 check "the port-forwards are stopped in the exit trap, and the trap is set" "grep -q '^trap cleanup EXIT' '$LIVE' && grep -q 'kill \"\$p\"' '$LIVE'"
 check "the MCP credential is never written to a file or an argument (it goes to curl through process substitution and is unset)" "! grep -qE '(>|tee) *[^ ]*(HV|secret)' '$LIVE' && grep -q 'unset HV' '$LIVE'"
 check "bash -n and shellcheck" "bash -n '$LIVE' && { ! command -v shellcheck >/dev/null || shellcheck -S warning '$LIVE'; }"
-check "the e2e workflow runs it off, turns the sender on with EVENTS=1 and --skip-platform, and runs it on, for both use cases" "[ \"\$(grep -c 'hack/ci/events-live.sh equipment off\|hack/ci/events-live.sh equipment on\|hack/ci/events-live.sh bank off\|hack/ci/events-live.sh bank on' '$ROOT/.github/workflows/e2e.yml')\" = 4 ] && [ \"\$(grep -c 'EVENTS: \"1\"' '$ROOT/.github/workflows/e2e.yml')\" = 2 ]"
+check "the e2e workflow runs it off, turns the sender on by running the whole install again with EVENTS=1 (the platform values need the event caller, so no --skip-platform), and runs it on, for both use cases" "[ \"\$(grep -c 'hack/ci/events-live.sh equipment off\|hack/ci/events-live.sh equipment on\|hack/ci/events-live.sh bank off\|hack/ci/events-live.sh bank on' '$ROOT/.github/workflows/e2e.yml')\" = 4 ] && [ \"\$(grep -c 'EVENTS: \"1\"' '$ROOT/.github/workflows/e2e.yml')\" = 2 ] && ! grep -q -e --skip-platform '$ROOT/.github/workflows/e2e.yml'"
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
