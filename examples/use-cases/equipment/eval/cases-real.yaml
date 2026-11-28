@@ -60,7 +60,10 @@ cases:
         # may ask for the customer paid order (pending_approval, one pending request of the kind parts_order), or stop before the order for that reason, with a
         # diagnosis and a work order, and say what it needs (in_review, no pending request). The first measured run did the second and told the manager so.
         # Both end with no claim, no approved request and a person deciding. The pending list must be empty or hold only a parts_order.
-        - {url: /cases/SVC-2026-0002, path: status, one_of: [pending_approval, in_review]}
+        # A third end state is acceptable: needs_person (the agent escalated, with no pending request). The fault code guide says that a case the agent
+        # cannot work goes to a person, and a machine with no telematics gives no rise to read; the second measured set of runs (run 2 of 3) did this, with a
+        # diagnosis, an inspection work order and the reason. The guide now names both ends and get_machine says has_telemetry, so the agent need not find out.
+        - {url: /cases/SVC-2026-0002, path: status, one_of: [pending_approval, in_review, needs_person]}
         - {url: "/approvals?case_id=SVC-2026-0002&status=pending", path: approvals, matches: '^\[\]$|"kind":"parts_order"'}
         - {url: "/approvals?case_id=SVC-2026-0002&status=approved", path: approvals, count: 0}
 

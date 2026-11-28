@@ -254,7 +254,22 @@ gateway:
   policy:
     name: model-gateway-policy    # the ONE AgentgatewayPolicy (docs warn that several can overwrite each other)
     apiKeyLabel: agentgateway.dev/apikey   # ConfigMaps with this label hold virtual-key hashes (install.sh)
-    tokenBudget: {tokens: 1000000, unit: Hours}   # per virtual key, per proxy replica
+    tokenBudget: {tokens: 1000000, unit: Hours}   # per virtual key, per proxy replica: the budget of every key with no class
+    # Budget classes (ADR 0029): a smaller or larger token limit for some agents, or one shared limit for several. Default: none, and the
+    # render is the one above, byte for byte. Each class becomes one conditional entry of the one policy; the entry for a key with no class
+    # (tokenBudget) comes last. A chart agent names its class with agents[].budgetClass; every AgentDefinition will get the one class named in
+    # controlPlane.policy.budgetClasses.definitions (ADR 0029, slice 4; today a definition gets the default budget). At most 15 classes. The fields, all required:
+    #   name:   a DNS label of at most 40 characters, unique; "default" is reserved
+    #   tokens: 1 to 2147483647
+    #   unit:   Hours, Minutes or Seconds (quote nothing: they are plain words)
+    #   per:    agent (one bucket for each key of the class) or class (one bucket shared by every key of the class)
+    # The limit is soft: it is counted per proxy replica, a restart empties the counters, the tokens of a call are counted when it ends (so
+    # calls in flight pass), and it is not a spend cap. See docs/decisions/0029-per-agent-token-budgets.md.
+    budgetClasses: []
+    #  - name: bank-agents
+    #    tokens: 300000
+    #    unit: Hours
+    #    per: agent
     retry:
       attempts: 2
       codes: [402, 429, 500, 502, 503, 504]
@@ -680,6 +695,11 @@ controlPlane:
   # so a fresh install accepts no definition. components/control-plane/demo-values.yaml opens one model and one profile.
   # Names are checked against the catalog at render time (a typo fails the render instead of silently allowing nothing).
   policy:
+    # The budget class of every AgentDefinition (ADR 0029): empty gives the default budget (gateway.policy.tokenBudget); otherwise the name of a class
+    # in gateway.policy.budgetClasses with per: agent. A definition cannot choose its class. This value only lets the admission guard accept the member
+    # in the key entries of definitions; the controller writes it with the next slice of ADR 0029.
+    budgetClasses:
+      definitions: ""
     maxAgents: 5                      # definitions in total; the oldest keep their place
     allowedModels: []                 # gateway.models names
     requireToolProfile: true          # every definition names a tool profile (the shared vMCP filters on the client side only, ADR 0006)

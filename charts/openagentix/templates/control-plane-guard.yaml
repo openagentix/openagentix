@@ -12,6 +12,9 @@
 {{- $gns := .Values.gateway.namespace }}
 {{- $sa := "openagentix-control-plane" }}
 {{- $keyCM := "llm-api-keys-control-plane" }}
+{{- /* ADR 0029: validates the classes; the class of definitions ("" for none) is the one name the key rule accepts as a last member of the metadata */ -}}
+{{- $_ := include "oa.budgetClasses" . }}
+{{- $defClass := ((.Values.controlPlane.policy | default dict).budgetClasses | default dict).definitions | default "" }}
 {{- $cat := include "oa.cpCatalog" . | fromJson }}
 {{- $rk := $cat.runtime.kagent }}
 {{- $pol := .Values.controlPlane.policy | default dict }}
@@ -192,12 +195,12 @@ spec:
     # the text the gateway adapter writes (no whitespace, the key order fixed, team and project the shape of a label value). An entry that was there before and is
     # unchanged is kept as it is (the previous controller's plain-name entries stay until the sweep removes them); one that is NEW or CHANGED must be of that shape.
     # So a compromised controller cannot register a key for any other user id.
-    - message: {{ printf "an entry of the key ConfigMap must be named %s.<name> and hold exactly {\"keyHash\":\"sha256:<64 hex>\",\"metadata\":{\"user_id\":<its name>[,\"team\":..][,\"project\":..]}}" $kns | quote }}
+    - message: {{ printf "an entry of the key ConfigMap must be named %s.<name> and hold exactly {\"keyHash\":\"sha256:<64 hex>\",\"metadata\":{\"user_id\":<its name>[,\"team\":..][,\"project\":..]%s}}" $kns (ternary (printf "[,\"budget_class\":\"%s\"]" $defClass) "" (ne $defClass "")) | quote }}
       expression: |-
         request.operation != 'UPDATE' || !has(variables.cur.data) || variables.cur.data.all(k,
           (k.matches({{ printf "^%s\\.[a-z]([-a-z0-9]*[a-z0-9])?$" $kns | toJson }}) && size(k) <= {{ add (len $kns) 41 }} &&
            type(variables.cur.data[k]) == string &&
-           variables.cur.data[k].matches('^\\{"keyHash":"sha256:[0-9a-f]{64}","metadata":\\{"user_id":"[a-z0-9.-]+"(,"team":"[A-Za-z0-9._-]{1,63}")?(,"project":"[A-Za-z0-9._-]{1,63}")?\\}\\}$') &&
+           variables.cur.data[k].matches('^\\{"keyHash":"sha256:[0-9a-f]{64}","metadata":\\{"user_id":"[a-z0-9.-]+"(,"team":"[A-Za-z0-9._-]{1,63}")?(,"project":"[A-Za-z0-9._-]{1,63}")?{{ if $defClass }}(,"budget_class":"{{ $defClass }}")?{{ end }}\\}\\}$') &&
            variables.cur.data[k].contains('"user_id":"' + k + '"')) ||
           (has(variables.prev.data) && k in variables.prev.data && variables.prev.data[k] == variables.cur.data[k]))
 ---
