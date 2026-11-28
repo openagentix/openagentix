@@ -42,6 +42,7 @@ cat > "$D/bin/kubectl" <<EOS
 a="\$*"
 items(){ jq -Rn --arg kg "\$1" '[inputs|split("\t")|select(.[0]==\$kg)|{kind:(.[0]|split(".")[0]),metadata:{namespace:(if .[1]=="-" then null else .[1] end),name:.[2],uid:.[3]}}]|{items:.}' < "$D/world"; }
 case "\$a" in
+  "config current-context") echo kind-lifecycle-test;;
   "get agentdefinitions.openagentix.io,agents.api.kagent.dev -A -o json") jq -Rn '[inputs|split("\t")|select(.[0]|split(".")[0]|IN("AgentDefinition","Agent"))|{kind:(.[0]|split(".")[0]),metadata:{namespace:.[1],name:.[2],uid:.[3]}}]|{items:.}' < "$D/world";;
   "get deployments,statefulsets,daemonsets,cronjobs,services -A -o json") jq -Rn '[inputs|split("\t")|select(.[0]|split(".")[0]|IN("Deployment","Service"))|{kind:(.[0]|split(".")[0]),metadata:{namespace:.[1],name:.[2]}}]|{items:.}' < "$D/world";;
   "get secrets -A -o json") cat "$D/secrets.json";;
@@ -94,7 +95,7 @@ echo '{"items":[{"metadata":{"namespace":"openagentix-knowledge","name":"mystery
 
 # L <scenario>: runs the script against the fakes; prints its output, then exit=<code>
 L(){ rm -f "$D/n" "$D/released"; : > "$D/world"; cp "$D/pvc-ok.json" "$D/pvc.json"; cp "$D/secrets-ok.json" "$D/secrets.json"; cp "$D/pods-ok.json" "$D/pods.json"
-  FAKE=$1 PATH="$D/bin:$PATH" KUBECTL="$D/bin/kubectl" HELM="$D/bin/helm" LIFECYCLE_INSTALL="$D/install" LIFECYCLE_UNINSTALL="$D/uninstall" LIFECYCLE_SMOKE="$D/smoke" HEALTH_WAIT=1 \
+  FAKE=$1 GITHUB_ACTIONS=true PATH="$D/bin:$PATH" KUBECTL="$D/bin/kubectl" HELM="$D/bin/helm" LIFECYCLE_INSTALL="$D/install" LIFECYCLE_UNINSTALL="$D/uninstall" LIFECYCLE_SMOKE="$D/smoke" HEALTH_WAIT=1 \
     bash hack/ci/lifecycle-test.sh 2>&1; echo "exit=$?"; }
 n(){ grep -c -- "$1" <<<"$OUT"; }
 
@@ -131,7 +132,7 @@ EOS
 done
 G(){ rm -f "$D/real/calls.REAL" "$D/real/calls.ok"; env -u KUBECTL -u HELM -u GITHUB_ACTIONS KUBECONFIG="$D/empty-kubeconfig" HELM_KUBECONTEXT=none-such PATH="$D/real:$PATH" LIFECYCLE_INSTALL="$D/real/install" "$@" bash hack/ci/lifecycle-test.sh 2>&1; echo "exit=$?"; }
 : > "$D/empty-kubeconfig"
-OUT=$(G FAKE_CTX=kind-openagentix); t "a local run on the context kind-openagentix is refused (exit 2), naming the way to allow it" "$(n '^exit=2$')/$(n 'LIFECYCLE_CI_CONTEXT does not name this context')" 1/1
+OUT=$(G FAKE_CTX=kind-openagentix); t "a local run on the context kind-openagentix is refused (exit 2), naming the variable that allows a named context" "$(n '^exit=2$')/$(n 'refusing to run on kind-openagentix')" 1/1
 t "... and no helm, kubectl (apart from reading the context name) or install command was run" "$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')/$(cat "$D/real/calls.ok" | wc -l | tr -d ' ')" 0/1
 OUT=$(G FAKE_CTX=gke_prod_cluster LIFECYCLE_CI_CONTEXT=gke_prod_cluster); t "a context that is not kind or k3d is refused even when named" "$(n '^exit=2$')/$(n 'not a kind or k3d context')" 1/1
 t "... with no cluster call" "$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')" 0

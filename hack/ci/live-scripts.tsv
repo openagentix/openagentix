@@ -73,7 +73,7 @@ hack/ci/key-entry-test.sh	offline	-	-		tests with fakes, fixtures or no cluster 
 hack/ci/kind-image-digest-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
 hack/ci/lib/require-ci-context.sh	offline	-	-		the shared guard itself
 hack/ci/lifecycle-test-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
-hack/ci/lifecycle-test.sh	pending	-	LIFECYCLE_CI_CONTEXT		PR 280 adds its guard; adopt hack/ci/lib/require-ci-context.sh there in a follow-up
+hack/ci/lifecycle-test.sh	guard	-	LIFECYCLE_CI_CONTEXT		
 hack/ci/msgid-scope.sh	guard	-	MSGID_SCOPE_CI_CONTEXT		
 hack/ci/netpol-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
 hack/ci/netpol-test.sh	user	-	-		asks a cluster whether it enforces NetworkPolicy (documented for kind, k3d and GKE); makes and deletes the namespace oa-netpol-test
@@ -149,3 +149,6 @@ Makefile	docker	-	-		builds and tests with docker (images, throwaway database co
 install.sh	user	-	-		the installer, runs on a person's cluster; its own rules (named cluster, kind-openagentix default, CLUSTER_TYPE=remote needs KUBE_CONTEXT)
 uninstall.sh	user	-	-		the uninstaller, keep policy and context rules of its own
 hack/ci/live-sweep-test.sh	offline	-	-		this test
+hack/ci/tool-accounts-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/tool-accounts-live.sh	guard	TOOL_ACCOUNTS_LIVE=1	TOOL_ACCOUNTS_CI_CONTEXT	on	
+hack/tool-accounts-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
