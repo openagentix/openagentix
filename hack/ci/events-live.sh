@@ -83,7 +83,7 @@ new_case() {
   if [ "$UCN" = equipment ]; then
     local serial; serial=$(printf 'KH4120-%05d' $((300 + n)))
     code=$(rest_post /faults "$(jq -nc --arg s "$serial" '{serial:$s,code:"E-330"}')") || code=000
-    CASE=$(jq -r '.case.id // empty' "$TD/resp.json" 2>/dev/null); DEDUP=$(jq -r '.deduplicated // empty' "$TD/resp.json" 2>/dev/null)
+    CASE=$(jq -r '.case.id // empty' "$TD/resp.json" 2>/dev/null); DEDUP=$(jq -r '.deduplicated | tostring' "$TD/resp.json" 2>/dev/null)
   else
     local acct txn
     # the burst uses the accounts 2031 to 2040 (no seeded case there), the single case the account 2021
