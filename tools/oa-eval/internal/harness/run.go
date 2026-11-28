@@ -200,7 +200,7 @@ func runCase(ctx context.Context, hc *http.Client, cfg Config, cs *CaseSet, c Ca
 	}
 	res.Tools = seen
 	res.Checks = append(res.Checks, toolChecks(e, seen, auditErr)...)
-	res.Checks = append(res.Checks, stateChecks(ctx, hc, e, cfg.StateBase, cfg.StateTokenFile)...)
+	res.Checks = append(res.Checks, stateChecks(ctx, hc, e, cfg.StateBase, cfg.StateTokenFile, ans.Text)...)
 
 	if c.Outcome != nil {
 		for _, l := range c.Outcome.Labels {

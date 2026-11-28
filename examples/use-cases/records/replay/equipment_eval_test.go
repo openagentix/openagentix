@@ -195,7 +195,7 @@ func TestEquipmentReadBackShowsASupersededRequest(t *testing.T) {
 		read := steps[n-1]
 		retry := map[string]any{"tool": "set_diagnosis", "args": map[string]any{"case_id": "{{user.id}}", "cause": "a retried write", "text": "written after the request"}}
 		sc["steps"] = append(append([]any{}, steps[:n-1]...), retry, read)
-		sc["answers"] = []any{map[string]any{"text": "STATUS {{result.20.output.status}}"}}
+		sc["answers"] = []any{map[string]any{"text": "STATUS {{result.20.output.approval.status}}"}}
 	}
 	bad := filepath.Join(t.TempDir(), "bad.json")
 	out, _ := json.Marshal(f)

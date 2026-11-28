@@ -305,7 +305,7 @@ func (s *Service) mutate(ctx context.Context, id string, fn func(tx *sql.Tx, c C
 		return err
 	}
 	if c.Status == "pending_approval" {
-		if err := core.SupersedePending(ctx, tx, id, s.clock()); err != nil {
+		if _, err := core.SupersedePending(ctx, tx, id, s.clock()); err != nil {
 			return err
 		}
 		if status == "" {

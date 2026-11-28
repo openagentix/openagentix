@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentix.io/schemas/approval-result/v1alpha1.json",
+  "title": "OpenAgentix approval result, v1alpha1",
+  "description": "The members a tool of a system of record returns in the JSON object of its result when it asks for an approval, reads one, or changes a record in a way that cancels one (ADR 0028). A tool may return more members. The platform reads only these. Text written by people stays outside these members or under names that start with untrusted_. The convention carries no payload text and no amount.",
+  "type": "object",
+  "properties": {
+    "approval": {
+      "description": "Present in the result of a tool that creates or reads one request. Absent otherwise.",
+      "type": "object",
+      "required": ["id", "status", "subject", "kind", "payload_hash", "proposed_by", "decided_by", "trace_id"],
+      "allOf": [
+        {
+          "description": "A request that waits has no decider yet.",
+          "if": {"properties": {"status": {"const": "pending"}}, "required": ["status"]},
+          "then": {"properties": {"decided_by": {"maxLength": 0}}}
+        },
+        {
+          "description": "A request that a person approved or rejected names who decided it. superseded and expired are not decisions of a person.",
+          "if": {"properties": {"status": {"enum": ["approved", "rejected"]}}, "required": ["status"]},
+          "then": {"properties": {"decided_by": {"minLength": 1}}}
+        }
+      ],
+      "properties": {
+        "id": {
+          "description": "Opaque to the platform.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "status": {
+          "description": "Only pending waits for a person. expired is for a record that expires requests; the reference records service does not.",
+          "enum": ["pending", "approved", "rejected", "superseded", "expired"]
+        },
+        "subject": {
+          "description": "The record the act is about.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "kind": {
+          "description": "The kind of act.",
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,64}$"
+        },
+        "payload_hash": {
+          "description": "The SHA-256 of the exact payload text the approver reads, as 64 lower-case hex characters. A match shows only that the approver's client fetched the same text, not that a person read it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "proposed_by": {
+          "description": "An opaque id from the record's own authentication. The platform never treats it as a verified person.",
+          "type": "string",
+          "minLength": 1
+        },
+        "decided_by": {
+          "description": "An opaque id from the record's own authentication. Empty until a decision.",
+          "type": "string"
+        },
+        "trace_id": {
+          "description": "The W3C trace id (32 lower-case hex) of the call that proposed the act, or unknown when the record did not receive one. A lookup hint, not evidence: the caller of the gate chooses it.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{32}|unknown)$"
+        }
+      }
+    },
+    "superseded_approvals": {
+      "description": "Present in the result of a write that superseded one or more pending requests: their ids. An agent that sees it must not report those requests as pending.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,64}$"}
+    }
+  }
+}

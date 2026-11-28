@@ -45,7 +45,15 @@ func agentCase(c CaseView) caseOut {
 
 type caseResult struct {
 	Case caseOut `json:"case"`
+	// SupersededApprovals: the ids of the approval requests this write superseded (the approval result convention, v1alpha1, ADR 0028). Absent when none was.
+	SupersededApprovals []string `json:"superseded_approvals,omitempty"`
 }
+
+// supersedable is implemented by the results of the writes that can cancel a pending request: register fills the member in.
+type supersedable interface{ setSuperseded([]string) }
+
+func (r *caseResult) setSuperseded(ids []string) { r.SupersededApprovals = ids }
+
 type caseIn struct {
 	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 }
@@ -108,8 +116,12 @@ type workOrderIn struct {
 	Summary string `json:"summary" jsonschema:"what the technician must do, required, 1 to 1000 characters, plain text"`
 }
 type workOrderOut struct {
-	WorkOrder WorkOrder `json:"work_order"`
+	WorkOrder           WorkOrder `json:"work_order"`
+	SupersededApprovals []string  `json:"superseded_approvals,omitempty"`
 }
+
+func (r *workOrderOut) setSuperseded(ids []string) { r.SupersededApprovals = ids }
+
 type partsOrderIn struct {
 	CaseID     string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 	PartID     string `json:"part_id" jsonschema:"the part to order, P- and five digits; a superseded part is refused (the refusal names its replacement), draft the order for the replacement"`
@@ -122,25 +134,37 @@ type bodyIn struct {
 	Body   string `json:"body" jsonschema:"the draft text, required, 1 to 4000 characters, plain text"`
 }
 type draftOut struct {
-	DraftID string `json:"draft_id"`
-	Kind    string `json:"kind"`
-	Status  string `json:"status"`
+	DraftID             string   `json:"draft_id"`
+	Kind                string   `json:"kind"`
+	Status              string   `json:"status"`
+	SupersededApprovals []string `json:"superseded_approvals,omitempty"`
 }
+
+func (r *draftOut) setSuperseded(ids []string) { r.SupersededApprovals = ids }
+
 type slotIn struct {
 	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 	SlotID string `json:"slot_id" jsonschema:"a free slot id: SLT- and four digits, like SLT-0003, at the case's dealer"`
 }
 type slotOut struct {
-	Slot Slot `json:"slot"`
+	Slot                Slot     `json:"slot"`
+	SupersededApprovals []string `json:"superseded_approvals,omitempty"`
 }
+
+func (r *slotOut) setSuperseded(ids []string) { r.SupersededApprovals = ids }
+
 type timerIn struct {
 	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 	Name   string `json:"name" jsonschema:"lowercase letters and underscores only, like dealer_response or claim_window; at most 20 timers per case"`
 	DueAt  string `json:"due_at" jsonschema:"RFC 3339 time with a zone, like 2026-12-04T10:00:00Z, after now and within 400 days"`
 }
 type timerOut struct {
-	Timer core.Timer `json:"timer"`
+	Timer               core.Timer `json:"timer"`
+	SupersededApprovals []string   `json:"superseded_approvals,omitempty"`
 }
+
+func (r *timerOut) setSuperseded(ids []string) { r.SupersededApprovals = ids }
+
 type escalateIn struct {
 	CaseID string `json:"case_id" jsonschema:"case id: SVC-, four digits for the year, a dash, four digits, like SVC-2026-0042"`
 	Reason string `json:"reason" jsonschema:"why a person must take this, required, 1 to 500 characters, plain text"`
@@ -152,6 +176,12 @@ type approvalIn struct {
 type approvalGetIn struct {
 	ApprovalID string `json:"approval_id" jsonschema:"approval id: APR- and at least four digits, like APR-0007"`
 }
+
+// approvalGetOut is the result of get_approval: the approval member of the convention, as request_approval has it.
+type approvalGetOut struct {
+	Approval approvalView `json:"approval"`
+}
+
 type approvalOut struct {
 	Approval approvalView `json:"approval"`
 	Next     string       `json:"next"`
@@ -165,9 +195,10 @@ type approvalView struct {
 	Kind               string        `json:"kind"`
 	Status             string        `json:"status"`
 	ProposedBy         string        `json:"proposed_by"`
-	DecidedBy          string        `json:"decided_by,omitempty"`
+	DecidedBy          string        `json:"decided_by"` // always present, empty until a decision (the approval result convention, v1alpha1)
 	DecisionNote       string        `json:"untrusted_decision_note,omitempty"`
-	PayloadHash        string        `json:"payload_hash"`
+	PayloadHash        string        `json:"payload_hash"` // the SHA-256 of the exact payload text the approver reads
+	TraceID            string        `json:"trace_id"`     // the W3C trace id of the proposing call, or "unknown" until the trace link is built (ADR 0028, slice 3)
 	Warranty           warrantyBasis `json:"warranty"`
 	PartID             string        `json:"part_id"`
 	Qty                int           `json:"qty"`
@@ -183,7 +214,7 @@ type approvalView struct {
 
 func agentApproval(a core.Approval) approvalView {
 	v := approvalView{ID: a.ID, Subject: a.Subject, Kind: a.Kind, Status: a.Status, ProposedBy: a.ProposedBy, DecidedBy: a.DecidedBy,
-		DecisionNote: a.DecisionNote, PayloadHash: a.PayloadHash}
+		DecisionNote: a.DecisionNote, PayloadHash: a.PayloadHash, TraceID: "unknown"}
 	var p proposalPayload
 	if json.Unmarshal([]byte(a.Payload), &p) == nil {
 		v.Warranty, v.PartID, v.Qty, v.FromDealer, v.Slot = p.Warranty, p.PartID, p.Qty, p.FromDealer, p.Slot
@@ -202,7 +233,17 @@ func register[In, Out any](d *Domain, srv *mcp.Server, name, desc string, readOn
 	}
 	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, Annotations: ann},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-			out, err := fn(ctx, in)
+			// A write can cancel the pending request of its case. The ids come from the write's own transaction (core.SupersedePending returns them from
+			// the UPDATE), and the result then names them in superseded_approvals.
+			cctx, superseded := core.WithSupersededCollector(ctx)
+			out, err := fn(cctx, in)
+			if err == nil {
+				if ids := superseded(); len(ids) > 0 {
+					if sp, ok := any(&out).(supersedable); ok {
+						sp.setSuperseded(ids)
+					}
+				}
+			}
 			sub := ""
 			if subject != nil {
 				sub = subject(in)
@@ -290,32 +331,32 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 			c, err := s.OpenProactiveCase(ctx, in.Serial, in.Reason)
 			return caseResult{Case: agentCase(c)}, err
 		})
-	register(d, srv, "set_diagnosis", "Record the likely cause and the reasoning on a case.", false, func(in diagnosisIn) string { return in.CaseID },
+	register(d, srv, "set_diagnosis", "Record the likely cause and the reasoning on a case. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in diagnosisIn) string { return in.CaseID },
 		func(ctx context.Context, in diagnosisIn) (caseResult, error) {
 			c, err := s.SetDiagnosis(ctx, in.CaseID, in.Cause, in.Text)
 			return caseResult{Case: agentCase(c)}, err
 		})
-	register(d, srv, "create_work_order", "Create or update the case's work order. It needs no approval.", false, func(in workOrderIn) string { return in.CaseID },
+	register(d, srv, "create_work_order", "Create or update the case's work order. It needs no approval. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in workOrderIn) string { return in.CaseID },
 		func(ctx context.Context, in workOrderIn) (workOrderOut, error) {
 			w, err := s.CreateWorkOrder(ctx, in.CaseID, in.Summary)
 			return workOrderOut{WorkOrder: w}, err
 		})
-	register(d, srv, "draft_parts_order", "Store the parts order as a draft: a part, a quantity and the dealer that has it. A superseded part, a short stock, or a machine with a flapping sensor is refused. Nothing is ordered until a manager approves.", false, func(in partsOrderIn) string { return in.CaseID },
+	register(d, srv, "draft_parts_order", "Store the parts order as a draft: a part, a quantity and the dealer that has it. A superseded part, a short stock, or a machine with a flapping sensor is refused. Nothing is ordered until a manager approves. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in partsOrderIn) string { return in.CaseID },
 		func(ctx context.Context, in partsOrderIn) (draftOut, error) {
 			it, err := s.DraftPartsOrder(ctx, in.CaseID, in.PartID, in.Qty, in.FromDealer, in.Body)
 			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status}, err
 		})
-	register(d, srv, "draft_warranty_claim", "Store the warranty claim as a draft. Refused unless check_warranty says covered. Nothing is submitted until a manager approves.", false, func(in bodyIn) string { return in.CaseID },
+	register(d, srv, "draft_warranty_claim", "Store the warranty claim as a draft. Refused unless check_warranty says covered. Nothing is submitted until a manager approves. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in bodyIn) string { return in.CaseID },
 		func(ctx context.Context, in bodyIn) (draftOut, error) {
 			it, err := s.DraftWarrantyClaim(ctx, in.CaseID, in.Body)
 			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status}, err
 		})
-	register(d, srv, "draft_customer_notice", "Store the notice to the customer as a draft. You never see contact data. It is not sent until a manager approves.", false, func(in bodyIn) string { return in.CaseID },
+	register(d, srv, "draft_customer_notice", "Store the notice to the customer as a draft. You never see contact data. It is not sent until a manager approves. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in bodyIn) string { return in.CaseID },
 		func(ctx context.Context, in bodyIn) (draftOut, error) {
 			it, err := s.DraftCustomerNotice(ctx, in.CaseID, in.Body)
 			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status}, err
 		})
-	register(d, srv, "propose_slot", "Hold a free technician slot at the case's dealer. It is confirmed only when a manager approves.", false, func(in slotIn) string { return in.CaseID },
+	register(d, srv, "propose_slot", "Hold a free technician slot at the case's dealer. It is confirmed only when a manager approves. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in slotIn) string { return in.CaseID },
 		func(ctx context.Context, in slotIn) (slotOut, error) {
 			sl, err := s.ProposeSlot(ctx, in.CaseID, in.SlotID)
 			return slotOut{Slot: sl}, err
@@ -329,7 +370,7 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 			t, err := s.SetTimer(ctx, in.CaseID, in.Name, due)
 			return timerOut{Timer: t}, err
 		})
-	register(d, srv, "escalate_to_person", "Route a case to a person, for example a safety-critical request such as bypassing an interlock. An escalated case cannot be sent for approval.", false, func(in escalateIn) string { return in.CaseID },
+	register(d, srv, "escalate_to_person", "Route a case to a person, for example a safety-critical request such as bypassing an interlock. An escalated case cannot be sent for approval. If this write cancelled a pending approval request, the result lists it in superseded_approvals.", false, func(in escalateIn) string { return in.CaseID },
 		func(ctx context.Context, in escalateIn) (caseResult, error) {
 			c, err := s.Escalate(ctx, in.CaseID, in.Reason)
 			return caseResult{Case: agentCase(c)}, err
@@ -339,10 +380,10 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 			a, err := s.RequestApproval(ctx, in.CaseID, in.Kind)
 			return approvalOut{Approval: agentApproval(a), Next: "A named dealer manager must approve or reject. Poll get_approval; do nothing else for orders, claims or notices."}, err
 		})
-	register(d, srv, "get_approval", "Read the status of an approval request.", true, func(in approvalGetIn) string { return in.ApprovalID },
-		func(ctx context.Context, in approvalGetIn) (approvalView, error) {
+	register(d, srv, "get_approval", "Read an approval request. The result has an approval member with its id, status (pending, approved, rejected or superseded), payload_hash, proposed_by and decided_by. Report a request as pending only when status is pending.", true, func(in approvalGetIn) string { return in.ApprovalID },
+		func(ctx context.Context, in approvalGetIn) (approvalGetOut, error) {
 			a, err := d.approvals.Get(ctx, in.ApprovalID)
-			return agentApproval(a), err
+			return approvalGetOut{Approval: agentApproval(a)}, err
 		})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
