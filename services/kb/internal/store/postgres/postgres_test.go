@@ -41,10 +41,16 @@ func open(t *testing.T, dim int) (*Store, string) {
 
 func openAt(t *testing.T, url string, dim int, graph bool) (*Store, string) {
 	t.Helper()
+	return openWith(t, url, dim, graph, false)
+}
+
+// openWith is openAt with graph schemas (ADR 0030) on or off.
+func openWith(t *testing.T, url string, dim int, graph, schemas bool) (*Store, string) {
+	t.Helper()
 	schema := randomSchema()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	s, err := Open(ctx, Options{URL: url, Schema: schema, VectorDim: dim, Graph: graph, GraphSchemas: graph})
+	s, err := Open(ctx, Options{URL: url, Schema: schema, VectorDim: dim, Graph: graph, GraphSchemas: schemas})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -63,13 +69,13 @@ func openAt(t *testing.T, url string, dim int, graph bool) (*Store, string) {
 func TestConformanceLexical(t *testing.T) {
 	testURL(t)
 	url := testURL(t)
-	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openAt(t, url, 0, true); return s }, Graph: true, Schemas: true})
+	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openWith(t, url, 0, true, true); return s }, Graph: true, Schemas: true})
 }
 
 func TestConformanceHybrid(t *testing.T) {
 	testURL(t)
 	url := testURL(t)
-	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openAt(t, url, 3, true); return s }, Vectors: true, Dim: 3, Graph: true, Schemas: true})
+	storetest.Run(t, storetest.Factory{New: func(t *testing.T) store.Store { s, _ := openWith(t, url, 3, true, true); return s }, Vectors: true, Dim: 3, Graph: true, Schemas: true})
 }
 
 func TestMigrationsAreIdempotent(t *testing.T) {
@@ -643,5 +649,58 @@ func TestGraphMigration6UpgradesASchemaOfMigration5(t *testing.T) {
 	}
 	if got := migrationsIn(t, url, schema); got != "1,3,5,6" {
 		t.Fatalf("migrations = %s", got)
+	}
+}
+
+// TestGraphSchemasAreOffUnlessAsked: without Options.GraphSchemas no table is made, migration 7 is not recorded, the schema methods say so, and a fact set
+// load, a document load and an extraction behave as before.
+func TestGraphSchemasAreOffUnlessAsked(t *testing.T) {
+	url := testURL(t)
+	ctx := context.Background()
+	s, schema := openAt(t, url, 0, true)
+	if _, err := s.GetGraphSchema(ctx, "c"); !errors.Is(err, store.ErrSchemasDisabled) {
+		t.Fatalf("%v", err)
+	}
+	if _, err := s.PutGraphSchema(ctx, "c", store.GraphSchema{Version: 1}, []byte("{}"), "x"); !errors.Is(err, store.ErrSchemasDisabled) {
+		t.Fatalf("%v", err)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'graph_schemas'`, schema).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the table must not exist: n=%d err=%v", n, err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".schema_migrations WHERE version = 7`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("migration 7 must not be recorded: n=%d err=%v", n, err)
+	}
+	fs := store.FactSet{Collection: "c", ID: "org", Entities: []store.FactEntity{{Name: "Basalt", Type: "team"}}}
+	if _, err := s.ReplaceFactSet(ctx, fs); err != nil {
+		t.Fatalf("a fact set loads as before: %v", err)
+	}
+	if _, _, err := s.ClaimJob(ctx, time.Minute); err != nil {
+		t.Fatalf("%v", err)
+	}
+}
+
+// TestGraphSchemasMigrationIsIdempotent: opening a store with schemas twice leaves one table and one row of migration 7, and keeps a stored schema.
+func TestGraphSchemasMigrationIsIdempotent(t *testing.T) {
+	url := testURL(t)
+	ctx := context.Background()
+	s, schema := openWith(t, url, 0, true, true)
+	g := store.GraphSchema{Version: 1, EntityTypes: []store.SchemaEntityType{{Name: "team"}}}
+	if _, err := s.PutGraphSchema(ctx, "c", g, []byte(`{"version":1}`), "sha1"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s2, err := Open(ctx, Options{URL: url, Schema: schema, Graph: true, GraphSchemas: true})
+	if err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	defer s2.Close()
+	got, err := s2.GetGraphSchema(ctx, "c")
+	if err != nil || got.SHA256 != "sha1" || got.Version != 1 {
+		t.Fatalf("the stored schema must survive a restart: %+v %v", got, err)
+	}
+	var n int
+	if err := s2.pool.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".schema_migrations WHERE version = 7`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("migration 7: n=%d err=%v", n, err)
 	}
 }
