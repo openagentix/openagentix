@@ -1,0 +1,34 @@
+# CI ONLY. Values of the live proof of budget classes (ADR 0029, slice 3), on top of the quick start:
+#   PROFILE=quickstart VALUES_FILE=hack/ci/budget-classes-ci-values.yaml ./install.sh      then      hack/ci/budget-classes-live.sh
+# The e2e workflow runs it on request (workflow_dispatch, input `budget_classes`). The limits are tiny on purpose: the stub model answers a
+# short call with about 74 tokens, so a class of 300 tokens an hour is spent in about five calls. Do not use these numbers anywhere else.
+#   tight:   300 tokens an hour for each key of the class
+#   wide:    100000 tokens an hour for each key of the class
+#   (no class) the default budget, set here to 800 tokens an hour so that it is spent too, and not at the usual 1,000,000
+# Three chart agents, one for each case. Their keys come from install.sh, which writes the class into the key entry from the chart's annotation.
+gateway:
+  policy:
+    tokenBudget: {tokens: 800, unit: Hours}
+    budgetClasses:
+      - {name: tight, tokens: 300, unit: Hours, per: agent}
+      - {name: wide, tokens: 100000, unit: Hours, per: agent}
+
+# a list replaces the quick start's empty list
+agents:
+  - name: budget-tight
+    description: CI agent of the class tight
+    model: quickstart-model
+    budgetClass: tight
+    systemPrompt: You are a test agent. Answer in one short sentence.
+    tools: []
+  - name: budget-wide
+    description: CI agent of the class wide
+    model: quickstart-model
+    budgetClass: wide
+    systemPrompt: You are a test agent. Answer in one short sentence.
+    tools: []
+  - name: budget-none
+    description: CI agent with no class (the default budget)
+    model: quickstart-model
+    systemPrompt: You are a test agent. Answer in one short sentence.
+    tools: []

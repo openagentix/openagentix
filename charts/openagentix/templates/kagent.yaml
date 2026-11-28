@@ -58,6 +58,10 @@ metadata:
   labels: {{- include "oa.labels" $ | nindent 4 }}
   annotations:
     openagentix.io/agent: {{ $a.name }}
+    {{- if $a.budgetClass }}
+    {{- /* ADR 0029: install.sh writes it into the budget_class member of the agent's key entry */}}
+    openagentix.io/budget-class: {{ $a.budgetClass | quote }}
+    {{- end }}
 spec:
   provider: OpenAI
   model: {{ $a.model }}

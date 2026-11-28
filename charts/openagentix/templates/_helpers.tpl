@@ -710,3 +710,53 @@ Used in each pod template as: with (include "oa.priorityClass" $), then the fiel
 {{- $n -}}
 {{- end -}}
 {{- end -}}
+
+{{/* ADR 0029: the budget classes of the one gateway policy. Validates gateway.policy.budgetClasses, the budgetClass of each chart agent and
+controlPlane.policy.budgetClasses.definitions, and prints the classes as a JSON list ("[]" when there are none). Any fault fails the render.
+Used by gateway.yaml (the conditional entries), kagent.yaml (the check) and control-plane-guard.yaml (the class of definitions). */}}
+{{- define "oa.budgetClasses" -}}
+{{- $raw := .Values.gateway.policy.budgetClasses | default list -}}
+{{- if not (kindIs "slice" $raw) }}{{ fail (printf "gateway.policy.budgetClasses must be a list, got %s" (kindOf $raw)) }}{{ end -}}
+{{- if gt (len $raw) 15 }}{{ fail (printf "gateway.policy.budgetClasses has %d entries, at most 15 are allowed (the classes and the fallback must fit the 16 conditional entries of the gateway policy)" (len $raw)) }}{{ end -}}
+{{- $names := dict -}}
+{{- $out := list -}}
+{{- range $i, $c := $raw -}}
+{{- $at := printf "gateway.policy.budgetClasses[%d]" $i -}}
+{{- if not (kindIs "map" $c) }}{{ fail (printf "%s must be a map with name, tokens, unit and per" $at) }}{{ end -}}
+{{- range $k, $v := $c }}{{ if not (has $k (list "name" "tokens" "unit" "per")) }}{{ fail (printf "%s has an unknown field %q (the fields are name, tokens, unit and per)" $at $k) }}{{ end }}{{ end -}}
+{{- $n := $c.name -}}
+{{- if not (kindIs "string" $n) }}{{ fail (printf "%s.name must be a string (a DNS label of at most 40 characters)" $at) }}{{ end -}}
+{{- if or (gt (len $n) 40) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $n)) }}{{ fail (printf "%s.name %q must be a DNS label of at most 40 characters (lower-case letters, digits and '-', starting and ending with a letter or digit)" $at $n) }}{{ end -}}
+{{- if eq $n "default" }}{{ fail (printf "%s.name: \"default\" is reserved for the budget of a key with no class (gateway.policy.tokenBudget)" $at) }}{{ end -}}
+{{- if hasKey $names $n }}{{ fail (printf "%s.name %q is a duplicate" $at $n) }}{{ end -}}
+{{- $_ := set $names $n true -}}
+{{- $t := $c.tokens -}}
+{{- if not (or (kindIs "float64" $t) (kindIs "int64" $t) (kindIs "int" $t)) }}{{ fail (printf "%s.tokens must be a whole number from 1 to 2147483647" $at) }}{{ end -}}
+{{- if or (lt (float64 $t) 1.0) (gt (float64 $t) 2147483647.0) (ne (float64 $t) (floor (float64 $t))) }}{{ fail (printf "%s.tokens must be a whole number from 1 to 2147483647, got %v" $at $t) }}{{ end -}}
+{{- if not (and (kindIs "string" $c.unit) (has $c.unit (list "Hours" "Minutes" "Seconds"))) }}{{ fail (printf "%s.unit must be Hours, Minutes or Seconds (case matters), got %v" $at $c.unit) }}{{ end -}}
+{{- if not (and (kindIs "string" $c.per) (has $c.per (list "agent" "class"))) }}{{ fail (printf "%s.per is required and must be agent (one bucket per key) or class (one bucket for every key of the class), got %v" $at $c.per) }}{{ end -}}
+{{- $out = append $out (dict "name" $n "tokens" (int64 $t) "unit" $c.unit "per" $c.per) -}}
+{{- end -}}
+{{- $known := ternary (join ", " (keys $names | sortAlpha)) "none defined" (gt (len $names) 0) -}}
+{{- range $a := (.Values.agents | default list) -}}
+{{- $bc := $a.budgetClass -}}
+{{- if and (hasKey $a "budgetClass") (not (kindIs "invalid" $bc)) -}}
+{{- if not (kindIs "string" $bc) }}{{ fail (printf "agents[%s]: budgetClass must be a string, the name of a class in gateway.policy.budgetClasses" $a.name) }}{{ end -}}
+{{- if $bc -}}
+{{- if eq $bc "default" }}{{ fail (printf "agents[%s]: budgetClass \"default\" is reserved: leave budgetClass out to get the default budget" $a.name) }}{{ end -}}
+{{- if not (hasKey $names $bc) }}{{ fail (printf "agents[%s]: budgetClass %q is not in gateway.policy.budgetClasses (%s)" $a.name $bc $known) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $cp := .Values.controlPlane | default dict -}}
+{{- $cpp := $cp.policy | default dict -}}
+{{- $bcd := $cpp.budgetClasses | default dict -}}
+{{- $def := $bcd.definitions | default "" -}}
+{{- if not (kindIs "string" $def) }}{{ fail "controlPlane.policy.budgetClasses.definitions must be a string: empty, or the name of a class with per: agent" }}{{ end -}}
+{{- if $def -}}
+{{- if eq $def "default" }}{{ fail "controlPlane.policy.budgetClasses.definitions: \"default\" is reserved: leave it empty to give definitions the default budget" }}{{ end -}}
+{{- if not (hasKey $names $def) }}{{ fail (printf "controlPlane.policy.budgetClasses.definitions %q is not in gateway.policy.budgetClasses (%s)" $def $known) }}{{ end -}}
+{{- range $c := $out }}{{ if and (eq $c.name $def) (ne $c.per "agent") }}{{ fail (printf "controlPlane.policy.budgetClasses.definitions %q must be a class with per: agent: a shared class would let one definition spend the budget of the others" $def) }}{{ end }}{{ end -}}
+{{- end -}}
+{{- $out | toJson -}}
+{{- end -}}
