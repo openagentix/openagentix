@@ -213,7 +213,7 @@ BEFORE=$(SEEN)
 CALL=$(mcp_call $P1 "$TD/d" "$SID" 3 tools/call '{"name":"echo_echo","arguments":{"text":"tool accounts"}}')
 check "group disputes: a call of echo_echo reaches the endpoint and answers" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" "))' <<<"$CALL" 2>/dev/null)" "false echo from echo: tool accounts"
 sleep 2
-check "group disputes: the endpoint saw its own header value on that call (its log says presented=self)" "$(( $(SEEN) - BEFORE ))" 1
+check "group disputes: the endpoint saw its own header value on and after that call (its log counts new presented=self lines; the tool server also makes requests of its own)" "$([ $(( $(SEEN) - BEFORE )) -ge 1 ] && echo yes || echo no)" yes
 CALL=$(mcp_call $P1 "$TD/d" "$SID" 4 tools/call '{"name":"knowledge-disputes_kb_list_collections","arguments":{}}')
 check "group disputes: a call through the knowledge base mirror reaches the knowledge base and is not an error" "$(jq -r '(.error==null and (.result.isError//false)==false)|tostring' <<<"$CALL" 2>/dev/null)" true
 CALL=$(mcp_call $P1 "$TD/d" "$SID" 5 tools/call '{"name":"delivery-disputes_notify_list_destinations","arguments":{}}')
