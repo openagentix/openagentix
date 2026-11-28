@@ -70,6 +70,8 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/images-test.sh
 	hack/ci/preflight-test.sh
 	hack/ci/pdb-check-test.sh
+	hack/ci/release-values-diff-test.sh
+	hack/ci/netpol-check-test.sh
 	hack/ci/compose-values-test.sh
 	hack/ci/default-storageclass-test.sh
 	hack/ci/sa-issuer-test.sh
