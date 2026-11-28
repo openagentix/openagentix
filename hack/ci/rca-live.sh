@@ -77,7 +77,7 @@ case "$TS_SA" in
     done;;
   *) echo "       the tool server tools-$PROFILE names no account of the chart (mcp.virtual.ownServiceAccounts is off): every tool server can read every Secret in $MCPNS (ADR 0026 A3)";;
 esac
-check "the agent pod-rca is Ready""$($K get agents.api.kagent.dev pod-rca -n "$KNS" -o json 2>/dev/null | jq -r '[.status.conditions[]?|select(.type=="Ready")|.status]|first // "unknown"')" True
+check "the agent pod-rca is Ready" "$($K get agents.api.kagent.dev pod-rca -n "$KNS" -o json 2>/dev/null | jq -r '[.status.conditions[]?|select(.type=="Ready")|.status]|first // "unknown"')" True
 
 # --- the audit source: the AUDIT lines of the vMCP of the profile, as JSON lines with a `tool` field -------------------------------
 # The vMCP writes one AUDIT line per call to its standard output. A reader copies the whole log every second into one file (a rename, so a
