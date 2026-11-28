@@ -1,9 +1,11 @@
 # ADR 0028: approval stays in the system of record; the platform gives a result convention and a trace link
 
-Status: Proposed
+Status: Accepted (2026-11-28)
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/12 (`ApprovalRequest`), reference use cases #229
 Replaces: none. Changes the plan for `ApprovalRequest` in ADR 0012 ("Reserved") and ADR 0013 (release 0.4): the kind stays reserved, and the part "created by the controller when a run reaches a tool that needs approval" is deferred with the conditions in "When the platform kind comes back". See "Relation to other records".
+
+The 7-day review period was waived by the maintainer on 2026-11-28; an independent review was done and its changes are in this text. This record recommended keeping the 7 days, and the maintainer waived them. The owner's decisions on the open questions are at the end, under "Decisions on the open questions".
 
 The act that needs a person's approval (a credit, a parts order, a claim) is approved in the system that owns the record, as the reference use cases already do. The platform does not hold tool calls. It gives three small things: a versioned convention for the approval a tool returns (`approval` with `id`, `status`, `payload_hash` and a few more, with a JSON Schema and a test), the rules a system of record follows to be a safe approval point, and a trace link from an approval to the run that asked for it, if the tool server forwards the trace context. Nothing here is built. Everything is *unverified* until the slices below are done.
 
@@ -190,14 +192,16 @@ Each slice is one pull request, tests first.
 - *Unverified*: MCP elicitation support in kagent 1.0.1 and ToolHive 0.67.1 (option D).
 - The general practice of core banking and ERP approval was not checked against any product's documentation for this record; read it before quoting.
 
-## Questions for the maintainer
+## Decisions on the open questions
 
-1. **Is approval in the system of record the platform's answer for 0.4, with `ApprovalRequest` deferred under the four conditions?** Recommended: yes. A gateway hold would show the approver only the model's arguments, not the record's truth, and needs runs, durable waits and approver identity that do not exist.
-2. **Re-scope issue #12 to this record, or close it and open a new one later?** Recommended: re-scope it, keep the reserved name, and list the four conditions in the issue.
-3. **Make the result shape a platform contract now, with only example code using it?** Recommended: no. A versioned convention (v1alpha1) with a JSON Schema and a test now; a platform contract in the record that adds the first platform reader.
-4. **Does a "stops at an approval" claim need a security review of the system of record?** Recommended: yes, an independent review of the approval routes before a use case's docs say it.
-5. **The software organisation's acting agents (wave 2 of #229)**: approval at a record, or propose a change for review in Git? Recommended: propose in Git (a pull request to a GitOps repository) with the forge's review as the approval point, per ADR 0012. The agent's Git identity can neither approve nor merge; branch protection requires a review by another identity.
-6. **Review window.** Recommended: 7 days. It changes a release promise of ADR 0013.
+These were the open questions of the proposed record. The owner decided them on 2026-11-28, taking every recommended answer, as below.
+
+1. **Is approval in the system of record the platform's answer for 0.4, with `ApprovalRequest` deferred under the four conditions?** Decided, as recommended: yes. A gateway hold would show the approver only the model's arguments, not the record's truth, and needs runs, durable waits and approver identity that do not exist.
+2. **Re-scope issue #12 to this record, or close it and open a new one later?** Decided, as recommended: re-scope it, keep the reserved name, and list the four conditions in the issue.
+3. **Make the result shape a platform contract now, with only example code using it?** Decided, as recommended: no. A versioned convention (v1alpha1) with a JSON Schema and a test now; a platform contract in the record that adds the first platform reader.
+4. **Does a "stops at an approval" claim need a security review of the system of record?** Decided, as recommended: yes, an independent review of the approval routes before a use case's docs say it.
+5. **The software organisation's acting agents (wave 2 of #229)**: approval at a record, or propose a change for review in Git? Decided, as recommended: propose in Git (a pull request to a GitOps repository) with the forge's review as the approval point, per ADR 0012. The agent's Git identity can neither approve nor merge; branch protection requires a review by another identity.
+6. **Review window.** Decided: waived on 2026-11-28.
 
 ## Review notes
 
