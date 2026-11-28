@@ -23,6 +23,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 K=${KUBECTL:-kubectl}; HELM=${HELM:-helm}
+# This script installs, upgrades and UNINSTALLS the release on the cluster of the current kube context. It is a CI script (.github/workflows/lifecycle.yml). Unless
+# KUBECTL names another command (the offline test does), it refuses to start anywhere but on GitHub Actions, or when LIFECYCLE_CI_CONTEXT names the current context
+# exactly, and only on a kind or k3d context. It reads the kubeconfig only (no call to a cluster) before it decides.
+if [ -z "${KUBECTL:-}" ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+  CTX_NOW=$(kubectl config current-context 2>/dev/null || true)
+  case "$CTX_NOW" in kind-*|k3d-*) ;; *) echo "lifecycle-test: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;; esac
+  [ "${LIFECYCLE_CI_CONTEXT:-}" = "$CTX_NOW" ] || { echo "lifecycle-test: refusing to run on '$CTX_NOW': this is not a CI run (GITHUB_ACTIONS is not true) and LIFECYCLE_CI_CONTEXT does not name this context. The script installs and uninstalls; do not run it on a cluster you use. Nothing was changed." >&2; exit 2; }
+fi
 RELEASE=${RELEASE:-openagentix}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
 NS_RE=${LIFECYCLE_NS_RE:-'^(openagentix-.*|agentgateway-system|kagent|toolhive-system|ate-system)$'}
 SECRET_NS_RE=${LIFECYCLE_SECRET_NS_RE:-'^(openagentix-.*|agentgateway-system)$'}

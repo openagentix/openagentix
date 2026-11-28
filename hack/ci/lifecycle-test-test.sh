@@ -118,4 +118,23 @@ OUT=$(L leftover);         t "a release object left by uninstall fails" "$(n '^F
 OUT=$(L agent-left);       t "an AgentDefinition left by uninstall fails" "$(n '^FAIL  no AgentDefinition and no kagent Agent is left')/$(n '^exit=1$')" 1/1
 OUT=$(L pvc-left);         t "an undocumented PVC fails" "$(n 'mystery-volume')/$(n '^exit=1$')" 1/1
 OUT=$(L secret-rotated);   t "a Secret that changes across uninstall and reinstall fails" "$(n 'Secrets whose content changed')/$(n '^exit=1$')" 1/1
+
+echo "# the script never reaches a real cluster by accident (it installs and uninstalls): hermetic, with recording fakes and an empty kubeconfig"
+mkdir -p "$D/real"
+for c in helm kubectl install; do
+  cat > "$D/real/$c" <<EOS
+#!/usr/bin/env bash
+if [ "$c" = kubectl ] && [ "\$1 \$2" = "config current-context" ]; then echo "\${FAKE_CTX:-kind-openagentix}"; echo "$c \$*" >> "$D/real/calls.ok"; exit 0; fi
+echo "$c \$*" >> "$D/real/calls.REAL"; exit 1
+EOS
+  chmod +x "$D/real/$c"
+done
+G(){ rm -f "$D/real/calls.REAL" "$D/real/calls.ok"; env -u KUBECTL -u HELM -u GITHUB_ACTIONS KUBECONFIG="$D/empty-kubeconfig" HELM_KUBECONTEXT=none-such PATH="$D/real:$PATH" LIFECYCLE_INSTALL="$D/real/install" "$@" bash hack/ci/lifecycle-test.sh 2>&1; echo "exit=$?"; }
+: > "$D/empty-kubeconfig"
+OUT=$(G FAKE_CTX=kind-openagentix); t "a local run on the context kind-openagentix is refused (exit 2), naming the way to allow it" "$(n '^exit=2$')/$(n 'LIFECYCLE_CI_CONTEXT does not name this context')" 1/1
+t "... and no helm, kubectl (apart from reading the context name) or install command was run" "$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')/$(cat "$D/real/calls.ok" | wc -l | tr -d ' ')" 0/1
+OUT=$(G FAKE_CTX=gke_prod_cluster LIFECYCLE_CI_CONTEXT=gke_prod_cluster); t "a context that is not kind or k3d is refused even when named" "$(n '^exit=2$')/$(n 'not a kind or k3d context')" 1/1
+t "... with no cluster call" "$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')" 0
+OUT=$(G FAKE_CTX=kind-ci LIFECYCLE_CI_CONTEXT=kind-ci); t "a kind context named by LIFECYCLE_CI_CONTEXT passes the guard (the fake install then fails, exit 1, not 2)" "$(n '^exit=1$')/$(n 'refusing')" 1/0
+OUT=$(G FAKE_CTX=kind-openagentix GITHUB_ACTIONS=true); t "on GitHub Actions the guard does not apply (the fake install fails, exit 1)" "$(n '^exit=1$')/$(n 'refusing')" 1/0
 exit $F
