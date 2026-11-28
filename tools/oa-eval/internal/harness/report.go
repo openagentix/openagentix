@@ -15,7 +15,9 @@ func (r *Report) WriteTable(w io.Writer) {
 	fmt.Fprintln(tw, "CASE\tRESULT\tTASK\tMS\tFAILED CHECKS")
 	for _, c := range r.Cases {
 		res := "PASS"
-		if !c.Pass {
+		if c.NotRun {
+			res = "NOT RUN"
+		} else if !c.Pass {
 			res = "FAIL"
 		}
 		var bad []string
@@ -24,10 +26,17 @@ func (r *Report) WriteTable(w io.Writer) {
 				bad = append(bad, k.Name)
 			}
 		}
+		if c.NotRun {
+			bad = []string{c.NotRunReason}
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", c.ID, res, strings.TrimPrefix(c.TaskState, "TASK_STATE_"), c.Millis, strings.Join(bad, ", "))
 	}
 	_ = tw.Flush()
-	fmt.Fprintf(w, "\n%d cases: %d passed, %d failed\n", r.Total, r.Passed, r.Failed)
+	fmt.Fprintf(w, "\n%d cases: %d passed, %d failed", r.Total, r.Passed, r.Failed)
+	if r.NotRun > 0 {
+		fmt.Fprintf(w, ", %d not run (the model refused a call: a spent budget or a provider error; they are not counted as failures)", r.NotRun)
+	}
+	fmt.Fprintln(w)
 	if a := r.Agreement; a != nil {
 		fmt.Fprintf(w, "agreement with the people: agent %d of %d (%.0f%%)", a.Agent, a.Cases, a.AgentRate*100)
 		if a.BaselineCases > 0 {
@@ -101,6 +110,8 @@ func Compare(old, cur *Report) *Diff {
 		seen[c.ID] = true
 		o, ok := prev[c.ID]
 		switch {
+		case c.NotRun:
+			d.Changes = append(d.Changes, Change{ID: c.ID, Kind: "not_run", Detail: c.NotRunReason})
 		case !ok:
 			d.Changes = append(d.Changes, Change{ID: c.ID, Kind: "new"})
 		case o.Pass && !c.Pass:

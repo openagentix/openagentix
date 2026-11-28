@@ -1,4 +1,5 @@
 # Evaluation set for the pod root-cause agent (tools/oa-eval; how to read it: docs/diary/guide/write-an-evaluation-set.md).
+# This set follows the scripted stand-in. To measure a real model use cases-real.yaml in this folder and hack/use-case-eval.sh.
 # Run it on a cluster where the six workloads of manifests/rca-demo.yaml have settled (hack/ci/rca-live.sh waits for that, then runs it):
 #
 #   kubectl port-forward -n openagentix-gateway svc/a2a-gate 8080:8080 &
