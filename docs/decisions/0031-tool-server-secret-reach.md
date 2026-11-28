@@ -1,9 +1,11 @@
 # ADR 0031: credentials of tool endpoints, and tool servers that cannot read the Secrets of the tools namespace
 
-Status: Proposed
+Status: Accepted (2026-11-28)
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/229 (reference use cases; the follow-up named in ADR 0026 decision 12)
 Replaces: none. The follow-up record that ADR 0026 A3 and decision 12 name for the Secret reach of every tool server in `mcp.namespace`. Builds on ADR 0025 section 4 and Amendment 1, and ADR 0026 A3 and A4. Closes one open row of ADR 0030 (accepted, PR #275). See "Relation to other records".
+
+The 7-day review period was waived by the maintainer on 2026-11-28; an independent review was done and its changes are in this text. The owner's decisions on the open questions are at the end, under "Decisions on the open questions".
 
 Today every tool server (the ToolHive `VirtualMCPServer` pods) in `mcp.namespace` runs under a ServiceAccount whose Role, made by the ToolHive operator, can get, list and watch every Secret in that namespace. So the header credential of one use case's endpoint is readable by the tool server of another use case. This record gives each tool server a ServiceAccount and a Role that the chart writes, with no right on Secrets, so the tool server accounts lose their Secret reach, and names it in the tool server's spec, which makes the operator create no ServiceAccount and no Role for it. Credentials still reach the tool server as environment values from Secret references, which the kubelet resolves; the pod never needs to read a Secret through the API. Off by default; with the new value unset, the chart renders byte for byte what it renders today. A spike on a throwaway cluster answered the fifteen questions of "Spike" as expected, with one partial answer (the ConfigMap rule stays); see "Spike results". The chart render, the install check and the use cases are not built and stay *unverified* until the slices below are done.
 
@@ -208,11 +210,13 @@ Each slice is one pull request that `Refs #229`, tests first, off by default, wi
 - **The ConfigMap rule.** It stays (question 7).
 - **Fallback order.** Not needed now; C3 and B stay on record in "Spike results".
 
-### Open questions, with recommended answers
+## Decisions on the open questions
 
-1. **Default.** *Recommended:* off in this record, as every new switch is. The reference use cases and the full demo turn it on in slice 4. A later record makes it the default after one release with the use cases on it.
-2. **Refuse `mcp.endpoints[].auth`, the diagnostics bearer values and ADR 0030's values while the switch is off?** *Recommended:* not now; `install.sh` and the chart's `NOTES.txt` print a warning naming the credentials that every tool server can read. A refusal comes with the record that makes the switch the default.
-3. **Option D upstream.** *Recommended:* record it as the direction, with ADR 0021, and let the maintainer decide whether to ask ToolHive for an outgoing auth type that sends the tool server's own projected token with an audience. Not part of this record's slices.
+These were the open questions of the proposed record. The owner decided them on 2026-11-28, as below.
+
+1. **Default.** Decided, as recommended: off in this record, as every new switch is. The reference use cases and the full demo turn it on in slice 4. A later record makes it the default after one release with the use cases on it.
+2. **Refuse `mcp.endpoints[].auth`, the diagnostics bearer values and ADR 0030's values while the switch is off?** Decided, as recommended: not now; `install.sh` and the chart's `NOTES.txt` print a warning naming the credentials that every tool server can read. A refusal comes with the record that makes the switch the default.
+3. **Option D upstream.** Decided: the maintainer may raise it upstream; not part of this record's slices. It stays the direction, with ADR 0021.
 
 ## Review notes
 
