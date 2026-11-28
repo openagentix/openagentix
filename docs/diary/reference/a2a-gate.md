@@ -247,12 +247,12 @@ A caller rule may have an optional `event` block (ADR 0027), for a system of rec
 
 | Member | Rule |
 |---|---|
-| `event.text` | Required, at most 256 characters. The gate anchors it as `^(?:pattern)$` and refuses to start unless it has only: literals from `A-Z a-z 0-9 _ . : -` and the space; non-negated classes inside `[A-Za-z0-9_.:-]`; `{n}`, `{n,m}` (`m` at most 64) and `?`; concatenation; groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, escape classes, negated classes, flags, `^`, `$`, and a pattern that matches the empty text. The message text must be printable ASCII and at most 1024 bytes |
+| `event.text` | Required, at most 256 characters. A space may only be fixed text (not under a repeat or an optional). The gate anchors it as `^(?:pattern)$` and refuses to start unless it has only: literals from `A-Z a-z 0-9 _ . : -` and the space; non-negated classes inside `[A-Za-z0-9_.:-]`; `{n}`, `{n,m}` (`m` at most 64) and `?`; concatenation; groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, escape classes, negated classes, flags, `^`, `$`, and a pattern that matches the empty text. The message text must be printable ASCII and at most 1024 bytes |
 | `event.rate.perMinute`, `event.rate.burst` | Required. 1 to 600 and 1 to 60. A token bucket per caller and per gate replica |
 | `event.maxInFlight` | Required. 1 to 32. Open calls of this caller at the gate |
 | the rest of the rule | ServiceAccount only; no `methods`, `memory` or `key`; `userId` must be `fixed` and no other rule may equal or cover it; at most 16 event callers |
 
-Allowed keys in the message: `jsonrpc`, `id`, `method`, `params` at the top; `message` in `params`; `messageId`, `role`, `parts` in the message; one part with one key, `text`. A repeated key, a key that differs only in case, any other key, and a `Content-Encoding` header are 403 with reason `message_shape`. The request the runtime gets has the message id `<caller>:<messageId>:<16 hex of the SHA-256 of the text>` and only these headers: `Content-Type`, `A2A-Version`, a well-formed `Traceparent` and `Tracestate`, and `X-User-Id`. Over the rate: 429 `rate`; over `maxInFlight`: 429 `caller_busy`. The limits are per process: N replicas multiply them and a restart refills the buckets.
+Allowed keys in the message: `jsonrpc`, `id`, `method`, `params` at the top; `message` in `params`; `messageId`, `role`, `parts` in the message; one part with one key, `text`. A repeated key, a key that differs only in case, any other key, and a `Content-Encoding` header are 403 with reason `message_shape`. The `id` is an int64 or a string of 1 to 128 characters of `A-Za-z0-9._:-`. The request the runtime gets has the message id `<caller>:<messageId>:<16 hex of the SHA-256 of the text>` and only these headers: `Content-Type`, `A2A-Version`, a well-formed `Traceparent`, and `X-User-Id` (never `Tracestate`). The rate and the open calls are checked before the body is read: over the rate is 429 `rate`, over `maxInFlight` is 429 `caller_busy`, whatever the body is. The sender's answer is `{"jsonrpc":"2.0","id":<id>,"result":{"id":"<task id>","status":{"state":"<state>"}}}`; a runtime error is its code with the message `refused` and the status 502. The limits are per process: N replicas multiply them and a restart refills the buckets.
 
 ## Audit line
 
@@ -295,8 +295,8 @@ The body of an error is `{"error":"<text>"}`, with `Content-Type: application/js
 | 408 | `request timeout` | `body_timeout` | The start of the body did not arrive within 10 seconds. The connection is closed |
 | 413 | `request too large` | `body_too_large` | Body over `A2A_GATE_MAX_BODY`, or a memory call body over 605 bytes |
 | 431 | none (plain text from Go) | none | Header block over 16 KiB |
-| 429 | `too many requests` | `rate` | An event caller is over its token bucket (`event.rate`). Header `Retry-After` in whole seconds |
-| 429 | `too many requests` | `caller_busy` | An event caller has `event.maxInFlight` calls open. Header `Retry-After: 1` |
+| 429 | `too many requests` | `rate` | An event caller is over its token bucket (`event.rate`). Answered before the body is read. Header `Retry-After` in whole seconds |
+| 429 | `too many requests` | `caller_busy` | An event caller has `event.maxInFlight` calls open. Answered before the body is read. Header `Retry-After: 1` |
 | 502 | `bad gateway` | `upstream` | The controller did not answer; or, for an event caller, its answer could not be read or was over 1 MiB |
 | 503 | `service unavailable` | `auth_unavailable` | The token check could not run (TokenReview failed, or too many checks at once) |
 | 503 | `service unavailable` | `busy` | `A2A_GATE_MAX_INFLIGHT` requests are in progress. Header `Retry-After: 1` |

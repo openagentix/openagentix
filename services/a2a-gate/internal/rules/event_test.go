@@ -135,6 +135,14 @@ func TestEventTextRefuses(t *testing.T) {
 		"double quant":             `a{2}{3}`,
 		"unbounded after group":    `(ab)*`,
 		"alternation with escaped": `a\|b`,
+		"word soup in a group":     `[a-z]{1,12}( [a-z]{1,12}){0,40}`,
+		"word soup with optional":  `(?:[A-Za-z0-9:._-]{1,15} ?){1,60}`,
+		"word soup capturing":      `([A-Za-z0-9:._-]{1,15} ?){1,60}`,
+		"space under quest":        `(a b)?c`,
+		"optional space":           `a ?b`,
+		"repeated space":           `a {2}b`,
+		"space repeat in group":    `x( y){1,3}`,
+		"nested space repeat":      `((a b){1,2} c){1,2}`,
 	}
 	for name, pat := range bad {
 		if re, err := CompileEventText(pat); err == nil {

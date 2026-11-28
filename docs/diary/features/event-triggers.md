@@ -30,10 +30,10 @@ governance:
 1. It reads the body strictly. A repeated key, a key that differs in case, any key outside the allowed set, a second part, a `configuration`, a `contextId`, and a text that does not match the pattern are each a 403 with the reason `message_shape`. The answer names no part of the body.
 2. It builds its own body and its own request headers. The caller's bytes never reach the runtime. The message id the runtime sees is `<caller>:<messageId>:<16 hex of the SHA-256 of the text>`, and `configuration.returnImmediately` is `true`.
 3. It answers the sender with the task id and the state, and nothing else. A JSON-RPC error becomes its code with the message `refused`.
-4. It limits the caller with a token bucket (`rate`) and a count of open calls (`maxInFlight`). Over the limit is a 429 with `Retry-After`.
+4. It limits the caller with a token bucket (`rate`) and a count of open calls (`maxInFlight`), before it reads the body. Over the limit is a 429 with `Retry-After`, whatever the body is, so a sender with slow bodies cannot hold more of the gate's shared slots than its own `maxInFlight`.
 5. It adds `event_id` to the audit line: the `messageId` the caller sent, or `invalid` when the shape check did not pass. Never the text.
 
-The chart refuses what the gate would refuse and more: unknown keys in any caller entry, `methods`, `memory` or `key` with `event`, a user id that is not `fixed` or that another caller's rule covers, the pattern tokens the grammar does not allow (with `mustRegexMatch`, so a pattern that does not compile fails the render), an agent of the chart with long-term memory, the namespace of container agents, and more than 16 event callers. The default render does not change when no caller has an `event` block (checked byte for byte against the previous chart for ten sets of values).
+The chart checks the same things as the gate, so that a values file that renders can never stop the gate from starting: unknown keys in any caller entry, `methods`, `memory` or `key` with `event`, a user id that is not `fixed` or that another caller's rule covers, the pattern (the gate's alphabet, escapes only of `. - : _`, classes inside the alphabet, repeats of at most 64, no space under a repeat or in a group, no empty match, and `mustRegexMatch`, so a pattern that does not compile fails the render), agents named only from `agents[]` and none with long-term memory, no container agent, and at most 16 event callers. The gate stays the authority and re-checks the pattern on its parse tree. A test feeds every pattern the chart tests accept to the gate's grammar. The default render does not change when no caller has an `event` block (checked byte for byte against the previous chart for ten sets of values).
 
 ## What is proven, and how
 
@@ -55,3 +55,5 @@ The chart refuses what the gate would refuse and more: unknown keys in any calle
 - A 2xx means that the task was accepted, not that the run happened. A run that was accepted can be lost when the runtime restarts.
 - An event caller cannot read its task (no `GetTask`) and cannot join a conversation (no `contextId`).
 - Container agents are refused for event callers in this release.
+- An event caller may name only agents of the chart's `agents[]` (by name), so that the chart can check that none has long-term memory. The gate cannot tell which agents have memory and does not check it. An agent made by an `AgentDefinition` cannot be named by an event caller in this release.
+- A JSON-RPC error from the runtime reaches the sender as its code with the message `refused` and the status 502, never the runtime's own status.

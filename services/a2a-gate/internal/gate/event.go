@@ -35,14 +35,12 @@ var (
 	taskStateRe = regexp.MustCompile(`^TASK_STATE_[A-Z_]{1,32}$`)
 
 	traceparentRe = regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`)
-	tsKeyRe       = regexp.MustCompile(`^([a-z][a-z0-9_*/-]{0,255}|[a-z0-9][a-z0-9_*/-]{0,240}@[a-z][a-z0-9_*/-]{0,13})$`)
-	tsValueRe     = regexp.MustCompile(`^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$`)
 )
 
 // eventCall is what one accepted event request carries from the handler to the proxy.
 type eventCall struct {
-	id                      json.RawMessage // the caller's JSON-RPC id, re-encoded
-	traceparent, tracestate string
+	id          json.RawMessage // the caller's JSON-RPC id, re-encoded
+	traceparent string          // only a well-formed W3C traceparent; Tracestate is never forwarded
 }
 
 // eventState is the memory of one event caller in this process: a token bucket and the open calls.
@@ -127,7 +125,20 @@ func (h *handler) serveEvent(w *recorder, r *http.Request, a *auditRec, caller *
 		refuse(http.StatusForbidden, "agent", "forbidden")
 		return
 	}
-	// 2. message shape
+	// 2. rate and open calls, BEFORE any byte of the body is read: a caller over its rate is answered at once whatever it sends,
+	// and it can never hold more shared slots than its own maxInFlight while the gate waits for a slow body
+	if !rateOK {
+		w.Header().Set("Retry-After", strconv.Itoa(retry))
+		refuse(http.StatusTooManyRequests, "rate", "too many requests")
+		return
+	}
+	if !st.acquire(caller.Event.MaxInFlight) {
+		w.Header().Set("Retry-After", "1")
+		refuse(http.StatusTooManyRequests, "caller_busy", "too many requests")
+		return
+	}
+	defer st.release()
+	// 3. message shape
 	if len(r.Header.Values("Content-Encoding")) > 0 {
 		shape()
 		return
@@ -157,7 +168,7 @@ func (h *handler) serveEvent(w *recorder, r *http.Request, a *auditRec, caller *
 		return
 	}
 	a.eventID, a.rpc = m.messageID, "SendMessage"
-	// 3. rebuild: the body from the values parsed here, the headers from an allowlist
+	// 4. rebuild: the body from the values parsed here, the headers from an allowlist
 	out, err := buildEventBody(caller.Name, m)
 	if err != nil {
 		shape()
@@ -166,23 +177,7 @@ func (h *handler) serveEvent(w *recorder, r *http.Request, a *auditRec, caller *
 	call := &eventCall{id: m.id}
 	if tp := r.Header.Values("Traceparent"); len(tp) == 1 && validTraceparent(tp[0]) {
 		call.traceparent = tp[0]
-		if ts := r.Header.Values("Tracestate"); len(ts) == 1 && validTracestate(ts[0]) {
-			call.tracestate = ts[0]
-		}
 	}
-	// 4. rate
-	if !rateOK {
-		w.Header().Set("Retry-After", strconv.Itoa(retry))
-		refuse(http.StatusTooManyRequests, "rate", "too many requests")
-		return
-	}
-	// 5. open calls
-	if !st.acquire(caller.Event.MaxInFlight) {
-		w.Header().Set("Retry-After", "1")
-		refuse(http.StatusTooManyRequests, "caller_busy", "too many requests")
-		return
-	}
-	defer st.release()
 
 	r.Body = io.NopCloser(bytes.NewReader(out))
 	r.ContentLength = int64(len(out))
@@ -219,6 +214,9 @@ func parseEventMessage(b []byte, ev *rules.Event) (m eventMessage, ok bool) {
 			}
 			switch v := t.(type) {
 			case string:
+				if !messageIDRe.MatchString(v) { // the same rule as the message id: 1 to 128 of A-Za-z0-9._:-
+					return false
+				}
 				m.id, _ = json.Marshal(v)
 			case json.Number:
 				if !jsonIntRe.MatchString(v.String()) {
@@ -385,24 +383,6 @@ func validTraceparent(v string) bool {
 	return p[1] != strings.Repeat("0", 32) && p[2] != strings.Repeat("0", 16)
 }
 
-func validTracestate(v string) bool {
-	if len(v) == 0 || len(v) > 512 {
-		return false
-	}
-	members := strings.Split(v, ",")
-	if len(members) > 32 {
-		return false
-	}
-	for _, mem := range members {
-		mem = strings.Trim(mem, " \t")
-		k, val, ok := strings.Cut(mem, "=")
-		if !ok || !tsKeyRe.MatchString(k) || !tsValueRe.MatchString(val) {
-			return false
-		}
-	}
-	return true
-}
-
 // eventRequestHeaders is the whole set of request headers the runtime gets for an event call (X-User-Id is added by
 // the caller of this function's result in rewrite). The caller's own headers are not copied.
 func eventRequestHeaders(c *eventCall) http.Header {
@@ -411,9 +391,6 @@ func eventRequestHeaders(c *eventCall) http.Header {
 	h.Set("A2A-Version", "1.0")
 	if c.traceparent != "" {
 		h.Set("Traceparent", c.traceparent)
-		if c.tracestate != "" {
-			h.Set("Tracestate", c.tracestate)
-		}
 	}
 	return h
 }
@@ -483,10 +460,10 @@ func (h *handler) rewriteEventResponse(resp *http.Response, c *eventCall) error 
 		}{State: state}}})
 	case in.Error != nil && in.Result == nil && in.Error.Code != nil:
 		code, perr := strconv.ParseInt(in.Error.Code.String(), 10, 32)
-		if perr != nil || resp.StatusCode < 200 || resp.StatusCode > 599 {
+		if perr != nil {
 			return errEventAnswer
 		}
-		status = resp.StatusCode
+		status = http.StatusBadGateway // fixed: the runtime's own status never reaches the sender
 		out, err = json.Marshal(struct {
 			JSONRPC string          `json:"jsonrpc"`
 			ID      json.RawMessage `json:"id"`

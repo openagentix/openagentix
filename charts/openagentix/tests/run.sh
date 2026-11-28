@@ -1324,16 +1324,18 @@ ev_fails "an empty text fails"                         "$(ev_entry fault-events 
 ev_fails "a text over 256 characters fails"            "$(ev_entry fault-events "$(ev_block "$(printf 'a%.0s' $(seq 1 257))" 6 3 2)")" 'event.text.*256' -f "$EVA"
 ev_fails "a non-string text fails"                     "$(ev_entry fault-events "$EV_NUMTEXT")" 'event.text' -f "$EVA"
 ev_fails "a text with a non-ASCII character fails"     "$(ev_entry fault-events "$(ev_block 'Work case é' 6 3 2)")" 'event.text.*ASCII' -f "$EVA"
-for pat in 'a|b' '(a|b)c' 'ab*' 'ab+' 'a.b' 'a{2,}' '(?i)abc' '(?:abc)' 'a\sb' 'a\Sb' 'a\Wb' 'a\Db' 'a\pLb' 'a\PLb' '[^a]b' 'a\db' 'a\wb' 'a{2' '^abc' 'abc$'; do
+for pat in 'a|b' '(a|b)c' 'ab*' 'ab+' 'a.b' 'a{2,}' '(?i)abc' '(?:abc)' 'a\sb' 'a\Sb' 'a\Wb' 'a\Db' 'a\pLb' 'a\PLb' '[^a]b' 'a\db' 'a\wb' 'a{2' '^abc' 'abc$' '[0-9]{0,8}' '[0-9]{100}' '[0-9]{1,65}' 'Work/case [0-9]{4}' 'a,b' 'a=b' 'a@b' 'a#b' 'a\(b' 'a\/b' '[.-:]' 'a[b' '[a b]' '[[:alpha:]]' '[\d]' 'a\\b' '[a-z]{1,12}( [a-z]{1,12}){0,40}' '([A-Za-z0-9:._-]{1,15} ?){1,60}' 'a ?b' 'a {2}b' 'x( y){1,3}' '(a b)?c'; do
   ev_fails "the text '$pat' is refused at render"      "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'fault-events.*event.text' -f "$EVA"
 done
-for pat in '(abc' 'abc)' 'a[b'; do
+for pat in '(abc' 'abc)'; do
   ev_fails "the text '$pat' does not compile: refused with mustRegexMatch" "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'error parsing regexp' -f "$EVA"
 done
-for pat in 'abc' 'a?bc' 'Work case SVC-[0-9]{4}-[0-9]{4}' 'a\.b' '[A-Za-z0-9_.:-]{1,8}' '(ab){1,2}' 'v[0-9]{1,3}[.][0-9]{1,3}'; do
+# every pattern in this file renders, and the gate's own tests (services/a2a-gate/internal/rules/event_parity_test.go) require the gate to accept each
+while IFS= read -r pat; do
+  case "$pat" in ''|'#'*) continue;; esac
   E=$(ev_err "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" -f "$EVA")
   eq "the text '$pat' renders"                         "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
-done
+done < "$(dirname "$0")/event-patterns-accepted.txt"
 ev_fails "no rate fails"                               "$(ev_entry fault-events "$EV_NORATE")" 'event.rate' -f "$EVA"
 ev_fails "no maxInFlight fails"                        "$(ev_entry fault-events "$EV_NOMAX")" 'event.maxInFlight' -f "$EVA"
 for bad in '0 3 2:perMinute' '601 3 2:perMinute' '6 0 2:burst' '61 61 2:burst' '6 3 0:maxInFlight' '6 3 33:maxInFlight' '1.5 3 2:perMinute' "'6' 3 2:perMinute" '6 3 -1:maxInFlight'; do
@@ -1351,6 +1353,8 @@ ev_fails "a misspelt event key fails (no free-text caller is left)" "$(ev_entry 
 ev_fails "an event caller for an agent with memory fails" "$(ev_entry fault-events "$EVOK")" 'fault-events.*assistant.*memory'
 ev_fails "the same by the full agent name fails"       "$(printf '      - {name: fault-events, %s, agents: [kagent/assistant], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*assistant.*memory'
 ev_fails "an event caller for a container agent namespace fails" "$(printf '      - {name: fault-events, %s, agents: [openagentix-workloads/echo-go], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*container' -f "$EVA"
+ev_fails "an event caller may name only agents of agents[]: another namespace fails" "$(printf '      - {name: fault-events, %s, agents: [other/agent-with-memory], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*agents' -f "$EVA"
+ev_fails "an event caller may name only agents of agents[]: an unlisted agent in the kagent namespace fails" "$(printf '      - {name: fault-events, %s, agents: [kagent/quickstart], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*agents' -f "$EVA"
 ev_fails "an unknown chart agent fails as for any caller" "$(printf '      - {name: fault-events, %s, agents: [ghost], %s}\n' "$EVSA" "$EVOK")" 'ghost' -f "$EVA"
 ev_other() { printf '      - {name: %s, serviceAccount: {namespace: oth, name: %s}, agents: [assistant], userId: {%s}}\n' "$1" "$1" "$2"; }
 ev_fails "another caller with the same fixed user id fails"  "$(ev_entry fault-events "$EVOK")"$'\n'"$(ev_other other "fixed: 'event:fault-events'")" 'event:fault-events' -f "$EVA"

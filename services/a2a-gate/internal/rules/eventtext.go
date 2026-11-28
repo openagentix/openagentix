@@ -49,7 +49,7 @@ func CompileEventText(pattern string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, errors.New("event text pattern does not parse")
 	}
-	if err := checkEventTree(tree); err != nil {
+	if err := checkEventTree(tree, false); err != nil {
 		return nil, err
 	}
 	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
@@ -100,7 +100,8 @@ func isAlnum(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
-func checkEventTree(re *syntax.Regexp) error {
+// repeated is true under a repeat or an optional: a space there would let words repeat, which is prose, not an identifier.
+func checkEventTree(re *syntax.Regexp, repeated bool) error {
 	if re.Flags&syntax.FoldCase != 0 {
 		return errors.New("event text pattern may not fold case")
 	}
@@ -109,6 +110,9 @@ func checkEventTree(re *syntax.Regexp) error {
 		for _, r := range re.Rune {
 			if !allowedEventRune(r) {
 				return errors.New("event text pattern has a literal outside letters, digits and _ . : - space")
+			}
+			if r == ' ' && repeated {
+				return errors.New("event text pattern may not repeat or make optional a space: that lets words repeat")
 			}
 		}
 	case syntax.OpCharClass:
@@ -144,8 +148,9 @@ func checkEventTree(re *syntax.Regexp) error {
 		// alternation, star, plus, any character, anchors, boundaries, no match
 		return errors.New("event text pattern uses a construct outside the grammar")
 	}
+	sub := repeated || re.Op == syntax.OpRepeat || re.Op == syntax.OpQuest
 	for _, s := range re.Sub {
-		if err := checkEventTree(s); err != nil {
+		if err := checkEventTree(s, sub); err != nil {
 			return err
 		}
 	}

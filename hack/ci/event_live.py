@@ -193,7 +193,7 @@ def main():
         def reset():
             http_call(RP, "POST", "/reset", "")
 
-        AG = "/agents/kagent/quickstart"
+        AG = "/agents/kagent/ev-agent"
         # warm-up: the agent may need a moment after the install
         say("warm-up: waiting for the agent to take an event")
         last = None
@@ -233,11 +233,11 @@ def main():
             check(r0["body"] == forwarded("ev-live", mid, text), "the body is exactly the gate's own serialisation (caller name, message id, text hash, returnImmediately)",
                   "got %r" % r0["body"][:400])
             names = {n.lower(): v for n, v in r0["headers"].items()}
-            allowed = {"content-type", "a2a-version", "x-user-id", "traceparent", "tracestate", "content-length", "user-agent", "accept-encoding", "host"}
+            allowed = {"content-type", "a2a-version", "x-user-id", "traceparent", "content-length", "user-agent", "accept-encoding", "host"}
             check(set(names) <= allowed, "only allowlisted request headers reached the runtime side", "extra: %s" % sorted(set(names) - allowed))
             check(names.get("x-user-id") == ["event:ev-live"], "the user id is the caller's fixed one, not the one the caller sent", "%r" % names.get("x-user-id"))
             check(names.get("a2a-version") == ["1.0"] and names.get("content-type") == ["application/json"], "A2A-Version and Content-Type are the gate's own", "%r" % names)
-            check(names.get("traceparent") == [tp] and names.get("tracestate") == ["vendor=abc"], "a well-formed Traceparent and Tracestate are passed on", "%r" % names)
+            check(names.get("traceparent") == [tp] and "tracestate" not in names, "a well-formed Traceparent is passed on and Tracestate is dropped", "%r" % names)
             check(not ({"cookie", "authorization", "x-agent-name", "baggage", "accept", "a2a-extensions", "x-custom"} & set(names)),
                   "Cookie, Authorization, X-Agent-Name, Baggage, Accept, A2A-Extensions and a custom header are dropped, not forwarded", "%r" % sorted(names))
             check(r0["length"] == len(r0["body"].encode()), "the length announced is the length of the gate's body", "%r" % r0["length"])
@@ -311,6 +311,8 @@ def main():
             "a second object after the first": msg("r-22", "x", parts=good_part) + msg("r-23", "x", parts=good_part),
             "a message id with a space": msg("r bad", "x", parts=good_part),
             "a message id of 129 characters": msg("a" * 129, "x", parts=good_part),
+            "a JSON-RPC id of 129 characters": msg("r-24", "x", rpc_id='"' + "a" * 129 + '"', parts=good_part),
+            "a JSON-RPC id with a space": msg("r-25", "x", rpc_id='"a b"', parts=good_part),
             "not JSON": "Work case SVC-2026-0007",
         }
         statuses = {}
@@ -362,6 +364,8 @@ def main():
         rec = records() or []
         check(len(rec) == 2 and all(":rate-%d:" % i in r["body"] and '"messageId":"ev-rate:' in r["body"] for i, r in enumerate(rec)),
               "the stand-in saw two requests, with the caller name ev-rate in the message ids; the third was not forwarded", "%d records" % len(rec))
+        s, h, b, _ = post("ev-rate", AG, "this is not JSON and the bucket is empty")
+        check(s == 429 and h.get("retry-after", "").isdigit(), "a malformed body from a caller over its rate is 429 with Retry-After, at once (the rate is checked before the body is read)", "%s %r" % (s, h.get("retry-after")))
         s, _, _, _ = post("ev-live", AG, msg("rate-other", "Work case SVC-2026-0014"))
         check(s == 200, "the limit is per caller: ev-live is not held by ev-rate", "%s" % s)
 
@@ -392,7 +396,7 @@ def main():
                 lines.append(o)
         by = lambda **kw: [o for o in lines if all(o.get(a) == v for a, v in kw.items())]  # noqa: E731
         acc = [o for o in by(caller="ev-live", status=200) if o.get("event_id") == mid]
-        check(len(acc) >= 1 and all(o.get("rpc") == "SendMessage" and o.get("agent") == "kagent/quickstart" and "reason" not in o for o in acc),
+        check(len(acc) >= 1 and all(o.get("rpc") == "SendMessage" and o.get("agent") == "kagent/ev-agent" and "reason" not in o for o in acc),
               "the accepted event has an audit line with event_id %s, rpc SendMessage and no reason" % mid, "%r" % acc[:2])
         shape = by(caller="ev-live", reason="message_shape")
         check(len(shape) >= len(refused) and all(o.get("event_id") == "invalid" and o.get("status") == 403 for o in shape),
@@ -400,7 +404,7 @@ def main():
         paths = by(caller="ev-live", reason="path")
         check(len(paths) >= 3 and all(o.get("event_id") == "invalid" for o in paths), "the route refusals have reason path (%d lines)" % len(paths), "%r" % paths[:2])
         r429 = by(caller="ev-rate", reason="rate")
-        check(len(r429) == 1 and r429[0].get("status") == 429 and r429[0].get("event_id") == "rate-2", "the 429 has reason rate and its event_id", "%r" % r429)
+        check(len(r429) == 2 and all(o.get("status") == 429 and o.get("event_id") == "invalid" for o in r429), "the two 429s have reason rate and event_id invalid (the body was not read)", "%r" % r429)
         uid = [o for o in lines if o.get("caller") == "ev-plain" and o.get("reason") == "user_id"]
         check(len(uid) == 1 and "event_id" not in uid[0], "the plain caller's refusal has reason user_id and no event_id", "%r" % uid)
         check(all("event_id" not in o for o in lines if o.get("caller") in ("ev-plain", "quickstart-ask")), "no audit line of a caller without event has an event_id")

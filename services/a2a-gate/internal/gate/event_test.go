@@ -200,7 +200,7 @@ func TestEventOnlyAllowlistedHeadersReachTheUpstream(t *testing.T) {
 			t.Errorf("header %s reached the upstream: %v", k, h[k])
 		}
 	}
-	if h.Get("Traceparent") != tp || h.Get("Tracestate") != "vendor=abc,other=def" {
+	if h.Get("Traceparent") != tp || h.Get("Tracestate") != "" {
 		t.Errorf("trace headers %v", h)
 	}
 	if h.Get("A2A-Version") != "1.0" || h.Get("Content-Type") != "application/json" || h.Get("X-User-Id") != "event:fault-events" {
@@ -410,7 +410,7 @@ func TestEventBodyOverTheReadWindowIsRefused(t *testing.T) {
 func TestEventIDIsKeptAndReencoded(t *testing.T) {
 	for _, c := range []struct{ in, out string }{
 		{`"1"`, `"1"`}, {`7`, `7`}, {`-3`, `-3`}, {`0`, `0`},
-		{`"a\"b"`, `"a\"b"`}, {`"<x>&"`, "\"\\u003cx\\u003e\\u0026\""}, {`"é"`, `"é"`},
+		{`"a.b:c-d_"`, `"a.b:c-d_"`},
 	} {
 		r, _ := newEventRig(t, nil)
 		resp, _ := r.do("POST", agentPath, tokFault, nil, evBody(c.in, "m1", "Work case SVC-2026-0007"))
@@ -547,8 +547,8 @@ func TestEventResponseIsRewrittenToTaskIDAndState(t *testing.T) {
 	}{
 		"finished task":  {finished, 200, `{"jsonrpc":"2.0","id":"1","result":{"id":"t-9","status":{"state":"TASK_STATE_COMPLETED"}}}`, 200},
 		"flat task":      {`{"jsonrpc":"2.0","id":"1","result":{"id":"t-2","status":{"state":"TASK_STATE_WORKING","message":"` + canary + `"}}}`, 200, `{"jsonrpc":"2.0","id":"1","result":{"id":"t-2","status":{"state":"TASK_STATE_WORKING"}}}`, 200},
-		"rpc error":      {`{"jsonrpc":"2.0","id":"1","error":{"code":-32001,"message":"task not found: ` + canary + `"}}`, 200, `{"jsonrpc":"2.0","id":"1","error":{"code":-32001,"message":"refused"}}`, 200},
-		"rpc error 400":  {`{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"` + canary + `","data":"` + canary + `"}}`, 400, `{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"refused"}}`, 400},
+		"rpc error":      {`{"jsonrpc":"2.0","id":"1","error":{"code":-32001,"message":"task not found: ` + canary + `"}}`, 200, `{"jsonrpc":"2.0","id":"1","error":{"code":-32001,"message":"refused"}}`, 502},
+		"rpc error 400":  {`{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"` + canary + `","data":"` + canary + `"}}`, 400, `{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"refused"}}`, 502},
 		"not json":       {`<html>` + canary + `</html>`, 200, "", 502},
 		"empty":          {``, 200, "", 502},
 		"json array":     {`[]`, 200, "", 502},
@@ -587,7 +587,7 @@ func TestEventResponseIsRewrittenToTaskIDAndState(t *testing.T) {
 		if tc.want != "" && strings.TrimSpace(body) != tc.want {
 			t.Errorf("%s: sender got %s, want %s", name, body, tc.want)
 		}
-		if tc.status == 502 && strings.TrimSpace(body) != `{"error":"bad gateway"}` {
+		if tc.status == 502 && tc.want == "" && strings.TrimSpace(body) != `{"error":"bad gateway"}` {
 			t.Errorf("%s: 502 body %s", name, body)
 		}
 		if got := resp.Header.Get("Content-Type"); got != "application/json" {
@@ -685,7 +685,7 @@ func TestEventRateBurstAndRefill(t *testing.T) {
 	for _, l := range lines {
 		if l["status"] == float64(429) {
 			found = true
-			if l["reason"] != "rate" || l["event_id"] == "invalid" {
+			if l["reason"] != "rate" || l["event_id"] != "invalid" {
 				t.Errorf("429 line %v", l)
 			}
 		}
@@ -810,7 +810,7 @@ func TestEventOpenCallsAreLimitedAndReleased(t *testing.T) {
 			busy = l
 		}
 	}
-	if busy == nil || busy["status"] != float64(429) || busy["event_id"] != "m3" {
+	if busy == nil || busy["status"] != float64(429) || busy["event_id"] != "invalid" {
 		t.Fatalf("caller_busy line %v", busy)
 	}
 }

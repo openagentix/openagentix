@@ -594,13 +594,13 @@ governance:
     #  # An event caller (ADR 0027): a system of record that starts a run for one of its records. It sends SendMessage only, with one short
     #  # text that matches `text`; the gate rebuilds the message itself, asks the runtime to return at once, answers with the task id and
     #  # state only, and limits the rate and the open calls. ServiceAccount only. No methods, memory or key. userId is optional and must be
-    #  # fixed (default event:<name>); no other caller's user id rule may cover it. Not for an agent with long-term memory or a container agent.
+    #  # fixed (default event:<name>); no other caller's user id rule may cover it. Only for agents named in agents[] (the chart checks that none has long-term memory); no container agent.
     #  # At most 16 event callers. Every field is required. The limits are per caller and per gate replica; they are lost on a gate restart.
-    #  - name: kestrel-fault-events
-    #    serviceAccount: {namespace: kestrel-records, name: records-events}
-    #    agents: [service-agent]
+    #  - name: case-events
+    #    serviceAccount: {namespace: records, name: records-events}
+    #    agents: [case-agent]            # a name from agents[]: the chart checks that it has no long-term memory
     #    event:
-    #      text: 'Work case SVC-[0-9]{4}-[0-9]{4}'   # the whole text must match. Letters, digits, _ . : - and space; [..] classes, {n} {n,m} (m <= 64), ?, groups. No | * + {n,} . \s \d \w [^ (? ^ $
+    #      text: 'Work case CASE-[0-9]{4}'   # the whole text must match. Letters, digits, _ . : - and space; [..] classes, {n} {n,m} (m <= 64), ?, groups. No | * + {n,} . \s \d \w [^ (? ^ $. A space only as fixed text (not in a group, not before ? or {)
     #      rate: {perMinute: 6, burst: 3}             # 1..600 and 1..60
     #      maxInFlight: 2                             # open calls of this caller at the gate, 1..32
     resources:

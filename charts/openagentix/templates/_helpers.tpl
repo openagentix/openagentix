@@ -299,8 +299,21 @@ http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- if contains "." $bare }}{{ fail (printf "%s: event.text %q has an unescaped '.': it matches any character; write \\. or put it in a class" $where $t) }}{{ end -}}
 {{- if regexMatch "\\\\[A-Za-z0-9]" $t }}{{ fail (printf "%s: event.text %q uses an escape class or a letter escape (\\s \\S \\w \\W \\d \\D \\p ...): use a character class such as [0-9]" $where $t) }}{{ end -}}
 {{- if regexMatch "\\{[0-9]+,\\}" $t }}{{ fail (printf "%s: event.text %q has an open repeat {n,}: bound it with {n,m}" $where $t) }}{{ end -}}
+{{- /* parity with the gate's grammar, so a rendered values file can never stop the gate from starting: only the gate's alphabet, escapes only of . - : _, classes only inside it, repeats of at most 64, no word repeats */ -}}
+{{- if regexMatch "\\\\([^._:-]|$)" $t }}{{ fail (printf "%s: event.text %q has a backslash that is not before one of . - : _ (the only escapes the gate allows)" $where $t) }}{{ end -}}
+{{- range $cls := regexFindAll "\\[[^\\]]*\\]" $t -1 -}}
+{{- if not (regexMatch "^\\[-?([A-Z]-[A-Z]|[a-z]-[a-z]|[0-9]-[0-9]|[A-Za-z0-9_.:]|\\\\[._:-])+-?\\]$" $cls) }}{{ fail (printf "%s: event.text %q has the character class %s: members may only be letters, digits and _ . : - (ranges A-Z, a-z, 0-9)" $where $t $cls) }}{{ end -}}
+{{- end -}}
+{{- if regexMatch "[^A-Za-z0-9_:() ?RCE-]" $bare }}{{ fail (printf "%s: event.text %q has a character outside the gate's alphabet (letters, digits and _ . : - and the space)" $where $t) }}{{ end -}}
+{{- range $rep := regexFindAll "\\{[0-9]+(,[0-9]+)?\\}" $t -1 -}}
+{{- range $num := regexFindAll "[0-9]+" $rep -1 -}}
+{{- if or (gt (len $num) 2) (gt (int $num) 64) }}{{ fail (printf "%s: event.text %q repeats more than 64 times (%s)" $where $t $rep) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- if or (regexMatch "\\([^)]* " $t) (regexMatch " [?{]" $t) }}{{ fail (printf "%s: event.text %q has a space inside a group or before ? or {: that lets words repeat. Keep spaces as fixed text, for example 'Work case CASE-[0-9]{4}'" $where $t) }}{{ end -}}
 {{- /* plain regexMatch hides a compile error, so the pattern is compiled with mustRegexMatch, anchored the way the gate anchors it */ -}}
 {{- $_ := mustRegexMatch (printf "^(?:%s)$" $t) "" -}}
+{{- if regexMatch (printf "^(?:%s)$" $t) "" }}{{ fail (printf "%s: event.text %q matches the empty text" $where $t) }}{{ end -}}
 {{- if not (kindIs "map" $ev.rate) }}{{ fail (printf "%s: event.rate is required: {perMinute: 1..600, burst: 1..60}" $where) }}{{ end -}}
 {{- range $k, $v := $ev.rate -}}
 {{- if not (has $k (list "perMinute" "burst")) }}{{ fail (printf "%s: event.rate has an unknown key %q (allowed: perMinute, burst)" $where $k) }}{{ end -}}
@@ -316,6 +329,7 @@ http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- range $full -}}
 {{- $ns := first (splitList "/" .) -}}{{- $nm := last (splitList "/" .) -}}
 {{- if and $cag.namespace (eq $ns $cag.namespace) }}{{ fail (printf "%s: agent %q is a container agent: an event caller may not reach container agents in this release" $where .) }}{{ end -}}
+{{- if not (and (eq $ns $kns) (has $nm $agents)) }}{{ fail (printf "%s: agent %q is not an agent of agents[]: an event caller may name only agents of agents[] by name, so the chart can check that none has long-term memory" $where .) }}{{ end -}}
 {{- if eq $ns $kns }}{{ range $.Values.agents }}{{ if and (eq .name $nm) .memory .memory.enabled }}{{ fail (printf "%s: agent %q has long-term memory on: all events of one caller share one user id, so one memory scope. An event caller may not reach it" $where $nm) }}{{ end }}{{ end }}{{ end -}}
 {{- end -}}
 {{- end -}}

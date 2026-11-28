@@ -316,6 +316,10 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 	if caller.Event != nil {
 		// every authenticated request of an event caller is charged, refusals included (ADR 0027, step 4)
 		a.event, a.eventID = true, "invalid"
+		// An answer that is sent before the body is read would otherwise wait for the rest of it (the server discards the unread
+		// body first), and the request would hold its shared slot while a slow sender stalls. The connection of an event
+		// caller is closed after every answer.
+		w.Header().Set("Connection", "close")
 		evState = h.eventState(caller)
 		evRateOK, evRetry = evState.take(h.now(), caller.Event.Rate)
 	}
