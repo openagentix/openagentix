@@ -179,7 +179,7 @@ Where the tokens come from. The model gateway exports `agentgateway_gen_ai_clien
 
 Read the failed cases before you change the model or a pattern: the cause is checked by words, and a correct answer in other words fails it. The script does not put the answers in the reports unless you give `--include-answers`.
 
-The gateway limits what one agent key may use: 1,000,000 tokens per hour per key (the chart default, `gateway.policy.tokenBudget`). Past it the gateway answers HTTP 429 and the agent run ends `TASK_STATE_FAILED` with "OpenAI API error: 429 Too Many Requests". `oa-eval` reads such a case as **not run**, not as a failure: it is out of the pass rate, the cases after it are not sent, and the script stops with exit 3 and a message. Before each run after the first, the script estimates the next run from the largest run so far (input plus output tokens) and waits, with a countdown, until it fits in the hour; `--no-wait` stops instead; `--budget-tokens-per-hour N` says the budget if yours is not the default. The sweep is skipped when the budget is spent.
+The gateway limits what one agent key may use. With this use case's values the key is in the budget class (rca-diagnostic-agent, 300,000 tokens an hour per key; see "The budget class" or "Event triggers"); a key with no class has 1,000,000 (the chart default, `gateway.policy.tokenBudget`). Past it the gateway answers HTTP 429 and the agent run ends `TASK_STATE_FAILED` with "OpenAI API error: 429 Too Many Requests". `oa-eval` reads such a case as **not run**, not as a failure: it is out of the pass rate, the cases after it are not sent, and the script stops with exit 3 and a message. Before each run after the first, the script estimates the next run from the largest run so far (input plus output tokens) and waits, with a countdown, until it fits in the hour; `--no-wait` stops instead; the script reads the budget of the agent's key from the release (`helm get values`: the class the agent names, else `gateway.policy.tokenBudget`), says which it used, and falls back to 1,000,000 when it cannot read the release; `--budget-tokens-per-hour N` overrides it. The sweep is skipped when the budget is spent.
 
 ### Measured so far (first live run of this path)
 
@@ -188,6 +188,10 @@ First live run of `hack/use-case-eval.sh` on this use case: 2026-11-28, claude-h
 **Tokens, per run** (the gateway metric, key `pod-rca`): input 186,672, 226,312 and 210,169 (of which cache reads 130,720, 179,933 and 168,815), output 15,008, 16,700 and 15,103. Each run made 41 tool calls in the audit lines, all read tools. Per case was not measured. A run is about 200,000 to 240,000 tokens of the 1,000,000 an hour per key, so about four runs fit in an hour.
 
 Not done yet: more runs for a steadier rate, and tokens per case (`--tokens per-case`).
+
+## The budget class
+
+`values.yaml` and `values-full-demo.yaml` define the class `rca-diagnostic-agent` under `gateway.policy.budgetClasses` (ADR 0029): 300,000 tokens an hour, one bucket for each key, and `pod-rca` names it with `budgetClass`. It is sized from the measured runs: an eight-case run on a real model used about 200,000 to 240,000 tokens (about 25,000 to 30,000 a case), so the class allows one full run an hour, about 10 to 12 cases an hour. The default budget of the gateway is 1,000,000 tokens an hour for a key with no class. It is a soft limit and not a spend cap: it is counted for each gateway replica, a restart empties the counters, the tokens of a call are counted when it ends (calls in flight pass), and it counts tokens, not money. The bank and the equipment use case bring their own class; the classes are joined by name when the values are composed, and the same name with other numbers is refused.
 
 ## Tests (all offline)
 

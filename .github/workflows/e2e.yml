@@ -18,6 +18,7 @@ on:
       - hack/ci/smoke.sh
       - hack/ci/msgid-scope.sh
       - hack/ci/events-live.sh
+      - hack/ci/use-case-class-live.sh
       - hack/ci/event-live.sh
       - hack/ci/event_live.py
       - hack/ci/event-recorder.py
@@ -451,6 +452,13 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/events-live.sh bank on 2>&1 | tee events-on.log
+      - name: "budget class (ADR 0029): the dispute agent's key is refused with 429 at the limit of its class, through the policy the chart rendered (last: it spends the key's bucket)"
+        env:
+          USE_CASE_CLASS_LIVE: "1"
+          USE_CASE_CLASS_CI_CONTEXT: kind-oa-bank-demo
+        run: |
+          set -o pipefail
+          hack/ci/use-case-class-live.sh bank 2>&1 | tee class-live.log
       - name: job summary
         if: always()
         run: |
@@ -463,6 +471,10 @@ jobs:
             echo "### Event sender (ADR 0027), off then on"
             echo '```'
             cat events-off.log events-on.log 2>/dev/null || echo "the events check did not run"
+            echo '```'
+            echo "### Budget class of the dispute agent (ADR 0029)"
+            echo '```'
+            cat class-live.log 2>/dev/null || echo "the class check did not run"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: diagnostics
@@ -497,14 +509,14 @@ jobs:
           HV=$(kubectl get secret -n mcp-tools records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
           AT=$(kubectl get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
           if [ -n "$HV" ] && [ -n "$AT" ]; then
-            for f in kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log events-out; do
+            for f in kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log class-live.log events-out; do
               [ -e "$f" ] || continue
               if grep -rlF -f <(printf '%s\n%s\n' "${HV#Bearer }" "$AT") "$f" >/dev/null 2>&1; then
                 echo "a secret value is in $f: it is removed from the upload"; rm -rf "$f"; LEAK=1
               fi
             done
           else
-            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log events-out; LEAK=1
+            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log class-live.log events-out; LEAK=1
           fi
           unset HV AT
           [ "$LEAK" = 0 ]
@@ -520,6 +532,7 @@ jobs:
             bank-live.log
             events-off.log
             events-on.log
+            class-live.log
             events-out/
             install.log
             install2.log

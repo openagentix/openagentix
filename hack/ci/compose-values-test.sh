@@ -257,6 +257,73 @@ run "$T/xc0.yaml" "$T/xc6.yaml" "$T/xl2.yaml"
 check "extraA2ACallers: with a rule for another namespace only, the entry without its own rule is refused" "[ $RC = 1 ] && grep -q 'no caller rule' '$T/err'"
 run "$T/xc0.yaml" "$T/xc1.yaml" "$T/xc2.yaml" "$T/xc3.yaml"
 check "extraA2ACallers: refusing a bad file writes nothing even when the others are good" "[ $RC = 1 ] && [ ! -s '$T/out' ]"
+# A platform namespace that an EARLIER file renames is still refused: the namespaces of the composed values count, not only the chart defaults
+w xn1.yaml <<'EOF2'
+kagent: {namespace: renamed-agents-ns}
+EOF2
+xcfile xn2.yaml renamed-agents-ns '{"namespace":"renamed-agents-ns","podLabels":{"app":"records"}}'
+run "$T/xc0.yaml" "$T/xn1.yaml" "$T/xn2.yaml"
+check "extraA2ACallers: a platform namespace renamed by an earlier file (kagent.namespace) is refused" "[ $RC = 1 ] && grep -q 'renamed-agents-ns' '$T/err' && grep -q 'platform or system namespace' '$T/err' && [ ! -s '$T/out' ]" "rc=$RC $(head -c 500 "$T/err")"
+run "$T/xc0.yaml" "$T/xn2.yaml"
+check "extraA2ACallers: the same entry without that rename composes (the check is about the renamed value)" "[ $RC = 0 ]" "$(cat "$T/err")"
+# --later-wins: the checks also apply to a CHANGED existing entry
+w xw1.yaml <<'EOF2'
+networkPolicy:
+  extraA2ACallers:
+    - {namespace: kestrel-records, podLabels: {}}
+EOF2
+run --later-wins "$T/xc0.yaml" "$T/xc1.yaml" "$T/xw1.yaml"
+check "--later-wins: a changed existing entry may not become podLabels {}" "[ $RC = 1 ] && grep -q 'podLabels' '$T/err' && grep -q 'xw1.yaml' '$T/err' && [ ! -s '$T/out' ]" "rc=$RC $(head -c 500 "$T/err")"
+w xw2.yaml <<'EOF2'
+networkPolicy:
+  extraA2ACallers:
+    - {namespace: kestrel-records, podLabels: {app: records}, ipBlock: {cidr: 0.0.0.0/0}}
+EOF2
+run --later-wins "$T/xc0.yaml" "$T/xc1.yaml" "$T/xw2.yaml"
+check "--later-wins: a changed existing entry may not gain another key" "[ $RC = 1 ] && grep -q 'other than namespace and podLabels' '$T/err'"
+run --later-wins "$T/xc0.yaml" "$T/xc1.yaml" "$T/xc3.yaml"
+check "--later-wins: a narrow change of an existing entry (other pod labels) is still allowed" "[ $RC = 0 ] && out_has '.networkPolicy.extraA2ACallers[0].podLabels == {app:\"other\"}'" "$(cat "$T/err")"
+# gateway.policy.budgetClasses is a list of classes named by `name` (ADR 0029, slice 5): each use case adds its own, the same name with other numbers is refused
+w bc0.yaml <<'EOF2'
+gateway: {models: [{name: m1}]}
+EOF2
+w bc1.yaml <<'EOF2'
+gateway:
+  policy:
+    budgetClasses:
+      - {name: bank-case-agent, tokens: 800000, unit: Hours, per: agent}
+EOF2
+w bc2.yaml <<'EOF2'
+gateway:
+  policy:
+    budgetClasses:
+      - {name: equipment-case-agent, tokens: 800000, unit: Hours, per: agent}
+EOF2
+w bc3.yaml <<'EOF2'
+gateway:
+  policy:
+    budgetClasses:
+      - {name: bank-case-agent, tokens: 9000000, unit: Hours, per: agent}
+EOF2
+run "$T/bc0.yaml" "$T/bc1.yaml"
+check "budgetClasses: a class added by a later file that has no gateway.policy composes, and is reported as security relevant" "[ $RC = 0 ] && out_has '.gateway.policy.budgetClasses | map(.name) == [\"bank-case-agent\"]' && grep -q 'SECURITY-RELEVANT.*bank-case-agent' '$T/err'" "$(cat "$T/err")"
+run "$T/bc0.yaml" "$T/bc1.yaml" "$T/bc2.yaml"
+check "budgetClasses: two files with different classes are joined by name, in order" "[ $RC = 0 ] && out_has '.gateway.policy.budgetClasses | map(.name) == [\"bank-case-agent\",\"equipment-case-agent\"]'" "$(cat "$T/err")"
+run "$T/bc0.yaml" "$T/bc1.yaml" "$T/bc1.yaml"
+check "budgetClasses: the same class twice is kept once" "[ $RC = 0 ] && out_has '.gateway.policy.budgetClasses | length == 1'"
+run "$T/bc0.yaml" "$T/bc1.yaml" "$T/bc3.yaml"
+check "budgetClasses: the same name with other numbers is refused, naming the class and both files" "[ $RC = 1 ] && grep -q 'bank-case-agent' '$T/err' && grep -q 'bc1.yaml' '$T/err' && grep -q 'bc3.yaml' '$T/err' && [ ! -s '$T/out' ]"
+run "$T/bc0.yaml" "$T/bc1.yaml" "$T/bc2.yaml" "$T/xc1.yaml"
+check "budgetClasses: composes beside the other joined lists" "[ $RC = 0 ] && out_has '(.gateway.policy.budgetClasses|length) == 2 and (.networkPolicy.extraA2ACallers|length) == 1'"
+w bc4.yaml <<'EOF2'
+gateway:
+  policy:
+    tokenBudget: {tokens: 99, unit: Hours}
+    budgetClasses:
+      - {name: bank-case-agent, tokens: 800000, unit: Hours, per: agent}
+EOF2
+run "$T/bc0.yaml" "$T/bc4.yaml"
+check "budgetClasses: another gateway.policy key beside them is still a security key and is refused" "[ $RC = 1 ] && grep -q 'gateway.policy.tokenBudget' '$T/err'"
 sec governance.a2a.enabled 'true' 'false'
 sec mcp.virtual.incomingAuth.type '"anonymous"' '"oidc"'
 sec mcp.virtual.codeMode.enabled 'false' 'true'
@@ -323,7 +390,7 @@ unrelated: 1
 EOF
 # every leaf (arrays count as one leaf) of the chart defaults under a security key, as a JSON path array
 jq -c --argjson pfx '["controlPlane.policy.allowedModels","controlPlane.policy.allowedProfiles","controlPlane.policy.allowedSkills","controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge","controlPlane.policy.allowNotify","controlPlane.policy.memory","controlPlane.policy.allowedRuntimes","controlPlane.policy.runtimes","controlPlane.containerAgents.toolProfiles","networkPolicy","governance.a2a.enabled","mcp.virtual.incomingAuth","mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy"]' \
-  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | $d != "networkPolicy.extraA2ACallers" and any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
+  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | $d != "networkPolicy.extraA2ACallers" and $d != "gateway.policy.budgetClasses" and any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
 check "the chart defaults hold security keys to test (more than 40 leaves)" "[ \"\$(wc -l < '$T/secpaths.jsonl' | tr -d ' ')\" -gt 40 ]"
 NSEC=0
 while IFS= read -r P; do

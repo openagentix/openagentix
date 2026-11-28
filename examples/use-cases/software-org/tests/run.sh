@@ -48,8 +48,8 @@ yq -c '[., (.kind + " " + (.metadata.namespace // "-") + " " + .metadata.name)]'
 yq -c '[., (.kind + " " + (.metadata.namespace // "-") + " " + .metadata.name)]' "$T/swo.yaml" | sort > "$T/swo.full"
 comm -23 "$T/qs.full" "$T/swo.full" | jq -r '.[1]' | sort > "$T/changed.ids"
 printf 'changed objects of the quick start: %s\n' "$(tr '\n' ';' < "$T/changed.ids")"
-check "the quick start objects that change are limited to the shared vMCP, the gate rules, the tool gateway policy and the stub model's neighbours (no agent, no model, no gateway key)" \
-  "! grep -Eq '^(Agent|AgentTemplate|ModelConfig|Secret|Deployment kagent|Deployment agentgateway-system stub-model)' '$T/changed.ids'" "$(cat "$T/changed.ids")"
+check "the quick start objects that change are limited to the shared vMCP, the gate rules, the tool gateway policy, the model gateway policy (the budget class) and the stub model's neighbours (no agent, no model, no gateway key)" \
+  "! grep -Eq '^(Agent |AgentTemplate|ModelConfig|Secret|Deployment kagent|Deployment agentgateway-system stub-model)' '$T/changed.ids'" "$(cat "$T/changed.ids")"
 
 echo "# the default render does not know the use case"
 for f in default qs; do
@@ -237,10 +237,10 @@ check "no e-mail address or phone-like digit run in the use case (a CI run id af
 echo "# beside the full demo (values-full-demo.yaml)"
 FDV="$HERE/values-full-demo.yaml"
 FDLIST="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml"
-check "values-full-demo.yaml has ONLY the diagnostics block, the profile rca, the agent pod-rca and the caller rca-desk" "[ \"\$(yq -r 'keys | join(\",\")' '$FDV')\" = 'agents,diagnostics,governance,mcp' ] && [ \"\$(yq -r '.agents | map(.name) | join(\",\")' '$FDV')\" = pod-rca ] && [ \"\$(yq -r '.mcp | keys | join(\",\")' '$FDV')\" = profiles ] && [ \"\$(yq -r '.mcp.profiles | map(.name) | join(\",\")' '$FDV')\" = rca ] && [ \"\$(yq -r '.governance.a2a | keys | join(\",\")' '$FDV')\" = callers ] && [ \"\$(yq -r '.governance.a2a.callers | map(.name) | join(\",\")' '$FDV')\" = rca-desk ]"
+check "values-full-demo.yaml has ONLY the diagnostics block, the profile rca, the agent pod-rca and the caller rca-desk" "[ \"\$(yq -r 'keys | join(\",\")' '$FDV')\" = 'agents,diagnostics,gateway,governance,mcp' ] && [ \"\$(yq -c '.gateway' '$FDV')\" = '{\"policy\":{\"budgetClasses\":[{\"name\":\"rca-diagnostic-agent\",\"tokens\":300000,\"unit\":\"Hours\",\"per\":\"agent\"}]}}' ] && [ \"\$(yq -r '.agents | map(.name) | join(\",\")' '$FDV')\" = pod-rca ] && [ \"\$(yq -r '.mcp | keys | join(\",\")' '$FDV')\" = profiles ] && [ \"\$(yq -r '.mcp.profiles | map(.name) | join(\",\")' '$FDV')\" = rca ] && [ \"\$(yq -r '.governance.a2a | keys | join(\",\")' '$FDV')\" = callers ] && [ \"\$(yq -r '.governance.a2a.callers | map(.name) | join(\",\")' '$FDV')\" = rca-desk ]"
 check "its agent is on the model name of the full demo (claude-haiku) and has the same prompt, tools and profile as values.yaml" "[ \"\$(yq -r '.agents[0].model' '$FDV')\" = claude-haiku ] && [ \"\$(yq -c '.agents[0] | del(.model)' '$FDV')\" = \"\$(yq -c '.agents[0] | del(.model)' '$VALS')\" ]"
 check "its diagnostics block and its profile are the ones of values.yaml" "[ \"\$(yq -c '.diagnostics' '$FDV')\" = \"\$(yq -c '.diagnostics' '$VALS')\" ] && [ \"\$(yq -c '.mcp.profiles[0]' '$FDV')\" = \"\$(yq -c '.mcp.profiles[] | select(.name==\"rca\")' '$VALS')\" ] && [ \"\$(yq -c '.governance.a2a.callers[0]' '$FDV')\" = \"\$(yq -c '.governance.a2a.callers[] | select(.name==\"rca-desk\")' '$VALS')\" ]"
-check "it sets no model, no key, no scenario, no schedule, no bridge and no channel" "! grep -Eq '^(gateway|schedules|bridge|channels|notify|knowledge|memory|controlPlane):' '$FDV'"
+check "it sets no model, no key, no scenario (its gateway block is the budget class only, checked above), no schedule, no bridge and no channel" "! grep -Eq '^(schedules|bridge|channels|notify|knowledge|memory|controlPlane):' '$FDV'"
 FDA=(); for f in $FDLIST; do FDA+=(-f "$ROOT/$f"); done
 helm template t "$CHART" --api-versions agentkourier.dev/v1alpha1 "${FDA[@]}" "${ARGS[@]}" > "$T/fd.yaml" 2> "$T/fd.err"; FD_RC=$?
 for f in $FDLIST; do yq . "$ROOT/$f"; done | jq -s 'reduce .[] as $x ({}; . * $x)' > "$T/fd-base.yaml"

@@ -163,6 +163,7 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     for f in ${ALSO_COMPOSE:-}; do
       [ -r "$f" ] || die "cannot read $f (ALSO_COMPOSE is read from the repository root). Nothing was changed."
       case "$(basename "$f")" in values-full-demo.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml files of other use cases, not $f. Nothing was changed." ;; esac
+    [ ! "$f" -ef "$HERE/values-full-demo.yaml" ] || die "ALSO_COMPOSE lists this use case's own values-full-demo.yaml ($f): this script composes it itself. List the files of the OTHER use cases. Nothing was changed."
       ALSO+=("$f")
     done
     "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO[@]+"${ALSO[@]}"} "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install, the files of ALSO_COMPOSE and this agent do not fit together as they are. Nothing was changed."
