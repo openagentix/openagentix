@@ -149,8 +149,14 @@ Makefile	docker	-	-		builds and tests with docker (images, throwaway database co
 install.sh	user	-	-		the installer, runs on a person's cluster; its own rules (named cluster, kind-openagentix default, CLUSTER_TYPE=remote needs KUBE_CONTEXT)
 uninstall.sh	user	-	-		the uninstaller, keep policy and context rules of its own
 hack/ci/live-sweep-test.sh	offline	-	-		this test
+hack/ci/kb-access-ci-setup.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-access-live.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-callers-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/kb-callers.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
 hack/ci/tool-accounts-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
 hack/ci/tool-accounts-live.sh	guard	TOOL_ACCOUNTS_LIVE=1	TOOL_ACCOUNTS_CI_CONTEXT	on	
 hack/tool-accounts-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
 components/runtime/substrate-helm.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
 components/runtime/substrate-postrender.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+hack/ci/kb-rotate-live.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-live-mode-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -49,6 +50,11 @@ type Config struct {
 	// on the graph size gauges. Off by default: names are unbounded.
 	MetricsCollectionLabels bool
 
+	// AccessFile is the path of access.json (ADR 0030); empty means no caller check. AccessCallersDir holds one value
+	// file per caller. Neither holds a value in the environment: the values are files.
+	AccessFile       string
+	AccessCallersDir string
+
 	Graph GraphConfig
 }
 
@@ -83,6 +89,9 @@ const (
 	DefaultGraphMaxHops               = 3
 	DefaultGraphPromptVersion         = "v2"
 )
+
+// DefaultAccessCallersDir is where the chart mounts the caller value files.
+const DefaultAccessCallersDir = "/var/run/secrets/openagentix/kb-callers"
 
 var promptVersionRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
 
@@ -188,6 +197,9 @@ func Load(getenv func(string) string) (Config, error) {
 	default:
 		return c, fmt.Errorf("KB_MCP_STATELESS: must be true or false, got %q", v)
 	}
+	if err := loadAccess(getenv, &c); err != nil {
+		return c, err
+	}
 	if err := loadMetrics(getenv, &c); err != nil {
 		return c, err
 	}
@@ -229,6 +241,21 @@ func Load(getenv func(string) string) (Config, error) {
 		return c, err
 	}
 	return c, nil
+}
+
+func loadAccess(getenv func(string) string, c *Config) error {
+	c.AccessFile = getenv("KB_ACCESS_FILE")
+	c.AccessCallersDir = orDefault(getenv("KB_ACCESS_CALLERS_DIR"), DefaultAccessCallersDir)
+	if c.AccessFile == "" {
+		if getenv("KB_ACCESS_CALLERS_DIR") != "" {
+			return fmt.Errorf("KB_ACCESS_FILE is required when KB_ACCESS_CALLERS_DIR is set")
+		}
+		return nil
+	}
+	if !filepath.IsAbs(c.AccessFile) || !filepath.IsAbs(c.AccessCallersDir) {
+		return fmt.Errorf("KB_ACCESS_FILE and KB_ACCESS_CALLERS_DIR must be absolute paths")
+	}
+	return nil
 }
 
 func loadMetrics(getenv func(string) string, c *Config) error {
@@ -312,6 +339,7 @@ func (c Config) LogAttrs() []any {
 		"embeddings", c.EmbeddingsEnabled(), "embeddings_model", c.EmbeddingsModel, "embeddings_dim", c.EmbeddingsDim,
 		"metrics_addr", c.MetricsAddr, "graph", c.Graph.Enabled, "graph_extract_model", c.Graph.ExtractModel, "graph_prompt_version", c.Graph.PromptVersion,
 		"graph_window_chars", c.Graph.WindowChars, "graph_tokens_per_hour", c.Graph.TokensPerHour,
+		"access_file", c.AccessFile,
 	}
 }
 

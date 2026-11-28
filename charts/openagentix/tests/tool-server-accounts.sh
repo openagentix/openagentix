@@ -139,7 +139,7 @@ N=$(notes "${TA[@]}")
 eq "off with credentials: the warning names the endpoint header Secret" "$(printf '%s' "$N" | /usr/bin/grep -c 'records-mcp-auth (header of the endpoint records)')" 1
 eq "off with credentials: the warning names the diagnostics bearer Secret" "$(printf '%s' "$N" | /usr/bin/grep -c 'diagnostics-bearer-cluster-read')" 1
 eq "off with credentials: the warning says every tool server can read every Secret and names the switch" "$(printf '%s' "$N" | /usr/bin/grep -c 'WARNING: mcp.virtual.ownServiceAccounts is false. Every tool server')" 1
-eq "on: no warning" "$(notes "${TON[@]}" | /usr/bin/grep -c 'WARNING')" 0
+eq "on: no warning" "$(notes "${TON[@]}" | /usr/bin/grep -c 'WARNING: mcp.virtual.ownServiceAccounts')" 0
 eq "off with no credential in the install (the default values): no warning" "$(notes | /usr/bin/grep -c 'WARNING')" 0
 rm -rf "$NC"
 rm -f "$TX" "$TX2"   # no trap: each sourced test file would replace the trap of the one before

@@ -379,6 +379,18 @@ knowledge:
   enabled: true
   namespace: openagentix-knowledge
 
+  # Which tool group may read which collections (ADR 0030). OFF by default, and then NO ISOLATION: every caller reads every collection, as before,
+  # and this render is byte for byte what it was. The knowledge base checks one bearer value per tool group (a file that install.sh mounts, one Secret
+  # per group; the chart renders only references) and, with "enforce", filters every read by the group's list. Writes stay with the admin token.
+  #   mode: ""        no check (default)
+  #   mode: "report"  a value is checked when sent, nothing is refused, each call that enforce would refuse or filter is logged
+  #   mode: "enforce" a call without a known value gets 401; each group reads only its collections
+  # The list of a tool group of its own is mcp.profiles[].knowledgeCollections (all profiles of one group must agree). The shared group (mcp.groupName),
+  # which definitions and every profile without a group of its own use, reads sharedGroupCollections. Pass the same values file on every run (Helm replaces values).
+  access:
+    mode: ""
+    sharedGroupCollections: []
+
   kb:
     image: {repository: openagentix/kb, tag: dev, digest: "", pullPolicy: IfNotPresent}   # built from services/kb and loaded into kind by install.sh
     replicas: 1

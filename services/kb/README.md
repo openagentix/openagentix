@@ -130,6 +130,8 @@ All routes need `Authorization: Bearer $KB_ADMIN_TOKEN`.
 | `KB_EMBEDDINGS_DIM` | | vector dimension; required with the URL (1 to 2000: pgvector's HNSW index on `vector` supports at most 2000 dimensions, so larger models need a smaller output dimension, e.g. OpenAI `dimensions`) |
 | `KB_EMBEDDINGS_API_KEY` | | bearer key for the endpoint (secret) |
 | `KB_EMBEDDINGS_TIMEOUT` | `30s` | per embeddings request (ingest; retried once on 429/5xx) |
+| `KB_ACCESS_FILE` | empty (off) | absolute path of `access.json` (ADR 0030): `{"mode":"report" or "enforce","callers":[{"name":<tool group>,"collections":[...]}]}`, names only, never a value. Unset means no check on `/mcp`: every caller reads every collection. A bad file, a name that does not fit, or a caller whose value file is missing stops the start and names the item |
+| `KB_ACCESS_CALLERS_DIR` | `/var/run/secrets/openagentix/kb-callers` | one file per caller, named by the caller, holding the whole header value `Bearer <token>`. Read on every request, so a rotated value needs no restart. Compared as SHA-256 digests in constant time |
 | `KB_QUERY_EMBED_TIMEOUT` | `3s` | budget for embedding a search query, single attempt, no retry. On timeout or error search answers lexically with the rest of the request deadline |
 
 Secrets are never logged. The startup log line lists the configuration with secrets omitted. Request logs carry
@@ -176,8 +178,14 @@ column migration) and re-ingest.
   segment it. Use embeddings for such content.
 * **Ingest memory is not limited**: concurrent large `PUT`s are each held in memory (body, chunks, vectors);
   there is no concurrency limit yet. Bound it with replicas, memory limits and `KB_MAX_BODY_BYTES`.
-* **No per-collection authorization**: the admin token grants access to every collection and `/mcp` is open to
-  whatever can reach it.
+* **No per-collection authorization unless `KB_ACCESS_FILE` is set**: by default the admin token grants access to every
+  collection and `/mcp` is open to whatever can reach it. With `KB_ACCESS_FILE` (ADR 0030), `/mcp` checks one bearer value per
+  caller and, in `enforce`, filters every read by the caller's collections inside the store query; a collection outside the
+  list answers like a missing one. It tells tool groups apart, not profiles or agents, and it does not stop a tool server that
+  can read another group's value. The admin API keeps its own token and writes any collection.
+* **pgvector before 0.8**: the HNSW index filters after its scan, so with a collection filter (a named collection, or an access list) the vector half of a search can return fewer
+  than `top_k` hits when other collections hold closer vectors. pgvector 0.8 added iterative scans, which the kb turns on; with an older version it only widens `ef_search`
+  (best effort). The claim that `top_k` is filled from allowed rows needs 0.8 or newer.
 * **HNSW graph connectivity**: filtered iterative scans cannot reach vectors that the index graph does not connect
   to the query's neighbourhood; this is a pgvector property.
 

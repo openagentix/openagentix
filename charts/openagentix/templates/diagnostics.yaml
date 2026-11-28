@@ -356,6 +356,10 @@ spec:
   transport: streamable-http
   allowPrivateEndpoint: true
   externalAuthConfigRef: {name: {{ .Values.knowledge.mcp.entryName }}-diagnostics-noauth}
+  {{- if include "oa.kbAccessOn" . }}
+  {{- /* ADR 0030: the value of the diagnostics group's caller, from a Secret the installer makes */}}
+  {{- include "oa.kbHeader" "diagnostics" | nindent 2 }}
+  {{- end }}
 {{- end }}
 {{- if .Values.notify.enabled }}
 ---

@@ -10,6 +10,7 @@ docker image inspect openagentix/console:dev-HASH
 docker image inspect openagentix/control-plane:dev-HASH
 docker image inspect openagentix/stub-model:dev-HASH
 docker image inspect registry.local/oa/echo-a2a:dev-HASH
+helm get values openagentix -n openagentix-system --kube-context kind-openagentix -a -o json
 helm get values openagentix -n openagentix-system --kube-context kind-openagentix -o json
 helm status agent-kourier -n agent-kourier
 helm upgrade --install openagentix charts/openagentix -n openagentix-system --create-namespace -f components/quickstart/values.yaml -f components/quickstart/byo-values.yaml --set-string governance.a2a.image.tag=dev-HASH --set-string gateway.stubModel.image.tag=dev-HASH --set-string controlPlane.image.tag=dev-HASH --set-string console.image.tag=dev-HASH --set-string gateway.stubModel.sourceHash=HASH --set-string governance.a2a.sourceHash=HASH --set-string controlPlane.sourceHash=HASH --set-json controlPlane.apiServerCIDRs=["10.0.0.1/32"] --set-string console.sourceHash=HASH --set-json console.apiServerCIDRs=["10.0.0.1/32"] --wait --timeout 5m

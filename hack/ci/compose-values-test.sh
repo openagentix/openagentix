@@ -182,6 +182,8 @@ sec controlPlane.policy.memory.allow 'false' 'true'
 sec controlPlane.policy.allowedRuntimes '["builtin"]' '["builtin","container"]'
 sec controlPlane.policy.runtimes.container.images '["registry.local/oa/"]' '["registry.example/"]'
 sec controlPlane.containerAgents.toolProfiles '["a"]' '["a","b"]'
+sec knowledge.access.mode '"enforce"' '""'
+sec knowledge.access.sharedGroupCollections '["a"]' '["a","b"]'
 sec networkPolicy.enabled 'true' 'false'
 
 # networkPolicy.extraA2ACallers is a list of entries named by `namespace` (ADR 0027 slices 5 and 6: a use case's records service calls the gate, and two use cases

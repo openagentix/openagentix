@@ -170,18 +170,26 @@ func writePaths(b *textBudget, paths []kb.GraphPath, chunks []kb.GraphChunk, wit
 	return omitted
 }
 
-func (h *handlers) graphSearch(ctx context.Context, _ *mcp.CallToolRequest, in GraphSearchInput) (*mcp.CallToolResult, GraphSearchOutput, error) {
+func (h *handlers) graphSearch(ctx context.Context, req *mcp.CallToolRequest, in GraphSearchInput) (*mcp.CallToolResult, GraphSearchOutput, error) {
+	ctx, c := h.begin(ctx, req)
 	ctx, cancel := h.bound(ctx)
 	defer cancel()
 	start := time.Now()
+	c.arg(in.Collection)
 	res, err := h.svc.GraphSearch(ctx, in.Query, in.Collection, in.Hops, in.TopK)
 	if err != nil {
-		return nil, GraphSearchOutput{}, h.done("kb_graph_search", start, 0, err)
+		return nil, GraphSearchOutput{}, h.done(c, "kb_graph_search", start, 0, err)
+	}
+	for _, s := range res.Seeds {
+		c.saw(s.Collection)
+	}
+	for _, p := range res.Paths {
+		c.saw(p.Collection)
 	}
 	b := newBudget()
 	if len(res.Seeds) == 0 {
 		b.line("No entities in the knowledge graph match the query. Try the exact name of a service, team, person or place, or use kb_search for the document text.")
-		_ = h.done("kb_graph_search", start, 0, nil)
+		_ = h.done(c, "kb_graph_search", start, 0, nil)
 		return textResult(b.String()), res, nil
 	}
 	b.line("%s\n", UntrustedNotice)
@@ -194,7 +202,7 @@ func (h *handlers) graphSearch(ctx context.Context, _ *mcp.CallToolRequest, in G
 	b.line("Matched entities: %s", strings.Join(names, ", "))
 	if len(res.Paths) == 0 {
 		b.line("They have no relations in the graph yet.")
-		_ = h.done("kb_graph_search", start, 0, nil)
+		_ = h.done(c, "kb_graph_search", start, 0, nil)
 		return textResult(b.String()), res, nil
 	}
 	b.line("Chains of facts around them, up to %s. 'A -p-> B' reads 'A p B'; 'A <-p- B' reads 'B p A'.\n", kb.HopsText(res.Hops))
@@ -206,7 +214,7 @@ func (h *handlers) graphSearch(ctx context.Context, _ *mcp.CallToolRequest, in G
 	if res.HopLimited {
 		b.line("\nSome chains end at the hop limit. To follow one further, call kb_graph_entity with the name of its last entity, or raise hops (maximum 3).")
 	}
-	_ = h.done("kb_graph_search", start, len(res.Paths), nil)
+	_ = h.done(c, "kb_graph_search", start, len(res.Paths), nil)
 	return textResult(b.String()), res, nil
 }
 
@@ -220,13 +228,21 @@ func candidateLines(b *textBudget, cs []kb.GraphCandidate) {
 	}
 }
 
-func (h *handlers) graphEntity(ctx context.Context, _ *mcp.CallToolRequest, in GraphEntityInput) (*mcp.CallToolResult, GraphEntityOutput, error) {
+func (h *handlers) graphEntity(ctx context.Context, req *mcp.CallToolRequest, in GraphEntityInput) (*mcp.CallToolResult, GraphEntityOutput, error) {
+	ctx, c := h.begin(ctx, req)
 	ctx, cancel := h.bound(ctx)
 	defer cancel()
 	start := time.Now()
+	c.arg(in.Collection)
 	res, err := h.svc.GraphEntity(ctx, in.Name, in.Collection)
 	if err != nil {
-		return nil, GraphEntityOutput{}, h.done("kb_graph_entity", start, 0, err)
+		return nil, GraphEntityOutput{}, h.done(c, "kb_graph_entity", start, 0, err)
+	}
+	if res.Found {
+		c.saw(res.Collection)
+	}
+	for _, cd := range res.Candidates {
+		c.saw(cd.Collection)
 	}
 	b := newBudget()
 	switch {
@@ -259,17 +275,25 @@ func (h *handlers) graphEntity(ctx context.Context, _ *mcp.CallToolRequest, in G
 			}
 		}
 	}
-	_ = h.done("kb_graph_entity", start, len(res.Neighbours), nil)
+	_ = h.done(c, "kb_graph_entity", start, len(res.Neighbours), nil)
 	return textResult(b.String()), res, nil
 }
 
-func (h *handlers) graphPaths(ctx context.Context, _ *mcp.CallToolRequest, in GraphPathsInput) (*mcp.CallToolResult, GraphPathsOutput, error) {
+func (h *handlers) graphPaths(ctx context.Context, req *mcp.CallToolRequest, in GraphPathsInput) (*mcp.CallToolResult, GraphPathsOutput, error) {
+	ctx, c := h.begin(ctx, req)
 	ctx, cancel := h.bound(ctx)
 	defer cancel()
 	start := time.Now()
+	c.arg(in.Collection)
 	res, err := h.svc.GraphPaths(ctx, in.From, in.To, in.Collection, in.MaxHops)
 	if err != nil {
-		return nil, GraphPathsOutput{}, h.done("kb_graph_paths", start, 0, err)
+		return nil, GraphPathsOutput{}, h.done(c, "kb_graph_paths", start, 0, err)
+	}
+	for _, p := range res.Paths {
+		c.saw(p.Collection)
+	}
+	for _, cd := range res.Candidates {
+		c.saw(cd.Collection)
 	}
 	b := newBudget()
 	switch {
@@ -288,6 +312,6 @@ func (h *handlers) graphPaths(ctx context.Context, _ *mcp.CallToolRequest, in Gr
 		b.line("Shortest path(s) from %q to %q, %s. 'A -p-> B' reads 'A p B'; 'A <-p- B' reads 'B p A'.\n", res.From, res.To, kb.HopsText(len(res.Paths[0].Edges)))
 		writePaths(b, res.Paths, res.Chunks, in.Collection == "")
 	}
-	_ = h.done("kb_graph_paths", start, len(res.Paths), nil)
+	_ = h.done(c, "kb_graph_paths", start, len(res.Paths), nil)
 	return textResult(b.String()), res, nil
 }

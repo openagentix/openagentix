@@ -244,6 +244,9 @@ func (s *Service) Delete(ctx context.Context, collection, id string) (bool, erro
 
 // Collections lists collections with document counts.
 func (s *Service) Collections(ctx context.Context) ([]store.CollectionInfo, error) {
+	if sc := ScopeFrom(ctx); sc.Limited {
+		return s.Store.ListCollectionsIn(ctx, sc)
+	}
 	return s.Store.ListCollections(ctx)
 }
 
@@ -271,13 +274,18 @@ func (s *Service) search(ctx context.Context, query, collection string, topK int
 			return nil, mode, err
 		}
 	}
+	// A named collection outside the caller's list: the answer is the one for a collection that has nothing, and nothing runs, so that the time of the answer says
+	// nothing about what that collection holds (ADR 0030, review L1). Not even the query is embedded.
+	if collection != "" && !ScopeFrom(ctx).Allows(collection) {
+		return nil, mode, nil
+	}
 	if topK <= 0 {
 		topK = DefaultTopK
 	}
 	if topK > MaxTopK {
 		topK = MaxTopK
 	}
-	q := store.Query{Text: query, Collection: collection, TopK: topK}
+	q := store.Query{Text: query, Collection: collection, TopK: topK, Scope: ScopeFrom(ctx)}
 	if s.Embedder.Dimensions() > 0 {
 		if v, err := s.embedQuery(ctx, query); err != nil {
 			s.Log.Warn("query embedding failed; falling back to lexical search", "err", err)
@@ -300,7 +308,16 @@ func (s *Service) Get(ctx context.Context, collection, id string) (DocView, erro
 	if err := ValidateID(id); err != nil {
 		return DocView{}, err
 	}
-	d, err := s.Store.GetDocument(ctx, collection, id)
+	var d store.Document
+	var err error
+	if sc := ScopeFrom(ctx); sc.Limited {
+		if collection != "" && !sc.Allows(collection) {
+			return DocView{}, store.ErrNotFound // outside the list: as a missing document, and no query runs (review L1)
+		}
+		d, err = s.Store.GetDocumentIn(ctx, sc, collection, id)
+	} else {
+		d, err = s.Store.GetDocument(ctx, collection, id)
+	}
 	if err != nil {
 		return DocView{}, err
 	}

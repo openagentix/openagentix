@@ -1,0 +1,5 @@
+# CI ONLY (phase 3 of hack/ci/kb-access-live.sh): the check is on and enforced. Always passed together with hack/ci/kb-access-ci-values.yaml.
+knowledge:
+  access:
+    mode: enforce
+    sharedGroupCollections: [ci-shared]

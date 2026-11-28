@@ -39,6 +39,27 @@ type CollectionInfo struct {
 	Documents int
 }
 
+// Scope limits a read to a list of collections. The zero value limits nothing.
+// A limited scope with an empty list reads nothing. A store applies it inside
+// its own query, so ranking, top_k and counts only ever see allowed rows.
+type Scope struct {
+	Limited     bool
+	Collections []string
+}
+
+// Allows reports whether the scope lets a read reach the collection.
+func (s Scope) Allows(collection string) bool {
+	if !s.Limited {
+		return true
+	}
+	for _, c := range s.Collections {
+		if c == collection {
+			return true
+		}
+	}
+	return false
+}
+
 // Query is a search request. Embedding is optional: with it (and a store that
 // supports vectors) results are hybrid-ranked, without it lexical only.
 type Query struct {
@@ -46,6 +67,8 @@ type Query struct {
 	Embedding  []float32
 	Collection string // empty = all collections
 	TopK       int
+	// Scope limits the search to allowed collections, on top of Collection.
+	Scope Scope
 }
 
 // Hit is one ranked chunk. Higher Score is better; scores are only comparable
@@ -71,6 +94,11 @@ type Store interface {
 	GetDocument(ctx context.Context, collection, id string) (Document, error)
 	// ListCollections returns collections sorted by name.
 	ListCollections(ctx context.Context) ([]CollectionInfo, error)
+	// GetDocumentIn is GetDocument inside a scope: a document of a collection the
+	// scope does not allow does not exist, and ErrAmbiguous counts only allowed ones.
+	GetDocumentIn(ctx context.Context, scope Scope, collection, id string) (Document, error)
+	// ListCollectionsIn is ListCollections inside a scope.
+	ListCollectionsIn(ctx context.Context, scope Scope) ([]CollectionInfo, error)
 	// Search returns at most q.TopK hits, best first.
 	Search(ctx context.Context, q Query) ([]Hit, error)
 	// DocumentChunks returns the chunk texts of a document in order, or

@@ -108,6 +108,11 @@
 #                        run lacks, lists them and stops (exit 1). ALLOW_VALUE_REMOVAL=1 prints the list and goes on. A first install and an unchanged
 #                        list pass silently. A release that cannot be read stops the installer in every case. The keys the installer sets itself are
 #                        not compared (hack/release-values-ignore.txt).
+#   ALLOW_KB_ACCESS_OFF=1  knowledge base isolation (ADR 0030, chart value knowledge.access.mode) is opt-in. With a mode set, this script creates one value per tool
+#                        group (Secrets kb-callers and kb-caller-<group>, only when absent, never printed) before the chart is applied, and after it checks that every
+#                        vMCP of those groups keeps the knowledge base as a ready backend. A run that would turn mode "enforce" of the live release off (a values file
+#                        left out of VALUES_FILE does that, because Helm replaces the release values) stops before anything is changed, unless ALLOW_KB_ACCESS_OFF=1.
+#                        With the mode empty and profiles on two or more groups that list the knowledge tools, it prints the warning of the chart's NOTES.txt.
 #   CHECK_NETPOL=1       after the install, run hack/netpol-check.sh: two throwaway pods in $RELEASE_NS, a deny-all ingress policy on one, and a PASS only
 #                        when the other is cut off. It prints PASS, FAIL (the network plugin does not enforce NetworkPolicy, so the isolation claims do
 #                        not hold on this cluster) or INCONCLUSIVE. Off by default. It says nothing about egress to the internet.
@@ -301,6 +306,28 @@ if [ "${ALLOW_TOOL_SECRET_READ:-0}" = 1 ]; then
 fi
 if [ "$CLUSTER_UP" = 1 ]; then
   bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${RVD_IGNORE[@]+"${RVD_IGNORE[@]}"} ${VALS[@]+"${VALS[@]}"} || exit 1
+fi
+# Knowledge base isolation (ADR 0030). The mode of this run is read from what the chart renders (the ConfigMap kb-access exists only with a mode). A live release
+# that enforces is not turned off by a run that lacks the values file (Helm replaces the release values on every run) unless ALLOW_KB_ACCESS_OFF=1.
+# shellcheck source=hack/kb-callers.sh
+. hack/kb-callers.sh
+KB_ACCESS_JSON=$(jq -rs '[.[]|select(.kind=="ConfigMap" and .metadata.name=="kb-access")|.data["access.json"]]|first // ""' <<<"$RENDERED")
+KB_ACCESS_MODE=""; [ -z "$KB_ACCESS_JSON" ] || KB_ACCESS_MODE=$(jq -r '.mode' <<<"$KB_ACCESS_JSON")
+KB_PLAN_NS=$(jq -rs '[.[]|select(.kind=="Deployment" and .metadata.name=="kb")|.metadata.namespace]|first // ""' <<<"$RENDERED")
+if [ "$KB_ACCESS_MODE" != enforce ] && [ "$CLUSTER_UP" = 1 ]; then
+  # The live mode is read where the live release keeps the knowledge base (helm get values), not where this run would put it. A run that turns the knowledge base off, or
+  # moves it, is compared too. Only "no release" and "no ConfigMap" mean no mode; any other failure stops the run (hack/kb-callers.sh kb_live_mode).
+  KB_LIVE_MODE=$(kb_live_mode helm "$RELEASE" "$RELEASE_NS" "$CTX" "$K") || die "cannot tell whether the live release enforces the isolation of the knowledge base (see above). Nothing was changed."
+  kb_access_guard "$KB_LIVE_MODE" "$KB_ACCESS_MODE" "${ALLOW_KB_ACCESS_OFF:-}" || exit 1
+fi
+# With the mode empty and profiles on two or more tool groups that list the knowledge tools, nothing isolates them from each other's collections: a warning, not a
+# refusal (ADR 0030 section 6). The groups are read from what the chart renders: a vMCP whose policy lists a tool of the knowledge entry (named knowledge, or
+# knowledge-<group> on a group of its own). The chart's NOTES.txt prints the same sentence for installs with Helm alone.
+if [ -z "$KB_ACCESS_MODE" ] && [ -n "$KB_PLAN_NS" ]; then
+  KB_LISTING=$(jq -rs '[.[]|select(.kind=="VirtualMCPServer")|select([.spec|..|strings|select(test("Tool::\"knowledge[-a-z0-9]*_kb_"))]|length>0)|.spec.groupRef.name]|unique|join(", ")' <<<"$RENDERED")
+  if [ "$(tr ',' '\n' <<<"$KB_LISTING" | grep -c '[a-z]')" -ge 2 ]; then
+    echo "WARNING: no isolation in the knowledge base. knowledge.access.mode is empty, so every tool group reads every collection, and profiles on the tool groups ($KB_LISTING) list the knowledge tools. Set knowledge.access.mode to \"report\" and then \"enforce\", and list the collections of each group (knowledge.access.sharedGroupCollections, mcp.profiles[].knowledgeCollections). See docs/decisions/0030-knowledge-base-isolation-and-graph-schema.md."
+  fi
 fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
@@ -807,6 +834,22 @@ if [ -n "$EP_ENTRIES" ]; then
   jq -r '.metadata.namespace as $ns | .spec.headerForward.addHeadersFromSecret[]? | [$ns, .valueSecretRef.name, .valueSecretRef.key] | @tsv' <<<"$EP_ENTRIES" | ep_check_secrets "$K" || die "a header Secret of mcp.endpoints is missing (see above). The chart was not applied."
 fi
 
+# --- 4h. knowledge base isolation (ADR 0030): the value of each tool group, in two Secrets, before the chart is applied ---------------------------------
+# kb-callers (key <group>) in the knowledge namespace is mounted as files in the knowledge base; kb-caller-<group> (key value) in the tools namespace is what the
+# MCPServerEntry sends. One random value per group, whole header value, created only when absent, never printed, never in an argument. hack/kb-callers.sh,
+# tested without a cluster. The chart renders only the references: a vMCP pod or the knowledge base pod that names a missing Secret does not start.
+KB_CALLER_GROUPS=""
+if [ -n "$KB_ACCESS_JSON" ]; then
+  log "knowledge base isolation: mode $KB_ACCESS_MODE"
+  KB_CALLER_GROUPS=$(jq -r '.callers[].name' <<<"$KB_ACCESS_JSON")
+  KB_NS=$(jq -rs '[.[]|select(.kind=="ConfigMap" and .metadata.name=="kb-access")|.metadata.namespace]|first' <<<"$RENDERED")
+  KB_TOOLS_NS=$(jq -rs '[.[]|select(.kind=="MCPServerEntry" and ((.spec.headerForward.addHeadersFromSecret[0].valueSecretRef.name//"")|startswith("kb-caller-")))|.metadata.namespace]|first' <<<"$RENDERED")
+  # shellcheck disable=SC2086   # one word per group
+  kb_callers_ensure "$K" "$KB_NS" "$KB_TOOLS_NS" $KB_CALLER_GROUPS || die "could not create the values of the knowledge base callers (see above). The chart was not applied."
+  # the vMCPs that run now: after a rotation or a repair of a value they hold the old one as an environment value and are restarted once the chart is applied
+  KB_VMCPS_BEFORE=$(kb_callers_running "$K" "$RENDERED")
+fi
+
 finish_builds   # wait for the background builds, then load the images into the cluster in one call
 if [ -n "$STUB_IMAGE" ]; then
   STUB_HASH=$(cd services/stub-model && find . -type f ! -path './bin/*' ! -name '*.md' ! -name '*.test' ! -name '*_test.go' ! -name 'coverage*' -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
@@ -1085,6 +1128,16 @@ if [ -n "$EP_ENTRIES" ]; then
       ep_check_backends "$K" "${EP_VMCP_SETTLE:-60}" "$row" $EP_BACKENDS || die "a vMCP of the group $g does not list every backend as ready (see above)."
     done
   done
+fi
+
+# Knowledge base isolation (ADR 0030): a vMCP of a group that holds a knowledge base entry drops the entry from its backends, with the condition
+# DiscoveredAuthConfig-<entry> False or the backend not ready, when the entry's header is refused. Both are read for every vMCP of every caller group, and the install
+# fails. A value that was repaired is held by the vMCP pods as an environment value: they are restarted first. hack/kb-callers.sh, with the checks of
+# hack/diagnostics-check.sh and hack/endpoints-check.sh.
+if [ -n "$KB_CALLER_GROUPS" ]; then
+  log "knowledge base isolation: the vMCPs of the groups that hold a knowledge base entry"
+  # shellcheck disable=SC2086   # one word per group
+  kb_callers_verify "$K" "$RENDERED" "$KB_NS" "${KB_CALLERS_TOUCHED:-}" "${KB_VMCPS_BEFORE:-}" $KB_CALLER_GROUPS || die "a vMCP of a knowledge base caller group dropped the knowledge base (see above)."
 fi
 
 # Tool server accounts (ADR 0031, mcp.virtual.ownServiceAccounts): every tool server the chart renders now runs under an account of the chart. The tool server is
