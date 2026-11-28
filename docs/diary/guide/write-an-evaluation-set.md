@@ -124,7 +124,11 @@ When the strict checks of a case already require a pending request, the rule add
 
 ## A refused model call is not a failure
 
-A case that ends `TASK_STATE_FAILED` with a model-call error (for example "OpenAI API error: 429 Too Many Requests" when the gateway budget of the agent's key is spent) says nothing about the agent. `oa-eval` marks it **not run**, with the reason and how many tool calls it made before the refusal. A not run case is not a pass and not a failure, it is out of the pass rate, the cases after it are not sent (they would be refused too), and the exit code is 3. A task that fails for another reason (a malformed tool call) is a failure as before. A completed task whose answer mentions "429" is never not run.
+A case that ends `TASK_STATE_FAILED` with a model-call error (for example "OpenAI API error: 429 Too Many Requests" when the gateway budget of the agent's key is spent) says nothing about the agent. `oa-eval` marks it **not run**, with the reason and how many tool calls it made before the refusal. A not run case is not a pass and not a failure, it is out of the pass rate, the cases after it are not sent (they would be refused too), and the exit code is 3. A task that fails for another reason (a malformed tool call) is a failure as before, with its message recorded. A refusal is read from the failure message of the task status and from the answer text, and it counts whether it came before the first tool call or after some (the report says how many calls came before it). A completed task whose answer mentions "429" is never not run.
+
+## The failure message of a task
+
+For any task that does not end `COMPLETED`, the report records the failure message of the task status in `task_error` (at most 300 characters, only that message: never the question, an answer or a tool result). A task that ended `FAILED` or `CANCELED` with no message at all is reported as **failed (cause not recorded)**: it is a failure, it is counted apart from check failures (`failed_cause_not_recorded` in the report, "cause not recorded" in the table, `failed_no_cause` in the summary of `hack/use-case-eval.sh`), and it is not known to be the fault of the agent. The summary keeps it in the pass rate as a failed run. Read the cluster to find the cause.
 
 ## Fix a check with real answers
 
