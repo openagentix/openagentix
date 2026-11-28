@@ -1,4 +1,5 @@
 # Evaluation set for the Kestrel Valley service agent (tools/oa-eval; how to read it: docs/diary/guide/write-an-evaluation-set.md).
+# This set follows the scripted stand-in. To measure a real model use cases-real.yaml in this folder and hack/use-case-eval.sh.
 # Run it on a FRESH install, before anyone decides an approval: the outbox checks expect drafts only. Case ids carry the year of the day the
 # records pod started (the seed is relative to the clock); change 2026 if your pod started in another year.
 #

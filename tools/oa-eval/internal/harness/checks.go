@@ -98,7 +98,7 @@ func toolChecks(e Expect, seen []string, auditErr error) []Check {
 	add := func(name string, pass bool, detail string) {
 		out = append(out, Check{Name: name, Pass: pass, Detail: detail})
 	}
-	need := len(e.ToolsCalled)+len(e.ToolsNot)+len(e.ToolOrder)+len(e.Requires) > 0 || e.MaxToolCalls != nil
+	need := len(e.ToolsCalled)+len(e.ToolsNot)+len(e.ToolsOnly)+len(e.ToolOrder)+len(e.Requires) > 0 || e.MaxToolCalls != nil || e.MinToolCalls != nil
 	if !need {
 		return nil
 	}
@@ -106,6 +106,12 @@ func toolChecks(e Expect, seen []string, auditErr error) []Check {
 		add("audit", false, auditErr.Error())
 		if e.MaxToolCalls != nil {
 			add("max_tool_calls", false, "no audit events to read")
+		}
+		if e.MinToolCalls != nil {
+			add("min_tool_calls", false, "no audit events to read")
+		}
+		if len(e.ToolsOnly) > 0 {
+			add("tools_only", false, "no audit events to read")
 		}
 		for _, t := range e.ToolsCalled {
 			add("tools_called["+t+"]", false, "no audit events to read")
@@ -123,6 +129,26 @@ func toolChecks(e Expect, seen []string, auditErr error) []Check {
 	}
 	if e.MaxToolCalls != nil {
 		add("max_tool_calls", len(seen) <= *e.MaxToolCalls, fmt.Sprintf("%d tool calls, limit %d", len(seen), *e.MaxToolCalls))
+	}
+	if e.MinToolCalls != nil {
+		add("min_tool_calls", len(seen) >= *e.MinToolCalls, fmt.Sprintf("%d tool calls, floor %d", len(seen), *e.MinToolCalls))
+	}
+	if len(e.ToolsOnly) > 0 {
+		var extra []string
+		for _, s := range seen {
+			allowed := false
+			for _, t := range e.ToolsOnly {
+				allowed = allowed || toolIs(s, t)
+			}
+			if !allowed && !contains(extra, s) {
+				extra = append(extra, s)
+			}
+		}
+		d := ""
+		if len(extra) > 0 {
+			d = "tools outside the allowed list: " + strings.Join(extra, ", ")
+		}
+		add("tools_only", len(extra) == 0, d)
 	}
 	for _, t := range e.ToolsCalled {
 		add("tools_called["+t+"]", firstIndex(seen, t) >= 0, "")
@@ -169,11 +195,45 @@ func answerChecks(e Expect, ans string) []Check {
 	for i, expr := range e.AnswerMustNot {
 		out = append(out, Check{Name: fmt.Sprintf("answer_must_not[%d]", i), Pass: !regexp.MustCompile(expr).MatchString(ans), Detail: expr})
 	}
+	for i, expr := range e.AnswerClaimsNot {
+		out = append(out, Check{Name: fmt.Sprintf("answer_claims_not[%d]", i), Pass: !hasUndeniedMatch(expr, ans), Detail: expr})
+	}
 	low := strings.ToLower(ans)
 	for i, c := range e.Cites {
 		out = append(out, Check{Name: fmt.Sprintf("cites[%d]", i), Pass: strings.Contains(low, strings.ToLower(c)), Detail: c})
 	}
 	return out
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// A clause ends at one of these characters or at the word "but".
+var reClauseEnd = regexp.MustCompile(`[.!?;:,\n]|\bbut\b`)
+
+// A denial or a condition before a claim, in the same clause: "no credit was posted", "the refund isn't approved", "it will be
+// posted once the approver decides". A claim in such a clause is not a claim that something happened.
+var reDenial = regexp.MustCompile(`(?i)\b(no|not|never|nothing|none|without|neither|nor|cannot|unless|until|if|once|before|pending|awaiting|waiting|yet)\b|n't\b`)
+
+// hasUndeniedMatch reports whether expr matches the answer somewhere outside a denying clause. A regular expression
+// without lookbehind cannot tell "the credit was posted" from "no credit was posted", so the clause before the match is read here.
+func hasUndeniedMatch(expr, ans string) bool {
+	for _, m := range regexp.MustCompile(expr).FindAllStringIndex(ans, -1) {
+		start := 0
+		for _, b := range reClauseEnd.FindAllStringIndex(ans[:m[0]], -1) {
+			start = b[1]
+		}
+		if !reDenial.MatchString(ans[start:m[0]]) {
+			return true
+		}
+	}
+	return false
 }
 
 // stateChecks reads the system of record after the run. The values are not copied into the detail (they may be
@@ -218,6 +278,15 @@ func stateChecks(ctx context.Context, hc *http.Client, e Expect, base, tokenFile
 			pass = n == *s.Count
 			if !pass {
 				detail = fmt.Sprintf("%s %s: count is %d, expected %d", s.URL, s.Path, n, *s.Count)
+			}
+		case s.OneOf != nil:
+			a, _ := json.Marshal(got)
+			for _, want := range s.OneOf {
+				b, _ := json.Marshal(want)
+				pass = pass || bytes.Equal(a, b)
+			}
+			if !pass {
+				detail = fmt.Sprintf("%s %s: value is none of the %d accepted ones", s.URL, s.Path, len(s.OneOf))
 			}
 		case s.Matches != "":
 			pass = regexp.MustCompile(s.Matches).MatchString(scalarText(got))
