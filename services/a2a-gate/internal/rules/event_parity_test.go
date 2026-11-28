@@ -67,3 +67,59 @@ func TestSpacesAndLetterSlotsAreCapped(t *testing.T) {
 		}
 	}
 }
+
+// A class that holds exactly the two cases of one letter is parsed by Go into a case-folded literal. The gate accepts that, and nothing else
+// that folds case, and the match is still only those two cases.
+func TestCaseClassIsAccepted(t *testing.T) {
+	re, err := CompileEventText(`Work case [Ww][0-9]{4}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"Work case W1234", "Work case w1234"} {
+		if !re.MatchString(s) {
+			t.Errorf("should match %q", s)
+		}
+	}
+	for _, s := range []string{"Work case x1234", "work case W1234", "Work case W123", "Work case WW1234", "Work case \u212a1234"} {
+		if re.MatchString(s) {
+			t.Errorf("should not match %q", s)
+		}
+	}
+	re2, err := CompileEventText(`[Aa]bc-[0-9]{2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for s, want := range map[string]bool{"Abc-12": true, "abc-12": true, "ABC-12": false, "aBc-12": false, "bbc-12": false} {
+		if re2.MatchString(s) != want {
+			t.Errorf("%q: match %v, want %v", s, !want, want)
+		}
+	}
+	// the match used for a message text is ASCII only, so the Kelvin sign, which Go folds with k, never matches
+	ev := &Event{Text: `[Kk]-[0-9]{2}`}
+	k, err := CompileEventText(`[Kk]-[0-9]{2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev.re = k
+	if !ev.Match("K-12") || !ev.Match("k-12") || ev.Match("\u212a-12") {
+		t.Error("Event.Match must accept both cases of k and refuse the Kelvin sign")
+	}
+	for _, p := range []string{`(?i)abc`, `(?i:abc)`, `(?i)[a-z]{3}`} {
+		if _, err := CompileEventText(p); err == nil {
+			t.Errorf("%q was accepted", p)
+		}
+	}
+}
+
+func TestEveryLetterClassCountsTowardsTheCap(t *testing.T) {
+	p := strings.Repeat("[a-z_]", 40)
+	if _, err := CompileEventText(p); err == nil {
+		t.Error("40 single letter classes were accepted")
+	}
+	if _, err := CompileEventText("[a-z_][a-z_]"); err != nil {
+		t.Errorf("two letter classes: %v", err)
+	}
+	if _, err := CompileEventText("[a-z_][a-z_][a-z_]"); err == nil {
+		t.Error("three letter classes were accepted")
+	}
+}

@@ -14,7 +14,7 @@ const (
 	MaxEventRepeat      = 64
 	MaxEventCallers     = 16
 	MaxEventSpaces      = 3 // spaces in a pattern: more would let fixed words make a sentence
-	MaxEventLetterSlots = 2 // character classes with letters under a repeat: variable-length words
+	MaxEventLetterSlots = 2 // character classes that hold a letter
 )
 
 // allowedEventRune is the alphabet of an event text: letters, digits, '_', '.', ':', '-' and the space.
@@ -59,7 +59,7 @@ func CompileEventText(pattern string) (*regexp.Regexp, error) {
 		return nil, fmt.Errorf("event text pattern has more than %d spaces", MaxEventSpaces)
 	}
 	if st.slots > MaxEventLetterSlots {
-		return nil, fmt.Errorf("event text pattern has more than %d repeated classes with letters", MaxEventLetterSlots)
+		return nil, fmt.Errorf("event text pattern has more than %d character classes with letters", MaxEventLetterSlots)
 	}
 	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
 	if err != nil {
@@ -112,12 +112,14 @@ func isAlnum(c byte) bool {
 // treeStats counts what the caps of the grammar limit.
 type treeStats struct {
 	spaces int // literal spaces
-	slots  int // character classes that hold a letter and sit under a repeat or an optional
+	slots  int // character classes that hold a letter, repeated or not (the chart counts every one)
 }
 
 // repeated is true under a repeat or an optional: a space there would let words repeat, which is prose, not an identifier.
 func checkEventTree(re *syntax.Regexp, repeated bool, st *treeStats) error {
-	if re.Flags&syntax.FoldCase != 0 {
+	// Case folding can only come from a class of exactly the two cases of one letter ([Ww]): Go turns it into a folded literal. (?i) is refused in
+	// the raw text. So the flag is accepted on a literal of letters, and refused on every other node.
+	if re.Flags&syntax.FoldCase != 0 && (re.Op != syntax.OpLiteral || !onlyLetters(re.Rune)) {
 		return errors.New("event text pattern may not fold case")
 	}
 	switch re.Op {
@@ -152,7 +154,7 @@ func checkEventTree(re *syntax.Regexp, repeated bool, st *treeStats) error {
 				}
 			}
 		}
-		if letters && repeated {
+		if letters {
 			st.slots++
 		}
 	case syntax.OpQuest:
@@ -180,4 +182,13 @@ func checkEventTree(re *syntax.Regexp, repeated bool, st *treeStats) error {
 		}
 	}
 	return nil
+}
+
+func onlyLetters(rs []rune) bool {
+	for _, r := range rs {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			return false
+		}
+	}
+	return len(rs) > 0
 }
