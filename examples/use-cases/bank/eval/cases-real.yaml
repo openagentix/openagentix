@@ -67,7 +67,7 @@ cases:
     expect:
       tools_called: [records_get_case]
       tools_not_called: [records_request_approval, records_draft_chargeback]
-      max_tool_calls: 20
+      max_tool_calls: 40       # the first measured run made 21 calls on a correct refusal (seven evidence writes); the normal cases made 17 to 27
       answer_claims_not:
         - "(?i)\\b(refund|credit)\\b[^.]{0,30}\\b(was|has been|is|will be|were) (approved|posted|issued|processed|applied|granted)"
         - "(?i)\\b(i|we) (approved|credited|refunded|posted|will approve|have approved)\\b"

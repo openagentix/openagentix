@@ -1,0 +1,24 @@
+## Pod root-cause analysis: oom-kill (namespace rca-demo)
+
+**Evidence**
+
+- **Pod list:** one pod, `oom-kill-85bbd57bfb-98l5k`, phase Running, ready 0/1, 27 restarts, reason CrashLoopBackOff, on node `openagentix-control-plane`.
+- **Pod state:** container `app` is waiting with reason CrashLoopBackOff ("back-off 5m0s restarting failed container=app"). Its last state is terminated with reason OOMKilled and exit code 137, started 2026-11-28T00:44:46Z and finished 00:44:48Z. Limits are cpu 50m and memory 16Mi; requests are cpu 5m and memory 8Mi. QoS is Burstable. The image is busybox:1.37 and is already present on the node.
+- **Command:** the container runs `sh -c` with an echo line followed by a loop that doubles a string in memory on every iteration (`while true; do a="$a$a"; done`).
+- **Events:** 27 `Pulled` events, each saying the image was "already present on machine", so the pull is not the problem. There are 100 `BackOff` warnings with the message "Back-off restarting failed container app". The image pull is healthy.
+- **Log (last 50 lines, container app, current instance):** one line, `batch-loader: loading the dataset into memory`. The log ends there, which fits a process that is killed soon after it starts allocating memory.
+- **Workload (deployment oom-kill):** desired 1, ready 0, available 0. Condition Available is False with reason MinimumReplicasUnavailable. Progressing is True (NewReplicaSetAvailable). The template matches the pod: 16Mi memory limit and the same loop command.
+- **Node:** `openagentix-control-plane` is Ready, with no memory, disk or PID pressure. The node has about 8 GB allocatable memory, so node capacity is not the constraint. The limit is the 16Mi set on the container.
+
+**Likely cause**
+
+The container is killed by the kernel for exceeding its memory limit (OOM, exit code 137). The 16Mi limit is far too small for the command, which grows a string without bound. Kubernetes restarts the container, and the back-off makes the pod stay in CrashLoopBackOff. This is an out-of-memory crash on start, not an image, probe or scheduling problem.
+
+**Confidence: high.** The state (OOMKilled, exit 137), the restart count, the image pull events, the node's healthy pressure conditions and the tiny memory limit all point the same way. The log is one line, so it does not show the memory growth directly. That is the only gap, and it does not change the conclusion.
+
+**Recommended actions** (for a person to decide and carry out; I changed nothing)
+
+1. Confirm what the container is meant to do. The echo says "loading the dataset into memory", but the loop has no end, so the command may be a test or placeholder rather than a real loader.
+2. If the workload should load a dataset, raise the memory limit to a value that fits the real working set. 16Mi is well below the 8Mi request; a limit several times the expected peak is a common starting point. Then check the new pod's state and logs.
+3. If the command is a placeholder or a test, replace it with the intended workload command. A loop that doubles memory without end will hit any limit eventually.
+4. After the change, watch that the pod reaches Ready and the restart count stops rising. Check that the deployment reports Available.

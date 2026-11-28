@@ -59,17 +59,28 @@ func Run(ctx context.Context, cs *CaseSet, cfg Config) (*Report, error) {
 	}
 
 	rep := &Report{Version: 1, Mode: "run"}
+	refused := false
 	for _, c := range cs.Cases {
 		if len(only) > 0 && !only[c.ID] {
 			continue
 		}
-		rep.Cases = append(rep.Cases, runCase(ctx, hc, cfg, cs, c, token))
+		if refused {
+			// The model refused an earlier case (its budget is spent, or the provider is down): the rest would be refused too.
+			rep.Cases = append(rep.Cases, CaseResult{ID: c.ID, NotRun: true, NotRunReason: "not sent: an earlier case was refused by the model"})
+			continue
+		}
+		r := runCase(ctx, hc, cfg, cs, c, token)
+		refused = r.NotRun
+		rep.Cases = append(rep.Cases, r)
 	}
 	for _, r := range rep.Cases {
 		rep.Total++
-		if r.Pass {
+		switch {
+		case r.NotRun:
+			rep.NotRun++
+		case r.Pass:
 			rep.Passed++
-		} else {
+		default:
 			rep.Failed++
 		}
 	}
@@ -127,6 +138,20 @@ func runCase(ctx context.Context, hc *http.Client, cfg Config, cs *CaseSet, c Ca
 		return res
 	}
 	res.TaskState = ans.State
+	if why := refusalReason(ans.Text); why != "" && ans.State == "TASK_STATE_FAILED" {
+		// A model-call error is not the agent's doing, whether it came before the first tool call or in the middle of the case (a budget that runs
+		// out during a run). The case is cut off: it is not a pass and not a failure, and the state it left is partial, so it says how many calls it made.
+		if cfg.AuditSrc != "" && beforeErr == nil {
+			if cfg.AuditSettle > 0 {
+				time.Sleep(cfg.AuditSettle)
+			}
+			if after, aerr := readAudit(ctx, hc, cfg.AuditSrc, cfg.AuditTokenFile); aerr == nil && len(after) >= len(before) {
+				why = fmt.Sprintf("%s (%d tool calls before it)", why, len(after)-len(before))
+			}
+		}
+		res.NotRun, res.NotRunReason = true, why
+		return res
+	}
 	sum := sha256.Sum256([]byte(ans.Text))
 	res.AnswerSHA = hex.EncodeToString(sum[:])
 	if cfg.IncludeAnswers {
@@ -218,4 +243,19 @@ func agreement(cases []CaseResult) *Agreement {
 		a.BaselineRate = float64(a.Baseline) / float64(a.BaselineCases)
 	}
 	return a
+}
+
+var reModelError = regexp.MustCompile(`(?i)(\b[45][0-9]{2}\b|too many requests|rate.?limit|quota|unauthori[sz]ed|unavailable|overloaded|chat completion request failed|API error)`)
+
+// refusalReason says why a failed task is an error of the model call (a budget or a provider error), or "" when it is not. The text of a failed task is
+// the error of the agent run, short; a long text is an answer, not an error.
+func refusalReason(text string) string {
+	t := strings.TrimSpace(text)
+	if t == "" || len(t) > 400 || !strings.Contains(strings.ToLower(t), "agent run failed") {
+		return ""
+	}
+	if !reModelError.MatchString(t) {
+		return ""
+	}
+	return "the model call was refused: " + t
 }

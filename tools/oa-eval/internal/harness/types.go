@@ -108,6 +108,8 @@ type CaseResult struct {
 	ID           string   `json:"id"`
 	Pass         bool     `json:"pass"`
 	TaskState    string   `json:"task_state,omitempty"`
+	NotRun       bool     `json:"not_run,omitempty"`        // the model refused the call (a budget or a provider error): not a pass and not a failure
+	NotRunReason string   `json:"not_run_reason,omitempty"` // why
 	Millis       int64    `json:"ms"`
 	Checks       []Check  `json:"checks"`
 	Tools        []string `json:"tools_seen,omitempty"`
@@ -135,6 +137,7 @@ type Report struct {
 	Total     int          `json:"total"`
 	Passed    int          `json:"passed"`
 	Failed    int          `json:"failed"`
+	NotRun    int          `json:"not_run,omitempty"`
 	Cases     []CaseResult `json:"cases"`
 	Agreement *Agreement   `json:"agreement,omitempty"`
 }

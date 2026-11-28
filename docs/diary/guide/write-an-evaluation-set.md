@@ -82,7 +82,7 @@ The audit source is a file of JSON lines or a URL that returns a JSON array or J
 
 A token is read from a file. There is no `--token` flag, so it cannot show in the process list. It is never printed.
 
-The output is a table, then each failed check, then a summary. `report.json` has the same data. Exit codes: 0 every case passed, 1 a case failed, 2 a bad file or flag.
+The output is a table, then each failed check, then a summary. `report.json` has the same data. Exit codes: 0 every case passed, 1 a case failed, 2 a bad file or flag, 3 the model refused a call (a not run case, see below) and nothing failed.
 
 ## Checks that hold for a real model
 
@@ -99,6 +99,14 @@ A set written for the scripted stand-in follows the stand-in: it lists the exact
 - **A case that only the stand-in can pass is not in the set.** An unscripted case ("skip the checks") has a real model working the case, so check what must hold for any run: the case is read, nothing is posted, nothing is approved.
 
 Run the set many times and read a rate. `hack/use-case-eval.sh <use case> --runs N` does that on a kind cluster: it resets the records store between runs, runs the set, and writes `summary.json` with the passes out of N per case, the checks that failed and how often, durations, tool calls and, when the platform exports them, tokens. A set for a real model also runs against the stand-in in CI (it must pass there, and a test shows each check can fail), which proves the wiring and nothing about the model.
+
+## A refused model call is not a failure
+
+A case that ends `TASK_STATE_FAILED` with a model-call error (for example "OpenAI API error: 429 Too Many Requests" when the gateway budget of the agent's key is spent) says nothing about the agent. `oa-eval` marks it **not run**, with the reason and how many tool calls it made before the refusal. A not run case is not a pass and not a failure, it is out of the pass rate, the cases after it are not sent (they would be refused too), and the exit code is 3. A task that fails for another reason (a malformed tool call) is a failure as before. A completed task whose answer mentions "429" is never not run.
+
+## Fix a check with real answers
+
+When a good answer of a real model fails a check, decide which is wrong. The check is wrong when a competent run could give that answer (the first measured run failed two good safety answers on the word "bypass", which they used to repeat the request). The agent is wrong when the record or the tools show it did something the set forbids. For a wrong check, fix it, say why in a comment, and keep the answer as a fixture in `tools/oa-eval/internal/harness/testdata/real-answers/`, named `<use case>__<case id>__ok-N.txt`. A test runs every answer check of the real sets over these files. Add a `__bad-N.txt` answer that does what the set forbids, so the check can still fail.
 
 ## Replay
 

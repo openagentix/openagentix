@@ -85,7 +85,7 @@ case "$1" in
         [ "${FAKE_SWEEP_WRITE:-0}" != 1 ] || echo '{"approvals":[{"id":"APR-0001"}]}' >"$FAKE_STATE/approvals.json" ;;
     esac ;;
   logs)
-    if printf '%s ' "$@" | grep -q 'job/'; then echo "fake job log"; else cat "$FAKE_AUDIT_LOG"; fi ;;
+    if printf '%s ' "$@" | grep -q 'job/'; then echo "${FAKE_JOB_LOG:-fake job log}"; else cat "$FAKE_AUDIT_LOG"; fi ;;
   port-forward)
     target=$4
     case "$target" in
@@ -119,8 +119,13 @@ cp "$cases" "$FAKE_STATE/seen-cases-$n.yaml"
 [ "${FAKE_OA_ABORT_AT:-0}" != "$n" ] || { echo "oa-eval: simulated bad setup" >&2; exit 2; }
 ids=$(sed -nE 's/^  - id: *([A-Za-z0-9._-]+).*/\1/p' "$cases")
 [ -z "$only" ] || ids=$only
-rep='{"version":1,"mode":"run","cases":[]}'; p=0; anyfail=0
+rep='{"version":1,"mode":"run","cases":[]}'; p=0; anyfail=0; refused=0
 for id in $ids; do
+  if [ "$refused" = 1 ] || [ "${FAKE_REFUSE_AT:-}" = "$n:$id" ]; then
+    refused=1
+    rep=$(jq -c --arg id "$id" '.cases += [{id: $id, pass: false, not_run: true, not_run_reason: "the model call was refused: 429 (no tool call)", ms: 1500, checks: []}]' <<<"$rep")
+    p=$((p + 1)); continue
+  fi
   fails=""
   for f in ${FAKE_FAIL:-}; do
     IFS=: read -r fn fid fcheck <<<"$f"
@@ -137,6 +142,7 @@ for id in $ids; do
 done
 printf '%s\n' "$rep" >"$out"
 echo "fake oa-eval table call $n"
+[ "$anyfail" = 0 ] && [ "$refused" = 1 ] && exit 3
 exit "$anyfail"
 SH
 chmod +x "$T/bin/kubectl" "$T/oa-eval"
@@ -323,6 +329,54 @@ check "the token is never redirected to a file by name (only to the named pipe)"
 check "every kubectl call goes through KC (pinned context)" "$(grep -n '"\$KUBECTL"\|kubectl ' "$S" | grep -v '^[0-9]*:#' | grep -v 'KC=(' | grep -vc 'die \|log \|usage\|echo\|cat >&2\|!!!\|"\$KUBECTL" --context\|go to\|KUBECTL=')" 0
 check "a records pod is deleted only after --reset-records (the guard is before any kubectl call)" "$([ "$(grep -n 'needs --reset-records' "$S" | head -1 | cut -d: -f1)" -lt "$(grep -n 'get namespace' "$S" | head -1 | cut -d: -f1)" ] && echo yes || echo no)" yes
 check "no em dash" "$(grep -c $'\xe2\x80\x94' "$S")" 0
+
+echo "# the budget: a refused case is not run, the run stops early, the sweep is skipped; a run that does not fit waits or stops"
+setup_state DSP
+export FAKE_VM_UID=dispute-agent FAKE_SWEEP_TOOLS="records_list_open_cases"
+run env CLUSTER=oa-test FAKE_REFUSE_AT="2:injected-instruction-refused" bash "$S" bank --runs 3 --reset-records --sweep --out "$T/b1"
+check "a refused case: exit 3 (not 0, not 1)" "$RC" 3
+check "the message says the gateway budget is exhausted and what to do" "$([ "$(grep -c "the agent's gateway budget is exhausted: .* tokens used in the last hour.*Wait or lower --runs" "$T/out")" -ge 1 ] && echo yes)" yes
+check "the run stopped early: run 3 never started (two resets)" "$(grep -c RESET-POD "$T/calls")" 2
+SUM=$T/b1/summary.json
+check "the refused case and the cases after it are not run, and the case before it counted" "$(jq -c '[.cases[] | select(.id == "injected-instruction-refused" or .id == "pressure-prompt-holds" or .id == "deadline-sweep-reads-only") | {id, runs, not_run, passed}] | sort_by(.id)' "$SUM")" '[{"id":"deadline-sweep-reads-only","runs":1,"not_run":1,"passed":1},{"id":"injected-instruction-refused","runs":1,"not_run":1,"passed":1},{"id":"pressure-prompt-holds","runs":1,"not_run":1,"passed":1}]'
+check "a refused case is out of the denominator: pass rate stays 1 of 1" "$(jq -c '.cases[] | select(.id == "injected-instruction-refused") | .pass_rate' "$SUM")" 1
+check "the cases that ran in both runs have 2 runs" "$(jq -c '.cases[] | select(.id == "duplicate-charge") | {runs, not_run}' "$SUM")" '{"runs":2,"not_run":0}'
+check "the summary records that the budget stopped it" "$(jq -c '.budget | {stopped_by_budget, per_hour: .tokens_per_hour_per_key}' "$SUM")" '{"stopped_by_budget":true,"per_hour":1000000}'
+check "the sweep was skipped with the same message, and no job was made" "$(jq -r '.sweep.skipped' "$SUM")$(grep -c SWEEP-JOB "$T/calls")" true0
+check "a refusal is no failure of the sweep and no failure of a check" "$(jq -r '[.cases[].failed_checks[]] | length' "$SUM")" 0
+check "nothing is left behind" "$(alive)" 0
+
+setup_state DSP
+run env CLUSTER=oa-test FAKE_REFUSE_AT="2:out-of-time-declined" bash "$S" bank --runs 1 --reset-records --tokens per-case --out "$T/b2"
+check "per case: a refusal stops the cases that follow in the same run" "$(jq -c '[.cases[] | {id, not_run}] | map(select(.not_run > 0)) | map(.id) | sort' "$T/b2/summary.json")" '["deadline-sweep-reads-only","injected-instruction-refused","out-of-time-declined","pressure-prompt-holds"]'
+check "per case: exit 3" "$RC" 3
+check "per case: only two cases were sent to oa-eval" "$(grep -c '^oa-eval .*--only ' "$T/calls")" 2
+
+setup_state DSP
+run env CLUSTER=oa-test bash "$S" bank --runs 3 --reset-records --budget-tokens-per-hour 2000 --no-wait --out "$T/b3"
+check "--no-wait: the second run does not fit (1200 used, 1200 needed, 2000 budget): exit 3" "$RC" 3
+check "  one run was done" "$(jq -r .runs_completed "$T/b3/summary.json")" 1
+check "  the message says it does not fit and that --no-wait was given" "$(grep -c 'does not fit, and --no-wait was given' "$T/out")" 1
+check "  only one reset: the second run was never started" "$(grep -c RESET-POD "$T/calls")" 1
+setup_state DSP
+run env CLUSTER=oa-test EVAL_BUDGET_WINDOW_SECONDS=5 EVAL_COUNTDOWN_STEP=1 bash "$S" bank --runs 2 --reset-records --budget-tokens-per-hour 2000 --out "$T/b4"
+check "waiting: the second run waits for the first to leave the window, then runs: exit 0" "$RC" 0
+check "  a countdown was printed" "$([ "$(grep -c 's to go' "$T/out")" -ge 2 ] && echo yes || echo no)" yes
+check "  both runs completed" "$(jq -r .runs_completed "$T/b4/summary.json")" 2
+setup_state DSP
+run env CLUSTER=oa-test bash "$S" bank --runs 2 --reset-records --budget-tokens-per-hour 1000 --out "$T/b5"
+check "a run bigger than the whole hourly budget: stop, say so, exit 3" "$RC" 3
+check "  the message names both numbers" "$(grep -c 'a run used about 1200 tokens, which is more than the hourly budget of 1000' "$T/out")" 1
+run env CLUSTER=oa-test bash "$S" bank --runs 1 --reset-records --budget-tokens-per-hour lots
+check "a bad --budget-tokens-per-hour: exit 2" "$RC" 2
+
+setup_state DSP
+export FAKE_SWEEP_TOOLS=""
+run env CLUSTER=oa-test FAKE_JOB_FAIL=1 FAKE_JOB_LOG='{"error":"task ended in TASK_STATE_FAILED: agent run failed: OpenAI chat completion request failed: OpenAI API error: 429 Too Many Requests"}' \
+  bash "$S" bank --runs 1 --reset-records --sweep --out "$T/b6"
+check "a sweep job refused by the model with no tool call is NOT RUN, not a failure: exit 3" "$RC" 3
+check "  the summary says not run and does not say it only read" "$(jq -c '.sweep | {not_run, only_read}' "$T/b6/summary.json")" '{"not_run":true,"only_read":null}'
+check "  the job is deleted" "$(grep -c 'delete job -n openagentix-schedules deadline-sweep-eval-' "$T/calls")" 1
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -92,6 +92,26 @@ func TestExitCodes(t *testing.T) {
 	}
 }
 
+// A budget refusal ends the run with exit 3: not a pass, and not a failure of the agent.
+func TestExitCodeThreeWhenTheModelRefusedACase(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"task": map[string]any{
+			"status":    map[string]any{"state": "TASK_STATE_FAILED"},
+			"artifacts": []any{map[string]any{"parts": []any{map[string]string{"text": "agent run failed: OpenAI API error: 429 Too Many Requests"}}}},
+		}}})
+	}))
+	defer srv.Close()
+	set := write(t, "cases.yaml", cases)
+	audit := write(t, "audit.jsonl", "")
+	var out, errb bytes.Buffer
+	if rc := run([]string{"run", "--cases", set, "--gate-url", srv.URL, "--audit", audit, "--audit-settle", "1ms"}, &out, &errb); rc != 3 {
+		t.Fatalf("want exit 3, got %d: %s %s", rc, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "NOT RUN") {
+		t.Fatalf("table: %s", out.String())
+	}
+}
+
 func TestTokenIsReadFromEnvFileOnly(t *testing.T) {
 	// there is no --token flag: a token on the command line would show in the process list
 	var out, errb bytes.Buffer

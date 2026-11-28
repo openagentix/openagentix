@@ -25,6 +25,11 @@
 #                  and after a run, one total per run. per-case: cases run one by one with a reading around each, which needs one scrape interval
 #                  (default 30 s, METRICS_SCRAPE_SECONDS) per case. off: do not read. If the metric is not there, the summary says "not available"
 #                  and why. Other traffic on the same gateway key during a run is counted too: use a quiet cluster. Tokens only, never a price.
+# --budget-tokens-per-hour N   The hourly token budget of the agent's gateway key (default 1000000, the chart default of gateway.policy.tokenBudget).
+#                  Before each run after the first, the script estimates the run from the largest run so far (input plus output tokens, read from
+#                  the metric) and, if it does not fit in what is left of the last hour, waits with a printed countdown until it does. --no-wait
+#                  stops instead. Needs the token metric; without it there is no estimate and no wait.
+# --no-wait        With --budget-tokens-per-hour: stop with exit 3 instead of waiting for the budget.
 # --include-answers  Put the answers in the reports of DIR (hash only otherwise). Synthetic data, but the answers can hold anything the model wrote.
 #
 # Env: CLUSTER | KUBE_CONTEXT, KUBECTL, OA_EVAL (a built oa-eval; otherwise it is built with go), EVAL_TOKEN_DURATION (30m),
@@ -32,7 +37,11 @@
 #      OBS_NAMESPACE, SCHEDULES_NAMESPACE, EVAL_RESET_TIMEOUT (240), EVAL_SWEEP_TIMEOUT (420).
 # The gate token is minted per call of oa-eval (short lived), kept in a shell variable, handed to oa-eval through a named pipe in a private
 # directory, and never written to a file, an argument or the output. Every port-forward and background reader stops on every way out.
-# Exit: 0 the measurement ran (read summary.json for the rates), 1 a setup failure or a failed sweep check, 2 wrong usage.
+# A model call that the gateway or the provider refuses (HTTP 429, a spent token budget) with no tool call is NOT RUN, not a failure: it is left out of
+# the pass rate, the rest of the run is not sent, and the script stops with a message. The sweep is skipped then too.
+# Env also: EVAL_BUDGET_WINDOW_SECONDS (3600), EVAL_COUNTDOWN_STEP (30).
+# Exit: 0 the measurement ran (read summary.json for the rates), 1 a setup failure or a failed sweep check, 2 wrong usage,
+#       3 the budget stopped it (a model call was refused, or the next run does not fit and --no-wait was given): the summary covers what ran.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -46,7 +55,7 @@ log() { printf '%s\n' "$*"; }
 case "$1" in -h | --help) usage 0 ;; esac
 UC=$1; shift
 case "$UC" in bank | equipment | software-org) ;; *) echo "ERROR: the use case is bank, equipment or software-org, not '$UC'" >&2; usage 2 ;; esac
-RUNS=""; OUT=""; RESET=0; SWEEP=0; TOKENS_MODE=per-run; ONLY=""; INCLUDE_ANSWERS=0; METRICS_UID_ARG=""
+BUDGET=1000000; NO_WAIT=0; RUNS=""; OUT=""; RESET=0; SWEEP=0; TOKENS_MODE=per-run; ONLY=""; INCLUDE_ANSWERS=0; METRICS_UID_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --runs) RUNS=${2:-}; shift 2 || usage 2 ;;
@@ -57,12 +66,15 @@ while [ $# -gt 0 ]; do
     --only) ONLY=${2:-}; shift 2 || usage 2 ;;
     --metrics-user-id) METRICS_UID_ARG=${2:-}; shift 2 || usage 2 ;;
     --include-answers) INCLUDE_ANSWERS=1; shift ;;
+    --budget-tokens-per-hour) BUDGET=${2:-}; shift 2 || usage 2 ;;
+    --no-wait) NO_WAIT=1; shift ;;
     -h | --help) usage 0 ;;
     *) echo "ERROR: unknown argument '$1'" >&2; usage 2 ;;
   esac
 done
 case "$RUNS" in '' | *[!0-9]*) echo "ERROR: --runs N is required (a whole number from 1 to 200)" >&2; usage 2 ;; esac
 [ "$RUNS" -ge 1 ] && [ "$RUNS" -le 200 ] || { echo "ERROR: --runs must be from 1 to 200, not $RUNS" >&2; usage 2; }
+case "$BUDGET" in '' | *[!0-9]* | 0) echo "ERROR: --budget-tokens-per-hour is a whole number above 0" >&2; usage 2 ;; esac
 case "$TOKENS_MODE" in per-run | per-case | off) ;; *) echo "ERROR: --tokens is per-run, per-case or off, not '$TOKENS_MODE'" >&2; usage 2 ;; esac
 case "$METRICS_UID_ARG" in *[!A-Za-z0-9._:-]*) echo "ERROR: --metrics-user-id may hold letters, digits and . _ : - only" >&2; usage 2 ;; esac
 case "$ONLY" in *[!A-Za-z0-9._,-]*) echo "ERROR: --only takes case ids separated by commas" >&2; usage 2 ;; esac
@@ -185,6 +197,7 @@ fi
 
 TOKEN_DURATION=${EVAL_TOKEN_DURATION:-30m}; SETTLE=${EVAL_AUDIT_SETTLE:-6s}; CASE_TIMEOUT=${EVAL_CASE_TIMEOUT:-300s}
 SCRAPE_WAIT=$(( ${METRICS_SCRAPE_SECONDS:-30} + ${METRICS_SCRAPE_MARGIN:-5} ))
+WINDOW=${EVAL_BUDGET_WINDOW_SECONDS:-3600}; COUNTDOWN_STEP=${EVAL_COUNTDOWN_STEP:-30}
 RESET_TIMEOUT=${EVAL_RESET_TIMEOUT:-240}; SWEEP_TIMEOUT=${EVAL_SWEEP_TIMEOUT:-420}
 
 # ---- tokens: the gateway's metric in the bundled VictoriaMetrics --------------------------------------------------------------------------------
@@ -299,8 +312,50 @@ mint_and_run() {
 case_ids() { sed -nE 's/^  - id: *([A-Za-z0-9._-]+).*/\1/p' "$1"; }
 
 ABORT=""
+BUDGET_STOP=""      # set when the budget stops the measurement: the message
+BUDGET_LOG=$PRIV/budget.log   # lines: <epoch seconds at the end of a run> <input plus output tokens of the run>
+: >"$BUDGET_LOG"
+tokens_in_window() { # tokens of the runs that ended in the last hour
+  awk -v now="$(date +%s)" -v w="$WINDOW" 'now - $1 < w {s += $2} END {print s + 0}' "$BUDGET_LOG"
+}
+note_run_tokens() { # note_run_tokens <tokens json or null>: the budget tokens of a run (input plus output)
+  local t
+  t=$(jq -r 'if . == null then 0 else ((.input // 0) + (.output // 0)) end' <<<"$1")
+  [ "$t" = 0 ] || echo "$(date +%s) $t" >>"$BUDGET_LOG"
+}
+budget_gate() { # before a run: wait until the next run (as big as the biggest so far) fits in the hourly budget; sets BUDGET_STOP and returns 1 when it cannot
+  [ "$TOK_OK" = 1 ] && [ -s "$BUDGET_LOG" ] || return 0
+  local need now used free_at left
+  need=$(awk 'BEGIN {m = 0} $2 > m {m = $2} END {print m}' "$BUDGET_LOG")
+  if [ "$need" -gt "$BUDGET" ]; then
+    BUDGET_STOP="a run used about $need tokens, which is more than the hourly budget of $BUDGET tokens per key: no run fits. Lower the number of cases with --only, or raise the budget of the gateway key."
+    return 1
+  fi
+  while :; do
+    now=$(date +%s); used=$(tokens_in_window)
+    [ $((used + need)) -gt "$BUDGET" ] || return 0
+    # the first moment at which enough of the earlier runs have left the window
+    free_at=$(sort -n "$BUDGET_LOG" | awk -v need="$need" -v b="$BUDGET" -v w="$WINDOW" '{ts[NR] = $1; tk[NR] = $2; tot += $2}
+      END {rest = tot; for (i = 1; i <= NR; i++) {rest -= tk[i]; if (rest + need <= b) {print ts[i] + w; exit}} print ts[NR] + w}')
+    if [ "$NO_WAIT" = 1 ]; then
+      BUDGET_STOP="the next run needs about $need tokens and $used tokens were used in the last hour (budget $BUDGET): it does not fit, and --no-wait was given. Wait about $((free_at - now)) s, or lower --runs."
+      return 1
+    fi
+    left=$((free_at - now)); [ "$left" -gt 0 ] || left=1
+    log "    waiting for the gateway budget: the next run needs about $need tokens, $used of $BUDGET were used in the last hour; $left s to go"
+    while [ "$left" -gt 0 ]; do
+      sleep "$([ "$left" -lt "$COUNTDOWN_STEP" ] && echo "$left" || echo "$COUNTDOWN_STEP")"
+      now=$(date +%s); left=$((free_at - now))
+      [ "$left" -le 0 ] || log "    ... $left s to go"
+    done
+  done
+}
+refused_message() { # the message when a model call was refused
+  local used; used=$(tokens_in_window)
+  echo "the agent's gateway budget is exhausted: $used tokens used in the last hour by this script's runs (budget $BUDGET per key), and a model call was refused (HTTP 429 or another model-call error). Wait or lower --runs."
+}
 append_results() { # append_results <run> <report> <tokens json or null>
-  jq -c --argjson run "$1" --argjson tok "$3" '.cases[] | {run: $run, id: .id, pass: .pass, ms: .ms, tool_calls: ((.tools_seen // []) | length), failed: [.checks[] | select(.pass | not) | {name: .name, detail: (.detail // "")}], tokens: $tok}' "$2" >>"$OUT/results.jsonl"
+  jq -c --argjson run "$1" --argjson tok "$3" '.cases[] | {run: $run, id: .id, pass: .pass, not_run: (.not_run // false), reason: (.not_run_reason // null), ms: .ms, tool_calls: ((.tools_seen // []) | length), failed: [(.checks // [])[] | select(.pass | not) | {name: .name, detail: (.detail // "")}], tokens: $tok}' "$2" >>"$OUT/results.jsonl"
 }
 
 run_once() { # run_once <n>
@@ -344,13 +399,23 @@ run_once() { # run_once <n>
       report=$rundir/report-$id.json
       tok_b=$tok_a_prev
       set +e; mint_and_run "$report" "$cases" "$gp" "$rp" "$aud" "$rundir/eval.out" --only "$id"; rc=$?; set -e
-      [ "$rc" -le 1 ] && [ -s "$report" ] || { ABORT="oa-eval exited $rc for case $id in run $n and wrote no report (see $rundir/eval.out)"; break; }
+      { [ "$rc" -le 1 ] || [ "$rc" = 3 ]; } && [ -s "$report" ] || { ABORT="oa-eval exited $rc for case $id in run $n and wrote no report (see $rundir/eval.out)"; break; }
       sleep "$SCRAPE_WAIT"
       tok_a=$(tok_read) || tok_a="{}"
       tok_delta "$tok_b" "$tok_a"
       tok_a_prev=$tok_a
       append_results "$n" "$report" "$TOK_DELTA"
       [ -z "$TOK_WHY" ] || log "    tokens for $id: not available: $TOK_WHY"
+      if [ "$(jq -r '[.cases[] | select(.not_run)] | length' "$report")" != 0 ]; then
+        # the model refused this case: the rest is not sent
+        local rest="" seen_it=0 r
+        for r in $ids; do if [ "$seen_it" = 1 ]; then rest="$rest $r"; elif [ "$r" = "$id" ]; then seen_it=1; fi; done
+        for r in $rest; do
+          jq -nc --argjson run "$n" --arg id "$r" '{run: $run, id: $id, pass: false, not_run: true, reason: "not sent: an earlier case was refused by the model", ms: 0, tool_calls: 0, failed: [], tokens: null}' >>"$OUT/results.jsonl"
+        done
+        BUDGET_STOP=refused
+        break
+      fi
     done
     if [ -z "$ABORT" ]; then
       tok_delta "$run_tok_b" "$tok_a_prev"
@@ -360,7 +425,7 @@ run_once() { # run_once <n>
     report=$rundir/report.json
     local only_args=(); [ -z "$ONLY" ] || only_args=(--only "$ONLY")
     set +e; mint_and_run "$report" "$cases" "$gp" "$rp" "$aud" "$rundir/eval.out" ${only_args[@]+"${only_args[@]}"}; rc=$?; set -e
-    if [ "$rc" -le 1 ] && [ -s "$report" ]; then
+    if { [ "$rc" -le 1 ] || [ "$rc" = 3 ]; } && [ -s "$report" ]; then
       if [ "$TOK_OK" = 1 ]; then
         sleep "$SCRAPE_WAIT"
         run_tok_a=$(tok_read) || run_tok_a="{}"
@@ -368,10 +433,13 @@ run_once() { # run_once <n>
         [ -z "$TOK_WHY" ] || log "    tokens of run $n: not available: $TOK_WHY"
       fi
       append_results "$n" "$report" null
+      if [ "$(jq -r '[.cases[] | select(.not_run)] | length' "$report")" != 0 ]; then BUDGET_STOP="refused"; fi
     else
       ABORT="oa-eval exited $rc in run $n and wrote no report (see $rundir/eval.out)"
     fi
   fi
+  note_run_tokens "$sum_tok"
+  [ "$BUDGET_STOP" != refused ] || BUDGET_STOP=$(refused_message)
   stop_pid "$refpid"
   # the audit lines of this run's window
   sleep 1; audit_pull "$aud" || true
@@ -404,9 +472,11 @@ run_sweep() {
     [ "$SECONDS" -lt "$deadline" ] || { st=timeout; break; }
     sleep 3
   done
-  local ok=true why=""
+  local ok=true why="" joblog="" refused=0
   if [ "$st" != succeeded ]; then
-    ok=false; why="the job $name ended as '$st'. Last lines of its log: $("${KC[@]}" logs -n "$SCHED_NS" "job/$name" --tail=20 2>&1 | head -c 600 | tr '\n' ' ')"
+    joblog=$("${KC[@]}" logs -n "$SCHED_NS" "job/$name" --tail=20 2>&1 | head -c 600 | tr '\n' ' ')
+    ok=false; why="the job $name ended as '$st'. Last lines of its log: $joblog"
+    if printf '%s' "$joblog" | grep -Eqi 'agent run failed.*(429|too many requests|rate.?limit|quota|API error)|OpenAI API error'; then refused=1; fi
   fi
   sleep "${SETTLE%s}" 2>/dev/null || sleep 6
   audit_pull "$aud" || die "cannot read the audit lines of the tool server after the sweep"
@@ -419,6 +489,16 @@ run_sweep() {
   if [ "$before" != "$after" ]; then
     local a b
     for a in $before; do b=${a%%=*}; case " $after " in *" $a "*) ;; *) changed="$changed $b" ;; esac; done
+  fi
+  if [ "$refused" = 1 ]; then
+    # the model refused a call (before the first tool call or part way): the sweep did not finish, which says nothing about whether it only reads
+    BUDGET_STOP=$(refused_message)
+    SWEEP_JSON=$(jq -nc --arg cron "$CRON" --arg job "$name" --arg why "${why#; }" '{schedule: $cron, job: $job, job_state: "failed", not_run: true, only_read: null, problem: $why}')
+    log "    SWEEP NOT RUN: the model refused the call. $BUDGET_STOP"
+    "${KC[@]}" delete job -n "$SCHED_NS" "$name" --ignore-not-found >/dev/null 2>&1 || true
+    JOB_NAME=""
+    stop_pid "$rpid"
+    return 0
   fi
   [ "$calls" -gt 0 ] || { ok=false; why="$why; no tool call of the sweep was seen in the audit lines (the job may have run without reaching a tool, or the audit source lags)"; }
   [ "$writes" = 0 ] || { ok=false; why="$why; $writes write tool call(s) in the audit lines of the sweep"; }
@@ -438,22 +518,24 @@ write_summary() { # write_summary <runs completed>
   local completed=$1
   [ -s "$OUT/results.jsonl" ] || { log "no results were collected"; return 0; }
   jq -s --arg uc "$UC" --arg ctx "$KUBE_CONTEXT" --argjson requested "$RUNS" --argjson completed "$completed" --arg scope "$TOKENS_SCOPE" --argjson tokok "$([ "$TOK_OK" = 1 ] && echo true || echo false)" \
-    --arg reason "$TOK_REASON" --arg tuid "$METRICS_UID" --slurpfile runs "$OUT/runs.jsonl" --argjson sweep "$SWEEP_JSON" --arg abort "$ABORT" '
+    --arg reason "$TOK_REASON" --arg tuid "$METRICS_UID" --slurpfile runs "$OUT/runs.jsonl" --argjson sweep "$SWEEP_JSON" --arg abort "$ABORT" --argjson budget "$BUDGET" --arg stop "$BUDGET_STOP" '
     def median: sort | if length == 0 then null elif length % 2 == 1 then .[(length - 1) / 2] else (.[length / 2 - 1] + .[length / 2]) / 2 end;
     def maxv: if length == 0 then null else max end;
     def tokmed($k): [.[] | .tokens | select(. != null) | .[$k] // empty] | median;
+    def budgetmed: [.[] | .tokens | select(. != null) | ((.input // 0) + (.output // 0))] | median;
     {use_case: $uc, context: $ctx, runs_requested: $requested, runs_completed: $completed, aborted: (if $abort == "" then null else $abort end),
      tokens: {scope: $scope, available: $tokok, user_id: $tuid, reason: (if $tokok then null else $reason end), unit: "tokens, never a price"},
-     cases: (group_by(.id) | map(. as $g | {id: $g[0].id, runs: ($g | length), passed: ([$g[] | select(.pass)] | length),
-        pass_rate: (([$g[] | select(.pass)] | length) / ($g | length)),
-        failed_checks: ([$g[] | .failed[]] | group_by(.name) | map({check: .[0].name, count: length, example: .[0].detail}) | sort_by(-.count)),
-        duration_ms: {median: ([$g[].ms] | median), max: ([$g[].ms] | maxv)},
-        tool_calls: {median: ([$g[].tool_calls] | median), max: ([$g[].tool_calls] | maxv)},
-        tokens: (if ([$g[] | select(.tokens != null)] | length) == 0 then null else {measured_runs: ([$g[] | select(.tokens != null)] | length), input_median: ($g | tokmed("input")), output_median: ($g | tokmed("output"))} end)})),
-     tokens_per_run: ($runs | map(select(.tokens != null) | {run: .run, tokens: .tokens, audit_tool_calls: .audit_tool_calls})),
+     cases: (group_by(.id) | map(. as $g | ([$g[] | select(.not_run | not)]) as $c | {id: $g[0].id, runs: ($c | length), not_run: ([$g[] | select(.not_run)] | length), passed: ([$c[] | select(.pass)] | length),
+        pass_rate: (if ($c | length) == 0 then null else (([$c[] | select(.pass)] | length) / ($c | length)) end),
+        failed_checks: ([$c[] | .failed[]] | group_by(.name) | map({check: .[0].name, count: length, example: .[0].detail}) | sort_by(-.count)),
+        duration_ms: {median: ([$c[].ms] | median), max: ([$c[].ms] | maxv)},
+        tool_calls: {median: ([$c[].tool_calls] | median), max: ([$c[].tool_calls] | maxv)},
+        tokens: (if ([$c[] | select(.tokens != null)] | length) == 0 then null else {measured_runs: ([$c[] | select(.tokens != null)] | length), input_median: ($c | tokmed("input")), output_median: ($c | tokmed("output")), budget_tokens_median: ($c | budgetmed)} end)})),
+     tokens_per_run: ($runs | map(select(.tokens != null) | {run: .run, tokens: .tokens, budget_tokens: ((.tokens.input // 0) + (.tokens.output // 0)), audit_tool_calls: .audit_tool_calls})),
+     budget: {tokens_per_hour_per_key: $budget, stopped_by_budget: ($stop != ""), message: (if $stop == "" then null else $stop end), counts: "input plus output tokens of a run count against the key; a case that was refused is not run and is not in the pass rate"},
      sweep: $sweep}' "$OUT/results.jsonl" >"$OUT/summary.json"
   log; log "=== summary ($UC, $completed of $RUNS run(s) completed; $OUT/summary.json)"
-  jq -r '.cases[] | [.id, "\(.passed)/\(.runs)", (.duration_ms.median | tostring) + "ms", (.duration_ms.max | tostring) + "ms", (.tool_calls.median | tostring), (.tool_calls.max | tostring),
+  jq -r '.cases[] | [.id, "\(.passed)/\(.runs)" + (if .not_run > 0 then " (+\(.not_run) not run)" else "" end), (.duration_ms.median | tostring) + "ms", (.duration_ms.max | tostring) + "ms", (.tool_calls.median | tostring), (.tool_calls.max | tostring),
       (if .tokens == null then "-" else "\(.tokens.input_median // "-")/\(.tokens.output_median // "-")" end),
       ([.failed_checks[] | "\(.check) x\(.count)"] | join("; "))] | @tsv' "$OUT/summary.json" |
     { printf 'CASE\tPASSED\tMS-MEDIAN\tMS-MAX\tCALLS-MED\tCALLS-MAX\tTOKENS-IN/OUT-MEDIAN\tFAILED-CHECKS\n'; cat; } | column -t -s "$(printf '\t')" 2>/dev/null || cat
@@ -469,11 +551,25 @@ write_summary() { # write_summary <runs completed>
 : >"$OUT/results.jsonl"; : >"$OUT/runs.jsonl"
 DONE=0
 for n in $(seq 1 "$RUNS"); do
+  if [ "$n" -gt 1 ] && ! budget_gate; then break; fi
   if run_once "$n"; then DONE=$n; else DONE=$((n - 1)); break; fi
+  [ -z "$BUDGET_STOP" ] || break
 done
 SWEEP_RC=0
-if [ -z "$ABORT" ] && [ "$SWEEP" = 1 ]; then run_sweep || SWEEP_RC=1; fi
+if [ -z "$ABORT" ] && [ "$SWEEP" = 1 ]; then
+  if [ -n "$BUDGET_STOP" ]; then
+    log; log "=== sweep: SKIPPED. $BUDGET_STOP"
+    SWEEP_JSON=$(jq -nc --arg cron "$CRON" --arg why "$BUDGET_STOP" '{schedule: $cron, skipped: true, only_read: null, problem: $why}')
+  else
+    run_sweep || SWEEP_RC=1
+  fi
+fi
 write_summary "$DONE"
 if [ -n "$ABORT" ]; then die "stopped: $ABORT. The summary above covers the $DONE run(s) that finished."; fi
 [ "$SWEEP_RC" = 0 ] || die "the sweep check failed (see above and $OUT/sweep)"
+if [ -n "$BUDGET_STOP" ]; then
+  log; log "STOPPED BY THE BUDGET: $BUDGET_STOP"
+  log "The summary covers the $DONE run(s) that finished. Cases that were refused are 'not run' and are not in the pass rate."
+  exit 3
+fi
 log; log "done. The measurement ran; the pass rates are in $OUT/summary.json. A pass rate over $RUNS run(s) is a rate for this model, these prompts and this cluster, nothing more."

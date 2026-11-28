@@ -179,7 +179,15 @@ Where the tokens come from. The model gateway exports `agentgateway_gen_ai_clien
 
 Read the failed cases before you change the model or a pattern: the cause is checked by words, and a correct answer in other words fails it. The script does not put the answers in the reports unless you give `--include-answers`.
 
-Not done yet: this path was built and tested against fakes. It has not been run on a live cluster, so no pass rate and no cost per case are recorded here.
+The gateway limits what one agent key may use: 1,000,000 tokens per hour per key (the chart default, `gateway.policy.tokenBudget`). Past it the gateway answers HTTP 429 and the agent run ends `TASK_STATE_FAILED` with "OpenAI API error: 429 Too Many Requests". `oa-eval` reads such a case as **not run**, not as a failure: it is out of the pass rate, the cases after it are not sent, and the script stops with exit 3 and a message. Before each run after the first, the script estimates the next run from the largest run so far (input plus output tokens) and waits, with a countdown, until it fits in the hour; `--no-wait` stops instead; `--budget-tokens-per-hour N` says the budget if yours is not the default. The sweep is skipped when the budget is spent.
+
+### Measured so far (first live run of this path)
+
+First live run of `hack/use-case-eval.sh` on this use case: 2026-11-28, claude-haiku through the gateway, the maintainer's kind cluster, three runs of the eight cases. **All 24 of 24 cases passed** (8 of 8 in each run). That is three runs on one model: it is a first rate, not a stable one.
+
+**Tokens, per run** (the gateway metric, key `pod-rca`): input 186,672, 226,312 and 210,169 (of which cache reads 130,720, 179,933 and 168,815), output 15,008, 16,700 and 15,103. Each run made 41 tool calls in the audit lines, all read tools. Per case was not measured. A run is about 200,000 to 240,000 tokens of the 1,000,000 an hour per key, so about four runs fit in an hour.
+
+Not done yet: more runs for a steadier rate, and tokens per case (`--tokens per-case`).
 
 ## Tests (all offline)
 
