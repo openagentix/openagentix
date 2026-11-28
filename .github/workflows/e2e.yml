@@ -1182,6 +1182,10 @@ jobs:
               tail -n 60 "live-$p.log" 2>/dev/null || echo "did not run"
               echo '```'
             done
+            echo "### checks that did not run"
+            echo '```'
+            grep -h 'NOT RUN' live-*.log 2>/dev/null | sort -u || true
+            echo '```'
             echo "### install.sh, tool server account lines (the second install)"
             echo '```'
             grep -iE 'tool server account|can get|can list|no right on Secrets|WARNING: mcp.virtual' install-on.log 2>/dev/null || true

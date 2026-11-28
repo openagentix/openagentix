@@ -32,7 +32,7 @@ The job `e2e (tool server accounts)` (`tool_accounts` input of the `e2e` workflo
 
 In the on phases: every tool server runs as its `openagentix-<name>` account; its Role has no rule on Secrets; `can-i` answers no for get, list and watch of Secrets, for the named header Secret, for pods, StatefulSets and Deployments, and for `pods/exec` and `pods/attach`; a throwaway pod that runs as an account gets 403 on a Secret and the list of Secrets and 200 on a ConfigMap; every backend is ready on every tool server (the knowledge base mirror, notify, `cluster-read` and the endpoint included); no tool server log has a forbidden or RBAC line; a call through the endpoint group reaches the endpoint, whose log shows its own header value; calls through the diagnostics group and the knowledge base mirror answer; and the header and bearer values are in no tool server log, ConfigMap, Role or ToolHive object. The install log of each on phase shows the account check for all five accounts.
 
-WORKLOAD_PLACEHOLDER
+**The `-workload` variant.** With the switch on, `tools-lookup-workload` was proven for its account, its Role, its ready backends (the knowledge base and notify mirrors included, after the network policy fix below) and for having no Secret reach. The check that a pod-bound token with its audience is accepted and another audience is refused, under the chart's own account, did not run through the chart: the test could not read the token of a container agent pod (the agent image has no `cat`, and the kubelet's file on the kind node was not readable from the test; a probe pod cannot be made in the workload namespace, because the chart's admission policies allow a projected token there only for the control plane). The job prints this as `NOT RUN`, not as a pass and not as a failure. Acceptance of a pod-bound token and refusal of another audience under an own account rests on the spike (ADR 0031, question 6, run [46131733146](https://github.com/openagentix/openagentix/actions/runs/46131733146)) and was not repeated through the chart.
 
 ## What the live runs found
 
@@ -42,6 +42,7 @@ WORKLOAD_PLACEHOLDER
 
 ## Limits
 
+- Not proven through the chart: acceptance of a pod-bound token and refusal of another audience by `tools-lookup-workload` under its own account (see above).
 - One ToolHive version (0.67.1), one single-node kind cluster, one complete run of the five phases. The incoming side uses the API server's own tokens, not the identity provider of a real install.
 - Credentials are held as environment values by every pod of a tool group. The group is the unit of trust. They are not short-lived or rotated, and the endpoint does not know which agent called.
 - The `mcp.servers[]` proxies (the `osv` server here) have an upstream Role that may create pods in the tools namespace. Operators, anyone who can create pods or read Secrets in the tools namespace, and the ToolHive operator itself can still read the credentials.
