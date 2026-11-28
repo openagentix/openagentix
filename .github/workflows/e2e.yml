@@ -24,6 +24,11 @@ on:
       - hack/ci/event-recorder.py
       - hack/ci/event-ci-values.yaml
       - hack/ci/diagnostics-live.sh
+      - hack/ci/kb-access-live.sh
+      - hack/ci/kb-access-ci-setup.sh
+      - hack/ci/kb-access-ci-values.yaml
+      - hack/ci/kb-access-report-values.yaml
+      - hack/ci/kb-access-enforce-values.yaml
       - hack/ci/diagnostics-ci-values.yaml
       - hack/ci/rca-live.sh
       - hack/ci/rca-audit-tools.jq
@@ -85,6 +90,10 @@ on:
         type: choice
         options: [none, both, a, b]
         default: none
+      kb_access:
+        description: 'Run the live proof of the knowledge base isolation (ADR 0030, slice 3, issue #272) instead of the profiles: the quick start plus hack/ci/kb-access-ci-values.yaml (two tool groups of their own, each with its own collection), installed with no mode, then report, then enforce, the stub model'
+        type: boolean
+        default: false
       adr0031:
         description: 'Run the design spike of ADR 0031 (tool servers that cannot read Secrets, issue #229, hack/spikes/adr0031_tool_server_spike.py) instead of the profiles: the endpoints cluster of the endpoints job, then the spike. It observes a throwaway cluster and never gates a merge'
         type: boolean
@@ -100,7 +109,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none' && !inputs.adr0031) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none' && !inputs.adr0031 && !inputs.kb_access) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -1066,3 +1075,118 @@ jobs:
             install.log
           if-no-files-found: ignore
           retention-days: 30
+# Opt-in (workflow_dispatch with the input `kb_access`; KB_ACCESS=1 for the scripts): the knowledge base isolation on a real cluster (ADR 0030, slice 3, issue #272).
+  # The quick start plus hack/ci/kb-access-ci-values.yaml: two tool groups of their own (from the two tiny endpoints of the endpoints job), each with its own
+  # collection, and a profile on the shared group, the stub model, no paid call. The platform is installed three times with the same values and a different mode
+  # (none, report, enforce), and after each install hack/ci/kb-access-live.sh makes real calls through the tool gateways. It settles that each group reads its own
+  # collection and gets the answer of a missing one for the other's, byte for byte; that a search with no collection returns only the caller's collections;
+  # that a pod the network policy admits that is not a tool server gets 401; that report logs what enforce would change and allows it; that with no mode the
+  # behaviour is as before; and that no value and no document text is in any log. It does NOT show isolation against a compromised tool server (ADR 0031).
+  e2e-kb-access:
+    name: e2e (kb access, knowledge base isolation)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.kb_access }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: cluster, then the endpoints and the trust of the API server's tokens (before the platform values)
+        env:
+          KB_ACCESS: "1"
+        run: |
+          set -o pipefail
+          kind create cluster --name openagentix --config hack/kind-config.yaml
+          hack/ci/kb-access-ci-setup.sh 2>&1 | tee setup.log
+      - name: phase off, install with no mode (PROFILE=quickstart plus the isolation values, no key, no token)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/kb-access-ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-off.log
+      - name: phase off, live check
+        env:
+          KB_ACCESS: "1"
+          KB_ACCESS_PHASE: off
+        run: |
+          set -o pipefail
+          hack/ci/kb-access-live.sh 2>&1 | tee live-off.log
+      - name: phase report, install with mode report
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/kb-access-ci-values.yaml hack/ci/kb-access-report-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-report.log
+      - name: phase report, live check
+        env:
+          KB_ACCESS: "1"
+          KB_ACCESS_PHASE: report
+        run: |
+          set -o pipefail
+          hack/ci/kb-access-live.sh 2>&1 | tee live-report.log
+      - name: phase enforce, install with mode enforce
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/kb-access-ci-values.yaml hack/ci/kb-access-enforce-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-enforce.log
+      - name: phase enforce, live check
+        env:
+          KB_ACCESS: "1"
+          KB_ACCESS_PHASE: enforce
+        run: |
+          set -o pipefail
+          hack/ci/kb-access-live.sh 2>&1 | tee live-enforce.log
+      - name: turning enforce off by leaving the values file out is refused
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/kb-access-ci-values.yaml
+          ALLOW_VALUE_REMOVAL: "1"   # the values diff of the installer would stop this run first; the guard of the mode is what is shown here
+        run: |
+          set +e
+          ./install.sh > install-guard.log 2>&1
+          rc=$?
+          set -e
+          tail -5 install-guard.log
+          [ "$rc" -ne 0 ] && grep -q 'ALLOW_KB_ACCESS_OFF' install-guard.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Knowledge base isolation on a real cluster (ADR 0030, slice 3)"
+            for p in off report enforce; do
+              echo "### phase $p"
+              echo '```'
+              cat "live-$p.log" 2>/dev/null || echo "the live check of this phase did not run"
+              echo '```'
+            done
+            echo "### install.sh, isolation lines"
+            echo '```'
+            grep -iE 'knowledge base isolation|kb-caller|DiscoveredAuthConfig|ALLOW_KB_ACCESS_OFF|no isolation' install-*.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          kubectl get virtualmcpserver -n mcp-tools -o json | jq -c '.items[]|{name:.metadata.name,conditions:[.status.conditions[]?|{type,status,reason}],backends:[.status.discoveredBackends[]?|{name,status}]}' || true
+          kubectl logs -n openagentix-knowledge deploy/kb --tail=80 || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload cluster logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kind-logs-kb-access
+          path: kind-logs
+          retention-days: 7

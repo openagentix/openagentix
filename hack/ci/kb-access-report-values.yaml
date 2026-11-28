@@ -1,0 +1,5 @@
+# CI ONLY (phase 2 of hack/ci/kb-access-live.sh): the check is on and refuses nothing. Always passed together with hack/ci/kb-access-ci-values.yaml.
+knowledge:
+  access:
+    mode: report
+    sharedGroupCollections: [ci-shared]

@@ -79,9 +79,21 @@ Then use the A2A command from the [runtime page](./runtime.md) with the question
 ## Known limits
 
 - One replica of each piece, no database backups, and the model is downloaded from Hugging Face on first start.
-- No egress policy on the kb and its database; no per-collection authorization; the vMCP permit-all Cedar policy applies to the kb tools.
+- No egress policy on the kb and its database; the vMCP permit-all Cedar policy applies to the kb tools. With `knowledge.access.mode` empty (the default) there is no per-collection authorization: every caller reads every collection. See the next section.
 - The lexical half ORs every query word, so common words add noise on a tiny corpus.
 - Turning embeddings on for an existing database does not back-fill old chunks.
+
+## Isolation per tool group (ADR 0030, off by default)
+
+By default nothing separates the collections: every tool group reads every one, and the only fence is what a prompt says. ADR 0030 adds an opt-in check, made by the knowledge base itself.
+
+- **Values.** `knowledge.access.mode` is `""` (default, no check), `report` or `enforce`. `knowledge.access.sharedGroupCollections` lists what the shared tool group reads (definitions and every profile without a group of its own). `mcp.profiles[].knowledgeCollections` lists what the profiles of a group of their own read; profiles on one group must agree, because the knowledge base tells groups apart, not profiles.
+- **Who is a caller.** One caller per tool group that holds a knowledge base entry. `install.sh` makes one random value per group (never printed) and writes it to two Secrets: `kb-callers` in the knowledge namespace (mounted as files, one per group) and `kb-caller-<group>` in the tools namespace. Each knowledge base entry sends its group's value with `headerForward`. The chart renders only references.
+- **What the knowledge base does.** It decides the caller on every request from that request's own `Authorization` header, never from the MCP session. In `enforce` a call without a known value gets 401, before any MCP handling. `kb_list_collections` lists only the caller's collections. `kb_search` and the graph tools with no collection read only those. A collection outside the list answers byte for byte like a collection that does not exist, so its name is not confirmed. The filter is inside the store query, so `top_k` is filled from allowed rows. `report` logs `caller` and, when `enforce` would have refused or filtered the call, `outside_list: true`, and refuses nothing. A value is read from its file on every request: a rotated value needs no restart of the knowledge base.
+- **Writes** stay with the admin token. A tool group's value does not write.
+- **Turning it on.** `report`, read the log, then `enforce`, with the same values file on every run (Helm replaces values). `install.sh` refuses a run that would turn `enforce` off unless `ALLOW_KB_ACCESS_OFF=1`. With the mode empty and profiles on two or more groups that list the knowledge tools, it prints a warning.
+- **Rotation.** Delete the key from `kb-callers` and the Secret `kb-caller-<group>`, run `install.sh`: it makes a new value, writes both, and restarts the tool servers of the group. Calls of that group get 401 in between.
+- **What it does not stop.** A tool server of another group can read this group's `kb-caller-<group>` Secret through the API and send it, until ADR 0031 is built, so isolation against a compromised tool server is **not** claimed. Two profiles or two agents on one group share one list. Collections are not separated at rest. See `docs/decisions/0030-knowledge-base-isolation-and-graph-schema.md` section 7.
 
 ## Knowledge graph
 

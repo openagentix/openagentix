@@ -1,0 +1,68 @@
+# CI ONLY. These values make a cluster unfit for agents: the tool gateways trust the API server's own tokens. hack/ci/kb-access-live.sh refuses to run
+# anywhere but on GitHub Actions (or a context named by KB_ACCESS_CI_CONTEXT).
+# Values of the live check of the knowledge base isolation (ADR 0030, slice 3), on top of the quick start. Two tool groups of their own (alpha and beta, from two
+# tiny endpoints that exist before the install, hack/ci/endpoints-ci-setup.sh), each with a profile that lists the knowledge tools and its own collection, and a
+# profile on the shared group. The mode is NOT set here: the three phases of the job pass it in a second file (none, kb-access-report-values.yaml,
+# kb-access-enforce-values.yaml), always together with this one, because Helm replaces the release values on every run.
+#   kind create cluster --name openagentix --config hack/kind-config.yaml
+#   KB_ACCESS=1 hack/ci/kb-access-ci-setup.sh
+#   PROFILE=quickstart VALUES_FILE=hack/ci/kb-access-ci-values.yaml ./install.sh                                          then  KB_ACCESS=1 KB_ACCESS_PHASE=off hack/ci/kb-access-live.sh
+#   PROFILE=quickstart VALUES_FILE="hack/ci/kb-access-ci-values.yaml hack/ci/kb-access-report-values.yaml" ./install.sh    then  ... KB_ACCESS_PHASE=report
+#   PROFILE=quickstart VALUES_FILE="hack/ci/kb-access-ci-values.yaml hack/ci/kb-access-enforce-values.yaml" ./install.sh   then  ... KB_ACCESS_PHASE=enforce
+# The e2e workflow runs it on request (workflow_dispatch, input `kb_access`). It is NOT a recommended configuration.
+knowledge:
+  enabled: true
+  embeddings: {enabled: false}        # lexical search only: no model download in CI
+  kb:
+    # a pod that the network policy admits and that is not a tool server: the live check starts one with these labels and expects 401 from /mcp
+    ingestFrom:
+      - {namespace: kb-ci, podLabels: {app: kb-probe}}
+mcp:
+  endpoints:
+    - name: echo
+      url: http://echo.endpoint-ci.svc.cluster.local:8080/mcp
+      group: alpha
+      auth:
+        header: {name: Authorization, secret: {name: echo-mcp-auth, key: value}}
+      ingress:
+        podSelector: {app: echo}
+        port: 8080
+    - name: other
+      url: http://other.endpoint-ci.svc.cluster.local:8080/mcp
+      group: beta
+      auth:
+        header: {name: Authorization, secret: {name: other-mcp-auth, key: value}}
+      ingress:
+        podSelector: {app: other}
+        port: 8080
+  # a list replaces the quick start's list, so `lookup` is stated again exactly as components/quickstart/values.yaml has it
+  profiles:
+    - name: lookup
+      codeMode: false
+      tools:
+        osv: [query_vulnerability]
+    - name: alpha
+      codeMode: false
+      knowledgeCollections: [ci-alpha]
+      tools:
+        echo: [echo]
+        knowledge: [kb_search, kb_get_document, kb_list_collections]
+    - name: beta
+      codeMode: false
+      knowledgeCollections: [ci-beta]
+      tools:
+        other: [echo]
+        knowledge: [kb_search, kb_get_document, kb_list_collections]
+    - name: sharedkb                   # on the shared group: it reads knowledge.access.sharedGroupCollections
+      codeMode: false
+      tools:
+        knowledge: [kb_search, kb_get_document, kb_list_collections]
+  virtual:
+    incomingAuth:
+      # Only for this job: the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/kb-access-live.sh can make a token and make real
+      # calls through them. hack/ci/kb-access-ci-setup.sh puts the cluster CA into the ConfigMap below. Agents' tool calls do not work in a cluster installed
+      # with these values: use them for this check and nothing else.
+      oidc:
+        issuer: https://kubernetes.default.svc.cluster.local
+        jwksUrl: https://kubernetes.default.svc/openid/v1/jwks
+        caBundle: {configMap: ci-apiserver-ca, key: ca.crt}
