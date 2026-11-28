@@ -1,11 +1,11 @@
 # ADR 0029: per-agent token budgets in the one gateway policy, by budget class
 
-Status: Proposed, spike required (slice 2 must be in the diary before this is accepted)
+Status: Proposed (the slice 2 spike ran; see "Spike results")
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/229 (reference use cases; the follow-up named in ADR 0026 section D)
 Replaces: none. The first slice of the `Budget` kind of ADR 0009, done as chart values and operator policy, with no new kind, no new resource field and no new component. See "Relation to other records".
 
-The operator names a few budget classes in chart values, each a token limit per time unit, counted per agent or shared by every agent of the class. A chart agent names a class in its values; the definitions of an agents namespace get the class the operator maps to that namespace. A definition cannot choose its class. The chart renders one conditional rate limit entry per class in the one gateway policy, and the agent's key entry carries the class name. Agents that name no class keep today's budget. Off by default: with no class, the chart renders byte for byte what it renders today. Nothing here is built. Everything is *unverified* until the slices below are done.
+The operator names a few budget classes in chart values, each a token limit per time unit, counted per agent or shared by every agent of the class. A chart agent names a class in its values; the definitions of an agents namespace get the class the operator maps to that namespace. A definition cannot choose its class. The chart renders one conditional rate limit entry per class in the one gateway policy, and the agent's key entry carries the class name. Agents that name no class keep today's budget. Off by default: with no class, the chart renders byte for byte what it renders today. Nothing here is built. The gateway behaviour it relies on was shown in a spike on a throwaway cluster ("Spike results"); the chart render, the guard and the controller are *unverified* until their slices are done.
 
 ## Context
 
@@ -13,11 +13,62 @@ Read in this repository on 2026-11-28.
 
 - **One budget for every key.** The one `AgentgatewayPolicy` (`charts/openagentix/templates/gateway.yaml`) has `spec.traffic.rateLimit.local` with one entry: `tokens` and `unit` from `gateway.policy.tokenBudget` (default 1,000,000 per hour), `key: apiKey.user_id`. Every virtual key gets its own bucket of the same size, per proxy replica.
 - **Key entries.** `install.sh` writes one entry per chart agent into the ConfigMap `llm-api-keys`: `{"keyHash":"sha256:...","metadata":{"user_id":"<agent>"}}`. The control plane writes the entries of definitions into `llm-api-keys-control-plane` (`services/control-plane/internal/adapters/agentgateway/agentgateway.go`), with optional `team` and `project` copied from the reserved labels. The admission guard pins each entry to one exact form with a regular expression (`charts/openagentix/templates/control-plane-guard.yaml`, the key ConfigMap rule). The metadata is a free map for the gateway (comment in the adapter).
-- **The gateway's schema allows more.** The file `agentgateway.dev_agentgatewaypolicies.yaml` in the `agentgateway-crds` chart v1.7.0, the version `components/model-gateway/install.sh` pins (the chart pins nothing, and the CRD is not vendored in this repository), has `spec.traffic.rateLimit.conditional`: a list of at most 16 entries, each a CEL `condition` and a `policy` with `local` limits; the first matching entry applies; one entry without a condition may be last, as the fallback. Each `local` entry has `tokens` or `requests`, `unit` (`Hours`, `Minutes`, `Seconds`) and an optional CEL `key`; "when unset, all requests share one bucket". The same description says token counts are known only when a request completes, so a token limit applies to later requests, and that each proxy instance keeps a bounded number of buckets per rule and drops the least used ones. This was read in a locally downloaded copy of that chart, in the schema only, and an independent review read the same file from the Helm cache. Nothing was run; the slice 2 spike must confirm each fact on a cluster.
+- **The gateway's schema allows more.** The file `agentgateway.dev_agentgatewaypolicies.yaml` in the `agentgateway-crds` chart v1.7.0, the version `components/model-gateway/install.sh` pins (the chart pins nothing, and the CRD is not vendored in this repository), has `spec.traffic.rateLimit.conditional`: a list of at most 16 entries, each a CEL `condition` and a `policy` with `local` limits; the first matching entry applies; one entry without a condition may be last, as the fallback. Each `local` entry has `tokens` or `requests`, `unit` (`Hours`, `Minutes`, `Seconds`) and an optional CEL `key`; "when unset, all requests share one bucket". The same description says token counts are known only when a request completes, so a token limit applies to later requests, and that each proxy instance keeps a bounded number of buckets per rule and drops the least used ones. This was read in a locally downloaded copy of that chart, in the schema only, and an independent review read the same file from the Helm cache. The slice 2 spike then applied such a policy to agentgateway v1.7.0 on a cluster; see "Spike results".
 - **The use cases.** Each runs under the one budget. The bank README: "No per-agent budget: the gateway has one token budget number for every key". ADR 0026 section D named this record as the follow-up, "starting with a spike on whether agentgateway v1.7.0 can set a local token limit per key value". ADR 0017 (proposed) leaves a budget per schedule to the `Budget` kind.
 - **Labels decide nothing.** ADR 0012, change 12: anyone who can write an object can set `openagentix.io/team` and `openagentix.io/project`, so they never decide access or billing on their own. A budget must not follow from them.
 
 The problem: a platform team cannot give the bank's dispute agent a smaller budget than the demo assistant, or cap the three agents of one use case together. A runaway agent on a real model spends up to the shared default per hour.
+
+## Spike results (slice 2)
+
+Recorded in `docs/diary/features/adr-0029-gateway-spike.md` (PR #264, branch `test/260-262-adr-spikes`). Runs 46098251670 and 46099570137 of the `e2e` workflow (input `adr_spikes`), on a hosted runner, one kind node, agentgateway v1.7.0, the stub model behind a recording stand-in, no paid call. The spike patched `spec.traffic.rateLimit` of the live policy by hand with four conditional entries (two per-key classes, one shared class, a fallback) and left `apiKeyAuthentication` and `retry` as the chart renders them.
+
+| Question | Answer |
+|---|---|
+| Does a policy expression see a per-key metadata member? | Yes. `apiKey.budget_class == "alpha"` matched; the policy was `Accepted` and `Attached`; each key was refused at its own class limit |
+| A key without the member? | The fallback entry, with its own bucket per key. A class that matches no condition behaved the same. No error, no deny |
+| A class change? | A fresh full bucket the **first** time a key meets a class (the first call was admitted about 2 s after the ConfigMap edit). Moving back to a class the key has used gives no refill: the gateway keeps a bucket per class and key |
+| `per: class` with no `key`? | One bucket for the class: after one key was refused, the other key of the class was refused too |
+| With API key auth and retry in one policy? | Yes. No key or an unknown key: 401. A spent bucket: 429 with `x-ratelimit-limit`, `x-ratelimit-remaining: 0` and `retry-after`, one gateway log line, and no request reached the model, so the policy's retry did not resend a gateway 429 |
+| K parallel calls against a nearly empty bucket? | **All admitted**: 5 of 5, 10 of 10, 20 of 20 (twice) with one call of headroom left. A sequential caller got one. After the bucket was refused, 10 parallel calls got 10 times 429 |
+| Restart and replicas? | A deleted proxy pod came back with full buckets. With two pods, each counted alone (each admitted the full limit when addressed directly) |
+
+Not covered by the spike: the chart render and the admission guard of this record (the policy was patched by hand); retry of an **upstream** 429 together with a conditional limit (the stub never answers 429); how many buckets a replica keeps before it drops the least used; two replicas behind the Service (each pod was addressed directly); a slow or streaming model (the stub answers at once, so real overlap is larger); more than one run of most checks; small limits only (a stub call counts about 74 tokens).
+
+What this means: option C stands, and the fallback to option D is not needed. The limit is real but soft: per replica, emptied on restart, counted after a call, and open to every call already in flight.
+
+### What a budget class is good for, and what it is not
+
+Good for:
+
+- **Stopping a runaway agent within about one burst.** An agent that loops spends its class and then gets 429 on every call until the window refills, without any controller action.
+- **Keeping tenants roughly apart.** One agent cannot spend the hour of another agent or of the default keys.
+- **Making the spend of a use case predictable to within one burst**, per replica.
+
+Not good for:
+
+- **A spend cap.** It is not one. The overshoot is the calls in flight when the bucket runs out, a restart refills every bucket, and N replicas allow N times the class. Money stays out (ADR 0009).
+- **A limit per run or per schedule** (ADR 0012, ADR 0017).
+
+### Can the overshoot be made smaller cheaply?
+
+Only partly. The overshoot is "model calls in flight for this key when the bucket runs out, times the size of a call". One run of an agent is expected to make its model calls one after another (not measured; parallel tool calls inside one run were not looked at), so the calls in flight are roughly the runs of that agent running at the same time. Two cheap brakes exist:
+
+- **Fewer runs at once.** ADR 0027 (proposed) gives event callers a `rate` and a `maxInFlight` at the A2A gate. `rate` bounds how many runs an event caller starts per minute, and that is the brake to reuse. `maxInFlight` does not bound running tasks once the call returns at once (ADR 0027's spike: `returnImmediately` returns in under a second), so it does not help here. A per-agent limit on runs that are running needs the runtime, not the gate; it is left to `AgentRun` (0.4) and queueing (0.5).
+- **A shorter window beside the hourly one.** A class could carry a second, per-minute entry in the same `local` list, so a burst is refused within a minute instead of after the hour's budget is gone. Whether two `local` entries in one conditional policy both apply was **not** tested; it is question 3 below and a check of slice 3.
+
+### Example classes, from measured demand
+
+On a real model (claude-haiku, one run per case, 2026-11-28), one bank run of five cases used about 566,000 to 660,000 tokens and one equipment run about 460,000 to 566,000 (the first real-model runs of #229 on the maintainer's cluster; one run each, not a rate; the figures are not yet in the diary). So the default 1,000,000 tokens per hour per key allows about one full run an hour. Examples the use case values can start from:
+
+| Class | `tokens` per `Hours` | `per` | Meant for |
+|---|---|---|---|
+| `case-agent` | 800000 | `agent` | one case agent: about one five-case run an hour, a loop stopped inside the second run |
+| `case-agents-shared` | 1500000 | `class` | the bank and equipment agents together: one cap for both use cases |
+| `diagnostic-agent` | 300000 | `agent` | the read-only root-cause agent (not measured; a smaller start) |
+| `demo` | 100000 | `agent` | the quick start agent, where a person asks a few questions |
+
+These are starting points, not measured fits. They are read again after a pass-rate run on a real model.
 
 ## Options
 
@@ -104,11 +155,11 @@ A class with `per: class` has one bucket for every key that names it. That is ho
 
 ### Limits, stated plainly
 
-- **Local, per replica.** Each gateway proxy replica counts on its own. Two replicas double the budget. The installs proven so far run one proxy replica; the number is set by the gateway, not by this record.
-- **Lost on restart.** A gateway restart empties the buckets.
-- **Late.** Tokens are counted when a call completes, so the call that crosses the limit is allowed, and the next is refused with 429.
-- **Parallel calls.** Calls in flight are all admitted before their tokens are counted, so K parallel calls can pass a limit by up to K times the largest call. With streaming this is the normal case.
-- **Class changes.** A key that moves to another class, or to and from the fallback, starts with a full bucket. That is why a definition cannot choose its class.
+- **Local, per replica.** Each gateway proxy replica counts on its own (shown with two pods). Two replicas double the budget. The installs proven so far run one proxy replica; the number is set by the gateway, not by this record.
+- **Lost on restart.** A gateway restart empties the counters, so every bucket is full again (shown).
+- **Late.** Tokens are counted when a call completes, so the call that crosses the limit is allowed, and the next is refused with 429 (shown: two calls of 74 tokens passed a limit of 100).
+- **Parallel calls.** Calls in flight are all admitted before their tokens are counted: in the spike 20 of 20 parallel calls passed with one call of headroom left. So K parallel calls can pass a limit by up to K times the largest call. With a slow or streaming model the overlap is larger.
+- **Class changes.** A key that moves to a class it has not used starts with a full bucket; moving back to a class it has used does not refill (shown). That is why a definition cannot choose its class.
 - **Per tenant.** A class for each agent gives every definition its own bucket, so it does not cap a namespace: N definitions in one namespace may spend N times the class.
 - **Soft across restarts and replicas.** With every item of this list, the budget is a soft bound, not a hard limit. The docs say "per key, per gateway replica, refilled on restart".
 - **Bucket eviction.** The CRD says each replica keeps a bounded number of buckets per rule and drops the least used. How many is *unverified*. A dropped bucket starts full again.
@@ -138,7 +189,7 @@ A class with `per: class` has one bucket for every key that names it. That is ho
 Each slice is one pull request, tests first.
 
 1. **This record.** Docs build.
-2. **Spike, on a throwaway kind cluster with its own kubeconfig, stub model, no paid call.** It first applies the rendered policy to the cluster's agentgateway v1.7.0, which confirms the schema facts above on a real API server. Then each question is answered yes or no in the diary, with the requests, the 429 answers and the gateway log as evidence:
+2. **Spike (done, see "Spike results").** On a throwaway kind cluster with its own kubeconfig, stub model, no paid call. It first applies the rendered policy to the cluster's agentgateway v1.7.0, which confirms the schema facts above on a real API server. Then each question is answered yes or no in the diary, with the requests, the 429 answers and the gateway log as evidence:
    - Does CEL see `apiKey.budget_class`?
    - A key **without** the member: fallback, error, deny, or a shared bucket?
    - A key whose class changes: a fresh bucket? (This confirms the reset bypass.)
@@ -146,24 +197,23 @@ Each slice is one pull request, tests first.
    - Restart: buckets full again.
    - `conditional` together with `apiKeyAuthentication` and `retry` in one policy: is a gateway 429 retried by the same policy?
    - Overshoot: 5 calls in parallel against a small limit. How many are admitted?
-   If CEL does not see the member, the record is amended to option D for chart agents, and definitions keep the default.
-3. **Chart and installer.** Values, refusals, the conditional render, the fallback, the annotation, `install.sh` metadata, the guard's optional member. Chart tests: byte-identical default, quick start and full demo renders; one test per refusal; 15 classes render and 16 fail; the guard's rule is unchanged with `byNamespace` and `default` unset. `make test-apiserver`: the rendered policy passes a server-side dry run against the v1.7.0 CRDs.
+   CEL sees the member, so option D is not needed.
+3. **Chart and installer.** Values, refusals, the conditional render, the fallback, the annotation, `install.sh` metadata, the guard's optional member. Chart tests: byte-identical default, quick start and full demo renders; one test per refusal; 15 classes render and 16 fail; the guard's rule is unchanged with `byNamespace` and `default` unset. `make test-apiserver`: the rendered policy passes a server-side dry run against the v1.7.0 CRDs. If question 3 is answered yes: a class with a per-minute entry beside the hourly one, checked live with the stub model (both entries apply).
 4. **Controller.** The class from `byNamespace` or `default`, the entry, `status.budget.class`. Unit tests, guard tests (an entry with a class other than its namespace's is refused; a `per: class` class is refused at render), the field in the console's read-only view.
 5. **Use cases.** The three reference agents get classes in their values (a per-agent class each, one shared class for the bank and equipment agents together as an example). Live proof with the stub model: each agent gets 429 at its own limit; the full demo assistant is unaffected. Diary and `what-works.md` row with the limits above.
 
 ## Not checked / open points
 
-- *Unverified*: everything in slice 2; the number of buckets a replica keeps; whether a `conditional` entry and the existing `retry` and `apiKeyAuthentication` of the same policy work together as the schema suggests.
+- *Unverified*: the number of buckets a replica keeps; retry of an upstream 429 with a conditional limit; two replicas behind the Service; overshoot with a slow or streaming model; two `local` entries in one conditional policy; the chart render and the guard of this record.
 - Read again before quoting: the agentgateway version pinned by the installer and its `rateLimit` fields.
 
 ## Questions for the maintainer
 
-1. **Budget classes now, as the first slice of `Budget`, instead of waiting for the kind?** Recommended: yes. The reference use cases need a cap before a real model runs unattended, and the class maps onto the later kind.
-2. **A new optional field `spec.budget.class` on `AgentDefinition`?** Recommended: not now; with the `Budget` kind. The operator maps a class to each agents namespace instead.
-3. **Shared classes for definitions?** Recommended: no, not until a `Budget` scope can say whose agents share a bucket.
-4. **The default budget stays 1,000,000 tokens per hour per key?** Recommended: yes for compatibility; the docs say "per key, per gateway replica, refilled on restart", and the use case docs recommend a class for any agent on a real model.
-5. **If the spike shows CEL cannot read the metadata: ship option D for chart agents only?** Recommended: yes, and say in the docs that definitions keep the default until an upstream change.
-6. **Money limits.** Recommended: out of this record. They need spend read back from the gateway's metrics and a controller that lowers a limit, which ADR 0009 describes; and any price list is owner-gated.
+1. **Budget classes now, as the first slice of `Budget`, instead of waiting for the kind?** Recommended: yes. The spike shows the gateway does it in the one policy, and the reference use cases need a brake before a real model runs unattended. Docs call it a soft limit, never a spend cap.
+2. **Classes for definitions by namespace only, no spec field?** Recommended: yes. The spike confirmed that a key gets a fresh bucket the first time it meets a class, so a class chosen in a spec could be switched to get more.
+3. **An optional per-minute entry in a class, beside the hourly one, to stop bursts sooner?** Recommended: yes if slice 3 shows that two `local` entries in one conditional policy both apply; otherwise drop it.
+4. **The default budget stays 1,000,000 tokens per hour per key?** Recommended: yes for compatibility. It allows about one full use case run an hour; the use case values set a class.
+5. **Money limits.** Recommended: out of this record. They need spend read back from the gateway's metrics and a controller that lowers a limit, which ADR 0009 describes; and any price list is owner-gated.
 
 ## Review notes
 
