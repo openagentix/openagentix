@@ -92,6 +92,15 @@ OUT=$(FAKE_APPLY_FAIL=1 run tools)
 t "a refused write stops with exit 1" "$(/usr/bin/grep -c '^exit=1$' <<<"$OUT")" 1
 t "and the output holds no value" "$(/usr/bin/grep -c "$CANARY" <<<"$OUT")" 0
 
+echo "# a script that calls /mcp itself (hack/kb-graph-canary.sh, hack/ci/upgrade-test.sh) sends the value of a group"
+hdr() { PATH="$D/bin:$PATH" bash -c '. hack/kb-callers.sh; kb_caller_header kubectl "$@"' _ "$@" 2>&1; }
+rm -rf "$D/state"; mkdir -p "$D/state"; : > "$D/openssl-calls"
+run tools >/dev/null
+t "with the Secret of the group in the tools namespace it prints the whole header" "$(hdr tools mcp-tools)" "Authorization: Bearer ${CANARY}1"
+t "the namespace is mcp-tools unless given" "$(hdr tools)" "Authorization: Bearer ${CANARY}1"
+t "a group with no Secret prints nothing (the mode is off, or the group is not a caller)" "$(hdr nobody mcp-tools)" ""
+t "a cluster that cannot be read prints nothing" "$(FAKE_GET_FAIL=1 hdr tools mcp-tools)" ""
+
 echo "# the refusal to turn enforce off"
 g() { bash -c '. hack/kb-callers.sh; kb_access_guard "$@"; echo "exit=$?"' _ "$@" 2>&1; }
 t "enforce to enforce passes" "$(g enforce enforce "" | /usr/bin/grep -c '^exit=0$')" 1

@@ -65,6 +65,51 @@ kb_callers_ensure() {
   return 0
 }
 
+# kb_callers_restart <kubectl command> <namespace/name>...: restart each vMCP Deployment and wait for it (they hold the value as an environment value)
+kb_callers_restart() {
+  local k=$1 row ns name; shift
+  for row in "$@"; do
+    ns=${row%%/*}; name=${row##*/}
+    $k rollout restart "deployment/$name" -n "$ns" >/dev/null || { echo "ERROR: could not restart $ns/$name" >&2; return 1; }
+    $k rollout status "deployment/$name" -n "$ns" --timeout=180s >/dev/null || { echo "ERROR: $ns/$name did not become Ready after the restart" >&2; return 1; }
+    echo "restarted vMCP $ns/$name (it holds the value of its tool group as an environment value)"
+  done
+}
+
+# kb_callers_verify <kubectl command> <rendered objects, one JSON per line> <knowledge namespace> <1 when a value was repaired, else 0> <group>...
+# For every vMCP of every caller group: restart it when a value was repaired, wait for Ready, then fail when a condition DiscoveredAuthConfig-* is False or when the
+# knowledge base entry of the group is not a ready backend. Needs hack/diagnostics-check.sh (diag_check_vmcps) and hack/endpoints-check.sh (ep_check_backends).
+kb_callers_verify() {
+  local k=$1 rendered=$2 kns=$3 changed=$4 g row vmcps entries kbentry; shift 4
+  type diag_check_vmcps >/dev/null 2>&1 || . hack/diagnostics-check.sh
+  type ep_check_backends >/dev/null 2>&1 || . hack/endpoints-check.sh
+  for g in "$@"; do
+    vmcps=$(jq -r --arg g "$g" 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name==$g)|.metadata.namespace+"/"+.metadata.name' <<<"$rendered")
+    entries=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$rendered")
+    kbentry=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g and ((.spec.headerForward.addHeadersFromSecret[0].valueSecretRef.name//"")=="kb-caller-"+$g))|.metadata.name]|first // ""' <<<"$rendered")
+    if [ "$changed" = 1 ] && [ -n "$vmcps" ]; then
+      # shellcheck disable=SC2086   # one word per vMCP
+      kb_callers_restart "$k" $vmcps || { echo "ERROR: could not restart the vMCPs of the group $g after a value of the knowledge base callers was repaired" >&2; return 1; }
+    fi
+    for row in $vmcps; do
+      $k wait "virtualmcpserver/${row##*/}" -n "${row%%/*}" --for=condition=Ready --timeout=300s || { echo "ERROR: the vMCP ${row##*/} of the group $g is not Ready: $k get virtualmcpserver ${row##*/} -n ${row%%/*} -o yaml" >&2; return 1; }
+      DIAG_CHECK_WHAT="the group $g (knowledge base isolation)" diag_check_vmcps "$k" "${KB_VMCP_SETTLE:-30}" "$(wc -w <<<"$entries" | tr -d ' ')" "$row" || return 1
+      [ -n "$kbentry" ] || continue
+      ep_check_backends "$k" "${KB_VMCP_SETTLE:-60}" "$row" "$kbentry" || { echo "ERROR: a vMCP of the group $g does not list the knowledge base as ready. Its value may be refused: $k logs -n $kns deploy/kb --tail=20 (no value is logged)." >&2; return 1; }
+    done
+  done
+}
+
+# kb_caller_header <kubectl command> <group> [tools namespace]: the whole header "Authorization: Bearer <value>" of a tool group, for a script that calls /mcp itself
+# (hack/kb-graph-canary.sh, hack/ci/upgrade-test.sh) while knowledge.access.mode is set. Prints nothing when the group has no Secret (the mode is off). The caller keeps the
+# header in a shell variable and hands it to curl through a descriptor (curl -K <(printf 'header = "%s"\n' "$H")), never in argv, never printed.
+kb_caller_header() {
+  local k=$1 g=$2 ns=${3:-mcp-tools} v
+  v=$($k get secret -n "$ns" "kb-caller-$g" -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null) || return 0
+  [ -z "$v" ] || printf 'Authorization: %s' "$v"
+  return 0
+}
+
 kb_access_guard() {
   local live=${1:-} new=${2:-} allow=${3:-}
   [ "$live" = enforce ] && [ "$new" != enforce ] || return 0

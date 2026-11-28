@@ -294,13 +294,21 @@ fi
 . hack/kb-callers.sh
 KB_ACCESS_JSON=$(jq -rs '[.[]|select(.kind=="ConfigMap" and .metadata.name=="kb-access")|.data["access.json"]]|first // ""' <<<"$RENDERED")
 KB_ACCESS_MODE=""; [ -z "$KB_ACCESS_JSON" ] || KB_ACCESS_MODE=$(jq -r '.mode' <<<"$KB_ACCESS_JSON")
-if [ "$CLUSTER_UP" = 1 ] && helm status "$RELEASE" -n "$RELEASE_NS" --kube-context "$CTX" >/dev/null 2>&1; then
-  KB_LIVE_MODE=$(helm get values "$RELEASE" -n "$RELEASE_NS" --kube-context "$CTX" -a -o json | jq -r '.knowledge.access.mode // ""') || die "could not read the values of the live release $RELEASE (see above). Nothing was changed."
+KB_PLAN_NS=$(jq -rs '[.[]|select(.kind=="Deployment" and .metadata.name=="kb")|.metadata.namespace]|first // ""' <<<"$RENDERED")
+if [ "$KB_ACCESS_MODE" != enforce ] && [ "$CLUSTER_UP" = 1 ] && [ -n "$KB_PLAN_NS" ]; then
+  # The live mode is what the knowledge base was started with: the ConfigMap kb-access. No such ConfigMap (or no cluster object) means no mode.
+  KB_LIVE_MODE=$($K --context "$CTX" get configmap kb-access -n "$KB_PLAN_NS" -o jsonpath='{.data.access\.json}' 2>/dev/null | jq -r '.mode // ""' 2>/dev/null || true)
   kb_access_guard "$KB_LIVE_MODE" "$KB_ACCESS_MODE" "${ALLOW_KB_ACCESS_OFF:-}" || exit 1
 fi
-# With the mode empty and profiles on two or more tool groups that list the knowledge tools, the chart's NOTES.txt says that nothing isolates them. It is printed
-# here from a client-side dry run, because the notes of a chart are not part of its render. A warning, not a refusal (ADR 0030 section 6).
-helm install "$RELEASE" "$CHART" -n "$RELEASE_NS" --dry-run=client --api-versions agentkourier.dev/v1alpha1 ${VALS[@]+"${VALS[@]}"} 2>/dev/null | sed -n '/^NOTES:/,$p' | /usr/bin/grep '^WARNING: no isolation in the knowledge base' || true
+# With the mode empty and profiles on two or more tool groups that list the knowledge tools, nothing isolates them from each other's collections: a warning, not a
+# refusal (ADR 0030 section 6). The groups are read from what the chart renders: a vMCP whose policy lists a tool of the knowledge entry (named knowledge, or
+# knowledge-<group> on a group of its own). The chart's NOTES.txt prints the same sentence for installs with Helm alone.
+if [ -z "$KB_ACCESS_MODE" ] && [ -n "$KB_PLAN_NS" ]; then
+  KB_LISTING=$(jq -rs '[.[]|select(.kind=="VirtualMCPServer")|select([.spec|..|strings|select(test("Tool::\"knowledge[-a-z0-9]*_kb_"))]|length>0)|.spec.groupRef.name]|unique|join(", ")' <<<"$RENDERED")
+  if [ "$(tr ',' '\n' <<<"$KB_LISTING" | grep -c '[a-z]')" -ge 2 ]; then
+    echo "WARNING: no isolation in the knowledge base. knowledge.access.mode is empty, so every tool group reads every collection, and profiles on the tool groups ($KB_LISTING) list the knowledge tools. Set knowledge.access.mode to \"report\" and then \"enforce\", and list the collections of each group (knowledge.access.sharedGroupCollections, mcp.profiles[].knowledgeCollections). See docs/decisions/0030-knowledge-base-isolation-and-graph-schema.md."
+  fi
+fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
 fi
@@ -1100,30 +1108,14 @@ if [ -n "$EP_ENTRIES" ]; then
   done
 fi
 
-# Knowledge base isolation (ADR 0030): a vMCP of a group that holds a knowledge base entry keeps the entry out of its backends, with the condition
-# DiscoveredAuthConfig-<entry> False or the backend not ready, when the entry's header is refused. Both are read for every vMCP of every caller group, and the install fails.
-# A value that was repaired is held by the vMCP pods as an environment value: they are restarted first (hack/diagnostics-bearer.sh diag_bearer_restart).
+# Knowledge base isolation (ADR 0030): a vMCP of a group that holds a knowledge base entry drops the entry from its backends, with the condition
+# DiscoveredAuthConfig-<entry> False or the backend not ready, when the entry's header is refused. Both are read for every vMCP of every caller group, and the install
+# fails. A value that was repaired is held by the vMCP pods as an environment value: they are restarted first. hack/kb-callers.sh, with the checks of
+# hack/diagnostics-check.sh and hack/endpoints-check.sh.
 if [ -n "$KB_CALLER_GROUPS" ]; then
   log "knowledge base isolation: the vMCPs of the groups that hold a knowledge base entry"
-  # shellcheck source=hack/endpoints-check.sh
-  . hack/endpoints-check.sh   # ep_check_backends
-  # shellcheck source=hack/diagnostics-bearer.sh
-  . hack/diagnostics-bearer.sh   # diag_bearer_restart
-  for g in $KB_CALLER_GROUPS; do
-    KB_G_VMCPS=$(jq -r --arg g "$g" 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name==$g)|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
-    KB_G_ENTRIES=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$RENDERED")
-    KB_G_KB=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g and ((.spec.headerForward.addHeadersFromSecret[0].valueSecretRef.name//"")=="kb-caller-"+$g))|.metadata.name]|first' <<<"$RENDERED")
-    if [ "${KB_CALLERS_CHANGED:-0}" = 1 ] && [ -n "$KB_G_VMCPS" ]; then
-      # shellcheck disable=SC2086   # one word per vMCP
-      diag_bearer_restart "$K" $KB_G_VMCPS || die "could not restart the vMCPs of the group $g after a value of the knowledge base callers was repaired (see above)."
-    fi
-    for row in $KB_G_VMCPS; do
-      $K wait "virtualmcpserver/${row##*/}" -n "${row%%/*}" --for=condition=Ready --timeout=300s || die "the vMCP ${row##*/} of the group $g is not Ready: $K get virtualmcpserver ${row##*/} -n ${row%%/*} -o yaml"
-      DIAG_CHECK_WHAT="the group $g (knowledge base isolation)" diag_check_vmcps "$K" "${KB_VMCP_SETTLE:-30}" "$(wc -w <<<"$KB_G_ENTRIES" | tr -d ' ')" "$row" || die "a vMCP of the group $g dropped a backend (see above)."
-      # shellcheck disable=SC2086   # the knowledge base entry of the group
-      ep_check_backends "$K" "${KB_VMCP_SETTLE:-60}" "$row" $KB_G_KB || die "a vMCP of the group $g does not list the knowledge base as ready (see above). Its value may be refused: $K logs -n ${KB_NS} deploy/kb --tail=20 (no value is logged)."
-    done
-  done
+  # shellcheck disable=SC2086   # one word per group
+  kb_callers_verify "$K" "$RENDERED" "$KB_NS" "${KB_CALLERS_CHANGED:-0}" $KB_CALLER_GROUPS || die "a vMCP of a knowledge base caller group dropped the knowledge base (see above)."
 fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"

@@ -78,6 +78,13 @@ mcp_open() {
   [ -z "$sid" ] || mcp_post "$1" "$2" "$sid" '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
   printf '%s' "${sid:--}"
 }
+# The tool gateways trust the API server's own tokens in this job (hack/ci/kb-access-ci-values.yaml). Every run of install.sh replaces the CA ConfigMap that the
+# values name with the identity provider's bundle, so, as hack/ci/endpoints-live.sh does, the cluster CA is put back after the install, the keys may be read without
+# a login, and the vMCPs are restarted to pick both up. (The first live runs answered "token is unverifiable" and then "JWKS is not ready" without this.)
+$K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-ca '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
+$K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
+for v in tools-alpha tools-beta tools-sharedkb; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in tools-alpha tools-beta tools-sharedkb; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP $v: the restart was not confirmed)"; done
 # one port-forward, token and session per profile
 declare -A PORT SID
 n=0
@@ -89,7 +96,14 @@ done
 sleep 4
 for p in alpha beta sharedkb; do
   SID[$p]=-
-  for _ in $(seq 1 12); do SID[$p]=$(mcp_open "${PORT[$p]}" "$TD/tok-$p"); [ "${SID[$p]}" != - ] && break; sleep 5; done
+  for _ in $(seq 1 6); do SID[$p]=$(mcp_open "${PORT[$p]}" "$TD/tok-$p"); [ "${SID[$p]}" != - ] && break; sleep 5; done
+  if [ "${SID[$p]}" = - ]; then
+    # what the first attempt did, and what the vMCP says: the status and the start of the answer, never a token
+    echo "       no session on $p: the answer to initialize was:"
+    curl -s -i -m 20 -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TD/tok-$p")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"kb-access-live","version":"0"}}}' "http://127.0.0.1:${PORT[$p]}/mcp" 2>&1 | head -c 1800 | sed 's/^/         /'
+    echo
+    $K logs -n "$MCPNS" "deploy/tools-$p" --tail=15 2>&1 | cut -c1-300 | sed 's/^/         vmcp: /'
+  fi
   check "a session on the vMCP of $p" "$([ "${SID[$p]}" != - ] && echo open || echo none)" open
 done
 tool_name() { case "$1" in sharedkb) echo "knowledge_$2";; *) echo "knowledge-$1_$2";; esac; }
@@ -103,13 +117,15 @@ call() {
 LIST_A=$(call alpha kb_list_collections '{}'); LIST_B=$(call beta kb_list_collections '{}'); LIST_S=$(call sharedkb kb_list_collections '{}')
 SEARCH_A=$(call alpha kb_search '{"query":"pelican","top_k":10}'); SEARCH_B=$(call beta kb_search '{"query":"pelican","top_k":10}'); SEARCH_S=$(call sharedkb kb_search '{"query":"pelican","top_k":10}')
 has() { grep -c -F -- "$2" <<<"$1"; }
+# seen <text> <string>: 1 when the text has the string, else 0 (a document shows its marker in its title and in its chunk, so the number of lines is not the point)
+seen() { [ "$(grep -c -F -- "$2" <<<"$1")" -gt 0 ] && echo 1 || echo 0; }
 
 case "$PHASE" in
   off|report)
     echo "# $PHASE: nothing is refused or filtered, as before"
     check "alpha lists all three collections" "$(has "$LIST_A" ci-alpha)/$(has "$LIST_A" ci-beta)/$(has "$LIST_A" ci-shared)" 1/1/1
     check "beta lists all three collections" "$(has "$LIST_B" ci-alpha)/$(has "$LIST_B" ci-beta)/$(has "$LIST_B" ci-shared)" 1/1/1
-    check "a search with no collection by alpha reaches the other group's document (no isolation in this phase)" "$(has "$SEARCH_A" "$MARK_B")" 1
+    check "a search with no collection by alpha reaches the other group's document (no isolation in this phase)" "$(seen "$SEARCH_A" "$MARK_B")" 1
     check "the shared group reads the same" "$(has "$LIST_S" ci-beta)" 1
     ;;
   enforce)
@@ -117,21 +133,21 @@ case "$PHASE" in
     check "alpha lists only ci-alpha" "$(has "$LIST_A" ci-alpha)/$(has "$LIST_A" ci-beta)/$(has "$LIST_A" ci-shared)" 1/0/0
     check "beta lists only ci-beta" "$(has "$LIST_B" ci-alpha)/$(has "$LIST_B" ci-beta)/$(has "$LIST_B" ci-shared)" 0/1/0
     check "the shared tool server lists only ci-shared" "$(has "$LIST_S" ci-alpha)/$(has "$LIST_S" ci-beta)/$(has "$LIST_S" ci-shared)" 0/0/1
-    check "alpha: a search with no collection finds its own document, though beta's ranks better for the query" "$(has "$SEARCH_A" "$MARK_A")/$(has "$SEARCH_A" "$MARK_B")/$(has "$SEARCH_A" "$MARK_S")" 1/0/0
-    check "beta: a search with no collection finds only its document" "$(has "$SEARCH_B" "$MARK_A")/$(has "$SEARCH_B" "$MARK_B")/$(has "$SEARCH_B" "$MARK_S")" 0/1/0
-    check "the shared tool server: a search with no collection finds only its document" "$(has "$SEARCH_S" "$MARK_A")/$(has "$SEARCH_S" "$MARK_B")/$(has "$SEARCH_S" "$MARK_S")" 0/0/1
+    check "alpha: a search with no collection finds its own document, though beta's ranks better for the query" "$(seen "$SEARCH_A" "$MARK_A")/$(seen "$SEARCH_A" "$MARK_B")/$(seen "$SEARCH_A" "$MARK_S")" 1/0/0
+    check "beta: a search with no collection finds only its document" "$(seen "$SEARCH_B" "$MARK_A")/$(seen "$SEARCH_B" "$MARK_B")/$(seen "$SEARCH_B" "$MARK_S")" 0/1/0
+    check "the shared tool server: a search with no collection finds only its document" "$(seen "$SEARCH_S" "$MARK_A")/$(seen "$SEARCH_S" "$MARK_B")/$(seen "$SEARCH_S" "$MARK_S")" 0/0/1
     OUT_A=$(call alpha kb_search '{"query":"pelican","collection":"ci-beta"}'); MISS_A=$(call alpha kb_search '{"query":"pelican","collection":"ci-nowhere"}')
-    check "alpha searching ci-beta gets no result" "$(has "$OUT_A" "$MARK_B")" 0
+    check "alpha searching ci-beta gets no result" "$(seen "$OUT_A" "$MARK_B")" 0
     check "that answer is byte for byte the answer for a collection that does not exist" "$([ "$OUT_A" = "$MISS_A" ] && echo identical || echo different)" identical
     OUT_B=$(call beta kb_search '{"query":"pelican","collection":"ci-alpha"}'); MISS_B=$(call beta kb_search '{"query":"pelican","collection":"ci-nowhere"}')
     check "beta searching ci-alpha: the same, byte for byte" "$([ "$OUT_B" = "$MISS_B" ] && echo identical || echo different)" identical
     GET_OWN=$(call alpha kb_get_document '{"document_id":"note","collection":"ci-alpha"}')
-    check "alpha reads its own document" "$(has "$GET_OWN" "$MARK_A")" 1
+    check "alpha reads its own document" "$(seen "$GET_OWN" "$MARK_A")" 1
     GET_OUT=$(call alpha kb_get_document '{"document_id":"note","collection":"ci-beta"}'); GET_MISS=$(call alpha kb_get_document '{"document_id":"note","collection":"ci-nowhere"}')
-    check "alpha opening beta's document: an error that does not show its text" "$(has "$GET_OUT" "$MARK_B")/$(printf '%s' "$GET_OUT" | grep -c '^ERR')" 0/1
+    check "alpha opening beta's document: an error that does not show its text" "$(seen "$GET_OUT" "$MARK_B")/$(printf '%s' "$GET_OUT" | grep -c '^ERR')" 0/1
     check "that answer is byte for byte the answer for a collection that does not exist" "$([ "$GET_OUT" = "$GET_MISS" ] && echo identical || echo different)" identical
     GET_NOCOLL=$(call alpha kb_get_document '{"document_id":"note"}')
-    check "the same document id exists in all three collections: with no collection alpha gets its own, not 'more than one collection'" "$(has "$GET_NOCOLL" "$MARK_A")/$(has "$GET_NOCOLL" 'more than one')" 1/0
+    check "the same document id exists in all three collections: with no collection alpha gets its own, not 'more than one collection'" "$(seen "$GET_NOCOLL" "$MARK_A")/$(has "$GET_NOCOLL" 'more than one')" 1/0
     ;;
 esac
 
