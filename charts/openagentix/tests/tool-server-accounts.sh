@@ -103,6 +103,11 @@ eq "on: the three objects carry the platform labels" "$(q "$DON" '[.[]|select((.
 eq "on: the rest of the render is unchanged apart from spec.serviceAccount and the nine objects (the render minus them equals the off render)" "$(q "$DON" '[.[]|select(((.kind=="ServiceAccount" or .kind=="Role" or .kind=="RoleBinding") and .metadata.namespace=="mcp-tools")|not)|if .kind=="VirtualMCPServer" then del(.spec.serviceAccount) else . end]|tojson' | shasum -a 256)" "$(q "$DOFF" 'tojson' | shasum -a 256)"
 eq "on: the tool server pods of the render keep outgoingAuth discovered" "$(q "$DON" '[.[]|select(.kind=="VirtualMCPServer")|.spec.outgoingAuth.source]|unique|join(",")')" discovered
 
+echo "# tool server accounts: the -workload variants reach the knowledge base and notify like every other tool server of the group (found by the live run: they stayed not ready)"
+for NP in kb-ingress notify-ingress; do
+  eq "$NP admits every tool server of the render, the -workload variants included" "$(q "$DOFF" ".[]|select(.kind==\"NetworkPolicy\" and .metadata.name==\"$NP\")|[.spec.ingress[].from[]?|.podSelector.matchLabels[\"toolhive-name\"]]|sort|join(\" \")")" "$(q "$DOFF" '[.[]|select(.kind=="VirtualMCPServer")|.metadata.name]|sort|join(" ")')"
+done
+
 echo "# tool server accounts: no Secret value in a ConfigMap of the tools namespace"
 eq "on: the header Secret names are in the entry and in no ConfigMap of the tools namespace" "$(q "$DON" '[.[]|select(.kind=="MCPServerEntry")|.spec.headerForward.addHeadersFromSecret[]?.valueSecretRef.name] as $names
   | [.[]|select(.kind=="ConfigMap" and .metadata.namespace=="mcp-tools")|tojson|select(. as $c|any($names[];. as $n|$c|contains($n)))]|length')" 0

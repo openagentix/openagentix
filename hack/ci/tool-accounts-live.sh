@@ -85,7 +85,7 @@ if [ "$PHASE" = off ]; then
   done
   check "the chart wrote no account of its own (no ServiceAccount openagentix-tools* in $MCPNS)" "$($K get serviceaccount -n "$MCPNS" -o name | grep -c 'openagentix-tools' || true)" 0
   if [ -n "${TA_INSTALL_LOG:-}" ] && [ -f "$TA_INSTALL_LOG" ]; then
-    check "install.sh warned that every tool server can read the header Secrets (names only)" "$(grep -c 'WARNING: mcp.virtual.ownServiceAccounts is false' "$TA_INSTALL_LOG")/$(grep -c 'echo-mcp-auth' "$TA_INSTALL_LOG")" "1/1"
+    check "install.sh warned that every tool server can read the header Secrets (names only; the installer and Helm each print it)" "$(grep -c 'WARNING: mcp.virtual.ownServiceAccounts is false' "$TA_INSTALL_LOG" | awk '{print ($1>=1)?"yes":"no"}')/$(grep -c 'echo-mcp-auth' "$TA_INSTALL_LOG" | awk '{print ($1>=1)?"yes":"no"}')" "yes/yes"
     check "install.sh did not run the account check (the switch is off)" "$(grep -c 'tool server accounts:' "$TA_INSTALL_LOG")" 0
   fi
   all_backends
