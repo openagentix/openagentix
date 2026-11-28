@@ -1,9 +1,11 @@
 # ADR 0027: event triggers, how a system starts an agent run through the A2A gate
 
-Status: Proposed (the slice 2 spike ran; see "Spike results")
+Status: Accepted (2026-11-28)
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/229 (reference use cases)
 Replaces: none. Builds on ADR 0006 (the A2A gate and its caller rules), ADR 0002 (schedules), ADR 0013 (one focus) and ADR 0026 (use case wiring). Gives the first form of the `Trigger` that ADR 0012 reserved, without a new kind. Fits ADR 0016 (`AgentAccess`, proposed, PR #121) and ADR 0017 (`Schedule`, proposed, PR #123). See "Relation to other records".
+
+The 7-day review period was waived by the maintainer on 2026-11-28; an independent review was done and its changes are in this text. This record recommended keeping the 7 days, and the maintainer waived them. The owner's decisions on the open questions are at the end, under "Decisions on the open questions".
 
 A system of record (a case system, a machine fleet service, an alert router) starts an agent run by calling the A2A gate as a caller whose rule has a new, optional `event` block. The block pins the message to one short ASCII text that matches an operator's pattern in a narrow grammar the gate checks (an identifier, never free text). The gate rebuilds the message and its headers itself and never forwards the caller's bytes, asks the runtime to return at once, answers the sender with the task id and state only, limits the rate and the number of open calls per caller, and adds the event id to the audit line. Repeats of one event are left to the runtime, which keeps one run per message id (shown in the spike), and to the system of record. A sender that cannot speak A2A keeps the existing signed webhook path of the channels component. No new resource kind, no new service. Off by default. Nothing here is built. The runtime behaviour it relies on was shown in a spike ("Spike results"); the gate and chart parts are *unverified* until their slices are done.
 
@@ -185,7 +187,7 @@ The result of an event run is what the agent writes in the system of record thro
 
 The gate's audit line gets one field, `event_id`: the `messageId` the caller sent (not the rebuilt one), written only after authentication and only when it passed the shape check (otherwise `invalid`). New reasons: `message_shape`, `rate`, `caller_busy`. No message text. `messageId` must not carry personal data. The trace id is recorded as today, so a sender that sends a `traceparent` can find its run's trace.
 
-The audit table of a records service and the gate line can then be joined on the record id, which the sender puts in `messageId` (the gate does not log the text), and on time. A direct link from a tool call to the run is the subject of ADR 0028 (proposed).
+The audit table of a records service and the gate line can then be joined on the record id, which the sender puts in `messageId` (the gate does not log the text), and on time. A direct link from a tool call to the run is the subject of ADR 0028.
 
 ### Network and authentication
 
@@ -230,7 +232,7 @@ The case system files the dispute through `POST /cases`. The records service wri
 | ADR 0016 (proposed) | In 0.3 `event` stays a chart-only caller option, like `memory` in ADR 0016. Moving it into `AgentAccess` needs its own amendment: the grammar check in the controller, a guard denylist, and a reset of the rate buckets on a live reload. ADR 0016's reserved user ids derive from chart callers, so `event:` fixed ids are protected from overlap there too |
 | ADR 0017 (proposed) | Schedules are the time door, events the system door. They share nothing new. A `Schedule` never sets `event` |
 | ADR 0026 | The records services join through `mcp.endpoints`. This record adds the other direction: the service calls the gate |
-| ADR 0028 (proposed) | Approval stays in the system of record; an event run ends at an approval request there |
+| ADR 0028 | Approval stays in the system of record; an event run ends at an approval request there |
 
 ## Slices
 
@@ -257,14 +259,16 @@ Each slice is one pull request that `Refs #229`, tests first, with a changelog l
 - Run concurrency with `returnImmediately` depends on the runtime. With kagent one task runs per session, and every event is a new session.
 - Read again before quoting: kagent's handling of `returnImmediately` and of repeated message ids in a later version.
 
-## Questions for the maintainer
+## Decisions on the open questions
 
-1. **Is "the system of record is the caller" the rule, with the channels webhook only for senders that cannot speak A2A?** Recommended: yes. It keeps input validation where the domain is and gives every event a Kubernetes identity.
-2. **Should the gate path ever accept free text in an event?** Recommended: no, not in this record. If a use case needs it, a later record adds a data part that the gate wraps as untrusted, with its own review.
-3. **May an event caller also read its task (`GetTask`)?** Recommended: not now. The result belongs in the system of record, and `GetTask` by id needs a check that the task belongs to the caller, which the gate cannot do today.
-4. **Drop the gate's repeat window and rely on the runtime's one run per message id and user id, plus a system of record that is safe to repeat, with a live test of the per-user scope?** Recommended: yes. The spike showed the runtime returns the same task for a repeated id; the window would add only cover for a runtime restart and an audit reason.
-5. **Static keys for event callers?** Recommended: no, ServiceAccount only. The chart cannot express a key for an extra caller today, and a long-lived shared key is what this design avoids.
-6. **The 7-day review window.** Recommended: keep it. This changes who can start runs without a person.
+These were the open questions of the proposed record. The owner decided them on 2026-11-28, taking every recommended answer, as below.
+
+1. **Is "the system of record is the caller" the rule, with the channels webhook only for senders that cannot speak A2A?** Decided, as recommended: yes. It keeps input validation where the domain is and gives every event a Kubernetes identity.
+2. **Should the gate path ever accept free text in an event?** Decided, as recommended: no, not in this record. If a use case needs it, a later record adds a data part that the gate wraps as untrusted, with its own review.
+3. **May an event caller also read its task (`GetTask`)?** Decided, as recommended: not now. The result belongs in the system of record, and `GetTask` by id needs a check that the task belongs to the caller, which the gate cannot do today.
+4. **Drop the gate's repeat window and rely on the runtime's one run per message id and user id, plus a system of record that is safe to repeat, with a live test of the per-user scope?** Decided, as recommended: yes. The spike showed the runtime returns the same task for a repeated id; the window would add only cover for a runtime restart and an audit reason.
+5. **Static keys for event callers?** Decided, as recommended: no, ServiceAccount only. The chart cannot express a key for an extra caller today, and a long-lived shared key is what this design avoids.
+6. **The 7-day review window.** Decided: waived on 2026-11-28.
 
 ## Review notes
 
