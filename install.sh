@@ -283,6 +283,14 @@ fi
 if [ "$CLUSTER_UP" = 1 ]; then
   bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${VALS[@]+"${VALS[@]}"} || exit 1
 fi
+# Tool server accounts (ADR 0031): with mcp.virtual.ownServiceAccounts off, say which header credentials every tool server can read; and refuse to turn it from
+# true to false on a live release (a values file left out of the list would give the reach back) unless ALLOW_TOOL_SECRET_READ=1. hack/tool-accounts-check.sh,
+# tested without a cluster. Read only; before anything is changed.
+# shellcheck source=hack/tool-accounts-check.sh
+. hack/tool-accounts-check.sh
+ta_warn_off <<<"$RENDERED"
+# shellcheck disable=SC2086   # $K is a command, as everywhere in this script
+if [ "$CLUSTER_UP" = 1 ]; then ta_refuse_off $K <<<"$RENDERED" || exit 1; fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
 fi
@@ -1066,6 +1074,33 @@ if [ -n "$EP_ENTRIES" ]; then
       ep_check_backends "$K" "${EP_VMCP_SETTLE:-60}" "$row" $EP_BACKENDS || die "a vMCP of the group $g does not list every backend as ready (see above)."
     done
   done
+fi
+
+# Tool server accounts (ADR 0031, mcp.virtual.ownServiceAccounts): every tool server the chart renders now runs under an account of the chart. The tool server is
+# not asked for its word: as each account, can-i get and list secrets, create pods, statefulsets and deployments must all answer no, and the install fails on a yes,
+# naming the account. A right the Role lacks shows up as a dropped backend, not as a tool server that is not Ready, so every backend of each tool server's group
+# must be ready (the check of ADR 0026 A4). Only then are the operator's old <name>-vmcp objects deleted (nothing runs as them). hack/tool-accounts-check.sh.
+TA_ROWS=$(ta_vmcp_rows <<<"$RENDERED")
+if [ -n "$TA_ROWS" ]; then
+  log "tool server accounts: the tool servers cannot read Secrets"
+  # shellcheck source=hack/endpoints-check.sh
+  . hack/endpoints-check.sh   # ep_check_backends (also sourced above when mcp.endpoints is on)
+  while IFS=$'\t' read -r ta_ns ta_name ta_sa; do
+    ta_wait_running "$K" "$ta_ns" "$ta_name" "$ta_sa" "${TA_SETTLE:-240}" || die "the tool server $ta_name does not run under $ta_sa (see above)."
+    $K wait "virtualmcpserver/$ta_name" -n "$ta_ns" --for=condition=Ready --timeout=300s || die "the tool server $ta_name is not Ready under the account $ta_sa: $K get virtualmcpserver $ta_name -n $ta_ns -o yaml"
+    ta_check_account "$K" "$ta_ns" "$ta_sa" || die "the tool server account $ta_sa has a right it must not have (see above). The operator's old objects were not deleted."
+    ta_grp=$(jq -r --arg n "$ta_name" 'select(.kind=="VirtualMCPServer" and .metadata.name==$n)|.spec.groupRef.name' <<<"$RENDERED")
+    ta_backends=$(jq -rs --arg g "$ta_grp" '[.[]|select((.kind=="MCPServer" or .kind=="MCPServerEntry") and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$RENDERED")
+    if [ -n "$ta_backends" ]; then
+      DIAG_CHECK_WHAT="the group $ta_grp, under the account $ta_sa" diag_check_vmcps "$K" "${TA_SETTLE_CONDITIONS:-30}" 0 "$ta_ns/$ta_name" || die "the tool server $ta_name dropped a backend under the account $ta_sa (see above): a right is missing in its Role."
+      # shellcheck disable=SC2086   # one word per backend
+      ep_check_backends "$K" "${TA_SETTLE_BACKENDS:-90}" "$ta_ns/$ta_name" $ta_backends || die "the tool server $ta_name does not list every backend as ready under the account $ta_sa (see above): a right is missing in its Role."
+    fi
+  done <<<"$TA_ROWS"
+  while IFS=$'\t' read -r ta_ns ta_name ta_sa; do
+    ta_cleanup "$K" "$ta_ns" "$ta_name" "$ta_sa" || die "could not remove the operator's objects of the tool server $ta_name (see above). They stay until deleted; nothing runs as them."
+  done <<<"$TA_ROWS"
+  echo "tool server accounts: $(wc -l <<<"$TA_ROWS" | tr -d ' ') tool server(s) run under accounts of the chart, none can read a Secret or create a pod, the operator's <name>-vmcp objects are removed"
 fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"
