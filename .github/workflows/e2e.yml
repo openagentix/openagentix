@@ -29,6 +29,9 @@ on:
       - hack/ci/kb-access-ci-values.yaml
       - hack/ci/kb-access-report-values.yaml
       - hack/ci/kb-access-enforce-values.yaml
+      - hack/ci/kb-schema-live.sh
+      - hack/ci/kb-schema-ci-values.yaml
+      - hack/kb-graph-schema.sh
       - hack/ci/diagnostics-ci-values.yaml
       - hack/ci/rca-live.sh
       - hack/ci/rca-audit-tools.jq
@@ -1147,6 +1150,20 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/kb-access-live.sh 2>&1 | tee live-enforce.log
+      - name: phase schema, install with the knowledge graph and graph schemas on (mode enforce stays)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/kb-access-ci-values.yaml hack/ci/kb-access-enforce-values.yaml hack/ci/kb-schema-ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install-schema.log
+      - name: phase schema, live check
+        env:
+          KB_SCHEMA: "1"
+        run: |
+          set -o pipefail
+          hack/ci/kb-schema-live.sh 2>&1 | tee live-schema.log
       - name: turning enforce off by leaving the values file out is refused
         env:
           PROFILE: quickstart
@@ -1164,7 +1181,7 @@ jobs:
         run: |
           {
             echo "## Knowledge base isolation on a real cluster (ADR 0030, slice 3)"
-            for p in off report enforce; do
+            for p in off report enforce schema; do
               echo "### phase $p"
               echo '```'
               cat "live-$p.log" 2>/dev/null || echo "the live check of this phase did not run"

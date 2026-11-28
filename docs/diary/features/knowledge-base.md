@@ -95,6 +95,18 @@ By default nothing separates the collections: every tool group reads every one, 
 - **Rotation.** Delete the key from `kb-callers` and the Secret `kb-caller-<group>`, run `install.sh`: it makes a new value, writes both, and restarts the tool servers of the group. Calls of that group get 401 in between.
 - **What it does not stop.** A tool server of another group can read this group's `kb-caller-<group>` Secret through the API and send it, until ADR 0031 is built, so isolation against a compromised tool server is **not** claimed. Two profiles or two agents on one group share one list. Collections are not separated at rest. See `docs/decisions/0030-knowledge-base-isolation-and-graph-schema.md` section 7.
 
+## Graph schema per collection (ADR 0030, off by default)
+
+The graph has nine built-in entity types and any predicate. For a collection whose ids must have a known form (a case id, a part number), an operator can declare a schema, and the knowledge base then refuses facts that do not fit.
+
+- **Turn it on.** `knowledge.kb.graph.schemas.enabled: true` (needs `knowledge.kb.graph.enabled`). It adds one table to the knowledge base schema and the routes below. Off, nothing changes.
+- **Set a schema** before you load the documents of the collection: `hack/kb-graph-schema.sh <collection> <file.yaml>`. The file has `version`, `entityTypes` (name, optional `key` pattern, optional description) and `relationTypes` (name, `from` and `to` lists of entity types). A key must match the whole entity name, in RE2 syntax, case sensitive. The same file again changes nothing; a changed file needs a higher `version`.
+- **What it checks.** A fact set load is refused (422) when an entity's type is not declared or its name does not match the key, or a relation's predicate is not declared or its ends have types the relation does not allow. The answer lists the first 20 violations by place (`entities[3]`) and rule (`type`, `key`, `predicate`, `from`, `to`), and counts the rest. Nothing of a refused fact set is stored. The check runs under the collection's graph lock, in the same transaction as the write.
+- **Changing a schema** is checked against every stored fact set and every extracted fact: a break is refused (409) with the same list. A breaking change goes in steps: add the new type or relation (version n+1), reload the fact sets, remove the old one (version n+2).
+- **Documents.** In a collection with a schema no extraction is queued, so it has curated facts only. The documents are still chunked and searchable. To put a schema on a collection that already has extracted facts, delete its documents, set the schema, and load them again. Deleting a schema keeps the facts, and extraction resumes for documents loaded afterwards.
+- **The agent.** The read tool `kb_graph_schema` shows the schema of a collection the caller may read, or says it has none and the built-in types apply. It follows the same collection filter as the other tools.
+- **Limits.** A key is not checked on aliases. There are no subtypes, no inference and no cardinality. The schema is not an ontology and does not reason over facts. It is not shown to improve answers.
+
 ## Knowledge graph
 
 In progress, design decided: entity/relation extraction at ingest, plain tables in the knowledge base Postgres, recursive SQL, three planned tools `knowledge_kb_graph_search`, `knowledge_kb_graph_entity`, `knowledge_kb_graph_paths`.

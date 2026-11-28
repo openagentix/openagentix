@@ -25,6 +25,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- $pfx := replace "{workload}" .Values.knowledge.mcp.entryName .Values.mcp.virtual.prefixFormat -}}
 {{- $l := list (printf "%skb_search" $pfx) (printf "%skb_get_document" $pfx) (printf "%skb_list_collections" $pfx) -}}
 {{- if .Values.knowledge.kb.graph.enabled }}{{ $l = concat $l (list (printf "%skb_graph_search" $pfx) (printf "%skb_graph_entity" $pfx) (printf "%skb_graph_paths" $pfx)) }}{{ end -}}
+{{- /* ADR 0030: the schema tool comes last, so the positions of the other names do not move */ -}}
+{{- if and .Values.knowledge.kb.graph.enabled ((.Values.knowledge.kb.graph.schemas | default dict).enabled) }}{{ $l = append $l (printf "%skb_graph_schema" $pfx) }}{{ end -}}
 {{- $l | toJson -}}
 {{- end -}}
 

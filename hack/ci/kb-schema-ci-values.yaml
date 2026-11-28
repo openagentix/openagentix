@@ -1,0 +1,10 @@
+# CI ONLY (phase 4 of the live job of the knowledge base isolation, hack/ci/kb-schema-live.sh). On top of hack/ci/kb-access-ci-values.yaml and
+# hack/ci/kb-access-enforce-values.yaml: the knowledge graph and graph schemas are on (ADR 0030, slices 4 and 5). Extraction uses the quick start's stub model
+# alias; the live check never loads a document into a collection that has no schema, so the stub model is not asked to extract anything.
+knowledge:
+  kb:
+    graph:
+      enabled: true
+      extractModel: quickstart-model
+      schemas:
+        enabled: true

@@ -110,5 +110,10 @@ case $code in
        echo "ERROR: http 404: the kb has no fact set route; is the knowledge graph enabled (knowledge.kb.graph.enabled)?" >&2; exit 1 ;;
   401|403) echo "ERROR: http $code: the admin token was refused" >&2; exit 1 ;;
   400|413) echo "ERROR: http $code: $(jq -r '.error // "rejected"' "$RESP" 2>/dev/null || echo rejected)" >&2; exit 1 ;;
+  409|422) # the collection has a graph schema (hack/kb-graph-schema.sh) and the fact set does not fit it: the places and rules of the first violations
+       { echo "ERROR: http $code: the fact set was NOT stored: $(jq -r '.error // "rejected"' "$RESP" 2>/dev/null || echo rejected)"
+         jq -r '(.violations // [])[] | "  \(.at): \(.rule)"' "$RESP" 2>/dev/null || true
+         jq -r 'select((.more // 0) > 0) | "  and \(.more) more"' "$RESP" 2>/dev/null || true; } >&2
+       exit 1 ;;
   *) echo "ERROR: http $code" >&2; exit 1 ;;
 esac

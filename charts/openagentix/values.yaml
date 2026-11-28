@@ -439,6 +439,12 @@ knowledge:
       tokensPerHour: 300000            # sliding hour, counted from the usage the gateway reports
       maxHops: 3                       # longest graph traversal a query may ask for (1..3)
       promptVersion: v2                # stored with every relation; changing it re-extracts all documents on their next ingest (v2: naming rules, entity resolution)
+      # Graph schemas (ADR 0030): an optional schema per collection, set by the operator through the admin API (hack/kb-graph-schema.sh): entity types with a
+      # key pattern, relation types with the entity types allowed at each end. A fact set that does not fit is refused, a collection with a schema gets no
+      # extraction (curated facts only), and the tool kb_graph_schema shows the schema to an agent. OFF by default, and then the render is unchanged. Needs
+      # graph.enabled. Turning it on adds one table to the kb schema.
+      schemas:
+        enabled: false
       # Added to the prompt of agents with `knowledge: true` when the graph is on. {graph_search}, {graph_entity}, {graph_paths}
       # and {get} are replaced with the tool names as the agent sees them.
       agentPrompt: |
