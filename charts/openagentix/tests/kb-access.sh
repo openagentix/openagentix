@@ -35,13 +35,13 @@ mcp:
   profiles:
     - name: disputes
       codeMode: false
-      knowledgeCollections: [fernvale-disputes]
+      knowledgeCollections: [coll-disputes]
       tools:
         records: [get_case]
         knowledge: [kb_search]
     - name: dealer
       codeMode: false
-      knowledgeCollections: [kestrel-service]
+      knowledgeCollections: [coll-dealer]
       tools:
         parts: [get_part]
         knowledge: [kb_search]
@@ -78,8 +78,8 @@ eq "ConfigMap kb-access is in the knowledge namespace" "$(q "$D" '.[]|select(.ki
 eq "access.json: the mode" "$(jq -r '.mode' <<<"$ACC")" enforce
 eq "access.json: one caller per tool group that holds a knowledge entry, sorted by name" "$(jq -r '[.callers[].name]|join(" ")' <<<"$ACC")" "dealer disputes tools"
 eq "access.json: the shared group (mcp.groupName) reads sharedGroupCollections" "$(jq -r '.callers[]|select(.name=="tools")|.collections|join(" ")' <<<"$ACC")" "graph-canary openagentix"
-eq "access.json: a group of its own reads the list of its profile (disputes)" "$(jq -r '.callers[]|select(.name=="disputes")|.collections|join(" ")' <<<"$ACC")" fernvale-disputes
-eq "access.json: a group of its own reads the list of its profile (dealer)" "$(jq -r '.callers[]|select(.name=="dealer")|.collections|join(" ")' <<<"$ACC")" kestrel-service
+eq "access.json: a group of its own reads the list of its profile (disputes)" "$(jq -r '.callers[]|select(.name=="disputes")|.collections|join(" ")' <<<"$ACC")" coll-disputes
+eq "access.json: a group of its own reads the list of its profile (dealer)" "$(jq -r '.callers[]|select(.name=="dealer")|.collections|join(" ")' <<<"$ACC")" coll-dealer
 eq "access.json holds names and lists only: its keys" "$(jq -c '[keys, (.callers|map(keys)|unique)]' <<<"$ACC")" '[["callers","mode"],[["collections","name"]]]'
 KBD='.[]|select(.kind=="Deployment" and .metadata.name=="kb")'
 KBC="$KBD|.spec.template.spec"
@@ -140,7 +140,7 @@ kv '.mcp.profiles += [{"name":"disputes2","codeMode":false,"knowledgeCollections
 kr "two profiles on one tool group with different lists are refused" 'are on the tool group "disputes" but list different knowledgeCollections' -f "$KX2"
 kv '.mcp.profiles += [{"name":"disputes2","codeMode":false,"tools":{"records":["get_case"],"knowledge":["kb_search"]}}]'
 kr "a second profile on the group that lists the tools and has no list differs from a group list: refused" 'but list different knowledgeCollections' -f "$KX2"
-kv '.mcp.profiles += [{"name":"disputes2","codeMode":false,"knowledgeCollections":["fernvale-disputes"],"tools":{"records":["get_case"],"knowledge":["kb_search"]}}]'
+kv '.mcp.profiles += [{"name":"disputes2","codeMode":false,"knowledgeCollections":["coll-disputes"],"tools":{"records":["get_case"],"knowledge":["kb_search"]}}]'
 eq "two profiles on one group with the same list render" "$([ -z "$(render_err -f "$KX2")" ] && echo rendered || echo failed)" rendered
 kv '.knowledge.access.sharedGroupCollections=[]'
 kr "enforce: a profile on the shared group lists the tools and the shared list is empty: refused, names sharedGroupCollections" 'its tool group "tools" may read no collection. Set knowledge.access.sharedGroupCollections.' -f "$KX2"

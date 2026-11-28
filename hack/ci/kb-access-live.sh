@@ -117,13 +117,15 @@ call() {
 LIST_A=$(call alpha kb_list_collections '{}'); LIST_B=$(call beta kb_list_collections '{}'); LIST_S=$(call sharedkb kb_list_collections '{}')
 SEARCH_A=$(call alpha kb_search '{"query":"pelican","top_k":10}'); SEARCH_B=$(call beta kb_search '{"query":"pelican","top_k":10}'); SEARCH_S=$(call sharedkb kb_search '{"query":"pelican","top_k":10}')
 has() { grep -c -F -- "$2" <<<"$1"; }
+# seen <text> <string>: 1 when the text has the string, else 0 (a document shows its marker in its title and in its chunk, so the number of lines is not the point)
+seen() { [ "$(grep -c -F -- "$2" <<<"$1")" -gt 0 ] && echo 1 || echo 0; }
 
 case "$PHASE" in
   off|report)
     echo "# $PHASE: nothing is refused or filtered, as before"
     check "alpha lists all three collections" "$(has "$LIST_A" ci-alpha)/$(has "$LIST_A" ci-beta)/$(has "$LIST_A" ci-shared)" 1/1/1
     check "beta lists all three collections" "$(has "$LIST_B" ci-alpha)/$(has "$LIST_B" ci-beta)/$(has "$LIST_B" ci-shared)" 1/1/1
-    check "a search with no collection by alpha reaches the other group's document (no isolation in this phase)" "$(has "$SEARCH_A" "$MARK_B")" 1
+    check "a search with no collection by alpha reaches the other group's document (no isolation in this phase)" "$(seen "$SEARCH_A" "$MARK_B")" 1
     check "the shared group reads the same" "$(has "$LIST_S" ci-beta)" 1
     ;;
   enforce)
@@ -131,21 +133,21 @@ case "$PHASE" in
     check "alpha lists only ci-alpha" "$(has "$LIST_A" ci-alpha)/$(has "$LIST_A" ci-beta)/$(has "$LIST_A" ci-shared)" 1/0/0
     check "beta lists only ci-beta" "$(has "$LIST_B" ci-alpha)/$(has "$LIST_B" ci-beta)/$(has "$LIST_B" ci-shared)" 0/1/0
     check "the shared tool server lists only ci-shared" "$(has "$LIST_S" ci-alpha)/$(has "$LIST_S" ci-beta)/$(has "$LIST_S" ci-shared)" 0/0/1
-    check "alpha: a search with no collection finds its own document, though beta's ranks better for the query" "$(has "$SEARCH_A" "$MARK_A")/$(has "$SEARCH_A" "$MARK_B")/$(has "$SEARCH_A" "$MARK_S")" 1/0/0
-    check "beta: a search with no collection finds only its document" "$(has "$SEARCH_B" "$MARK_A")/$(has "$SEARCH_B" "$MARK_B")/$(has "$SEARCH_B" "$MARK_S")" 0/1/0
-    check "the shared tool server: a search with no collection finds only its document" "$(has "$SEARCH_S" "$MARK_A")/$(has "$SEARCH_S" "$MARK_B")/$(has "$SEARCH_S" "$MARK_S")" 0/0/1
+    check "alpha: a search with no collection finds its own document, though beta's ranks better for the query" "$(seen "$SEARCH_A" "$MARK_A")/$(seen "$SEARCH_A" "$MARK_B")/$(seen "$SEARCH_A" "$MARK_S")" 1/0/0
+    check "beta: a search with no collection finds only its document" "$(seen "$SEARCH_B" "$MARK_A")/$(seen "$SEARCH_B" "$MARK_B")/$(seen "$SEARCH_B" "$MARK_S")" 0/1/0
+    check "the shared tool server: a search with no collection finds only its document" "$(seen "$SEARCH_S" "$MARK_A")/$(seen "$SEARCH_S" "$MARK_B")/$(seen "$SEARCH_S" "$MARK_S")" 0/0/1
     OUT_A=$(call alpha kb_search '{"query":"pelican","collection":"ci-beta"}'); MISS_A=$(call alpha kb_search '{"query":"pelican","collection":"ci-nowhere"}')
-    check "alpha searching ci-beta gets no result" "$(has "$OUT_A" "$MARK_B")" 0
+    check "alpha searching ci-beta gets no result" "$(seen "$OUT_A" "$MARK_B")" 0
     check "that answer is byte for byte the answer for a collection that does not exist" "$([ "$OUT_A" = "$MISS_A" ] && echo identical || echo different)" identical
     OUT_B=$(call beta kb_search '{"query":"pelican","collection":"ci-alpha"}'); MISS_B=$(call beta kb_search '{"query":"pelican","collection":"ci-nowhere"}')
     check "beta searching ci-alpha: the same, byte for byte" "$([ "$OUT_B" = "$MISS_B" ] && echo identical || echo different)" identical
     GET_OWN=$(call alpha kb_get_document '{"document_id":"note","collection":"ci-alpha"}')
-    check "alpha reads its own document" "$(has "$GET_OWN" "$MARK_A")" 1
+    check "alpha reads its own document" "$(seen "$GET_OWN" "$MARK_A")" 1
     GET_OUT=$(call alpha kb_get_document '{"document_id":"note","collection":"ci-beta"}'); GET_MISS=$(call alpha kb_get_document '{"document_id":"note","collection":"ci-nowhere"}')
-    check "alpha opening beta's document: an error that does not show its text" "$(has "$GET_OUT" "$MARK_B")/$(printf '%s' "$GET_OUT" | grep -c '^ERR')" 0/1
+    check "alpha opening beta's document: an error that does not show its text" "$(seen "$GET_OUT" "$MARK_B")/$(printf '%s' "$GET_OUT" | grep -c '^ERR')" 0/1
     check "that answer is byte for byte the answer for a collection that does not exist" "$([ "$GET_OUT" = "$GET_MISS" ] && echo identical || echo different)" identical
     GET_NOCOLL=$(call alpha kb_get_document '{"document_id":"note"}')
-    check "the same document id exists in all three collections: with no collection alpha gets its own, not 'more than one collection'" "$(has "$GET_NOCOLL" "$MARK_A")/$(has "$GET_NOCOLL" 'more than one')" 1/0
+    check "the same document id exists in all three collections: with no collection alpha gets its own, not 'more than one collection'" "$(seen "$GET_NOCOLL" "$MARK_A")/$(has "$GET_NOCOLL" 'more than one')" 1/0
     ;;
 esac
 

@@ -1108,30 +1108,14 @@ if [ -n "$EP_ENTRIES" ]; then
   done
 fi
 
-# Knowledge base isolation (ADR 0030): a vMCP of a group that holds a knowledge base entry keeps the entry out of its backends, with the condition
-# DiscoveredAuthConfig-<entry> False or the backend not ready, when the entry's header is refused. Both are read for every vMCP of every caller group, and the install fails.
-# A value that was repaired is held by the vMCP pods as an environment value: they are restarted first (hack/diagnostics-bearer.sh diag_bearer_restart).
+# Knowledge base isolation (ADR 0030): a vMCP of a group that holds a knowledge base entry drops the entry from its backends, with the condition
+# DiscoveredAuthConfig-<entry> False or the backend not ready, when the entry's header is refused. Both are read for every vMCP of every caller group, and the install
+# fails. A value that was repaired is held by the vMCP pods as an environment value: they are restarted first. hack/kb-callers.sh, with the checks of
+# hack/diagnostics-check.sh and hack/endpoints-check.sh.
 if [ -n "$KB_CALLER_GROUPS" ]; then
   log "knowledge base isolation: the vMCPs of the groups that hold a knowledge base entry"
-  # shellcheck source=hack/endpoints-check.sh
-  . hack/endpoints-check.sh   # ep_check_backends
-  # shellcheck source=hack/diagnostics-bearer.sh
-  . hack/diagnostics-bearer.sh   # diag_bearer_restart
-  for g in $KB_CALLER_GROUPS; do
-    KB_G_VMCPS=$(jq -r --arg g "$g" 'select(.kind=="VirtualMCPServer" and .spec.groupRef.name==$g)|.metadata.namespace+"/"+.metadata.name' <<<"$RENDERED")
-    KB_G_ENTRIES=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$RENDERED")
-    KB_G_KB=$(jq -rs --arg g "$g" '[.[]|select(.kind=="MCPServerEntry" and .spec.groupRef.name==$g and ((.spec.headerForward.addHeadersFromSecret[0].valueSecretRef.name//"")=="kb-caller-"+$g))|.metadata.name]|first' <<<"$RENDERED")
-    if [ "${KB_CALLERS_CHANGED:-0}" = 1 ] && [ -n "$KB_G_VMCPS" ]; then
-      # shellcheck disable=SC2086   # one word per vMCP
-      diag_bearer_restart "$K" $KB_G_VMCPS || die "could not restart the vMCPs of the group $g after a value of the knowledge base callers was repaired (see above)."
-    fi
-    for row in $KB_G_VMCPS; do
-      $K wait "virtualmcpserver/${row##*/}" -n "${row%%/*}" --for=condition=Ready --timeout=300s || die "the vMCP ${row##*/} of the group $g is not Ready: $K get virtualmcpserver ${row##*/} -n ${row%%/*} -o yaml"
-      DIAG_CHECK_WHAT="the group $g (knowledge base isolation)" diag_check_vmcps "$K" "${KB_VMCP_SETTLE:-30}" "$(wc -w <<<"$KB_G_ENTRIES" | tr -d ' ')" "$row" || die "a vMCP of the group $g dropped a backend (see above)."
-      # shellcheck disable=SC2086   # the knowledge base entry of the group
-      ep_check_backends "$K" "${KB_VMCP_SETTLE:-60}" "$row" $KB_G_KB || die "a vMCP of the group $g does not list the knowledge base as ready (see above). Its value may be refused: $K logs -n ${KB_NS} deploy/kb --tail=20 (no value is logged)."
-    done
-  done
+  # shellcheck disable=SC2086   # one word per group
+  kb_callers_verify "$K" "$RENDERED" "$KB_NS" "${KB_CALLERS_CHANGED:-0}" $KB_CALLER_GROUPS || die "a vMCP of a knowledge base caller group dropped the knowledge base (see above)."
 fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"
