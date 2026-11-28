@@ -157,7 +157,10 @@ mcp_open() {
   [ -z "$sid" ] || mcp_post "$1" "$2" "$sid" '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
   printf '%s' "${sid:--}"
 }
-# the tool gateway reads the trust of the API server's tokens when it starts: restart it once after the install, as hack/ci/endpoints-live.sh does
+# install.sh replaces the CA ConfigMap that the values name on every run: put the cluster CA back, allow the keys to be read without a login, and restart the tool
+# gateway to pick both up, as hack/ci/endpoints-live.sh does
+$K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-ca '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
+$K create clusterrolebinding ci-jwks-anonymous --clusterrole=system:service-account-issuer-discovery --group=system:unauthenticated --dry-run=client -o yaml | $K apply -f - >/dev/null
 $K rollout restart deployment/tools-alpha -n "$MCPNS" >/dev/null 2>&1
 $K rollout status deployment/tools-alpha -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP tools-alpha: the restart was not confirmed)"
 GPORT=$((30000 + RANDOM % 5000))
