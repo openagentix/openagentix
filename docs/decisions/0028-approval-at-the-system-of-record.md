@@ -1,11 +1,11 @@
-# ADR 0028: approval stays in the system of record; the platform gives a result contract and a trace link
+# ADR 0028: approval stays in the system of record; the platform gives a result convention and a trace link
 
 Status: Proposed
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/12 (`ApprovalRequest`), reference use cases #229
 Replaces: none. Changes the plan for `ApprovalRequest` in ADR 0012 ("Reserved") and ADR 0013 (release 0.4): the kind stays reserved, and the part "created by the controller when a run reaches a tool that needs approval" is deferred with the conditions in "When the platform kind comes back". See "Relation to other records".
 
-The act that needs a person's approval (a credit, a parts order, a claim) is approved in the system that owns the record, as the reference use cases already do. The platform does not hold tool calls. It gives three small things: a documented shape for the approval a tool returns (`approval` with `id`, `status`, `payload_sha256` and a few more), the rules a system of record follows to be a safe approval point, and a trace link from an approval to the run that asked for it, if the tool server forwards the trace context. Nothing here is built. Everything is *unverified* until the slices below are done.
+The act that needs a person's approval (a credit, a parts order, a claim) is approved in the system that owns the record, as the reference use cases already do. The platform does not hold tool calls. It gives three small things: a versioned convention for the approval a tool returns (`approval` with `id`, `status`, `payload_hash` and a few more, with a JSON Schema and a test), the rules a system of record follows to be a safe approval point, and a trace link from an approval to the run that asked for it, if the tool server forwards the trace context. Nothing here is built. Everything is *unverified* until the slices below are done.
 
 ## Context
 
@@ -15,7 +15,7 @@ Read in `examples/use-cases/records/internal/core/approvals.go` and `auth.go` on
 
 | Rule | How the records service does it |
 |---|---|
-| The approver reads what the record says, not what the model wrote | `Hooks.Describe` builds the payload (JSON text) from the record and returns the record's version. The queue stores the text, its SHA-256 and the version |
+| The record, not the model, checks the act (window, coverage, stock, amount bound) | `Hooks.Describe` builds the payload (JSON text) from the record and returns the record's version. The queue stores the text, its SHA-256 and the version |
 | The approver approves what they saw | `Approve` takes the hash the approver sends; it must equal the stored hash |
 | Nothing changed since | At decision time `Describe` runs again; a different version or hash refuses the decision ("the record changed after this was proposed") |
 | A change cancels the request | `SupersedePending` marks the pending request `superseded` in the same transaction as any write that changes what the approver was shown |
@@ -25,6 +25,8 @@ Read in `examples/use-cases/records/internal/core/approvals.go` and `auth.go` on
 | Decision and act together | The status change is a conditional update in the same transaction as `Execute` (or `Reject`) |
 | No tool decides | The decision routes are REST on the pod's loopback; no MCP tool approves or rejects |
 | The approver is named | Bearer tokens checked in constant time against SHA-256 hashes in a file, each with an id and a role |
+
+The payload the approver reads also holds text the agent wrote: the route reason and the drafts (letter, filing) in the bank (`records/internal/bank/service.go`), the diagnosis, its cause, the work order and the drafts (order, claim) in equipment (`records/internal/equipment/service.go`). The agent also chooses the amount within the record's bounds. So the defence against a draft with injected text aimed at the approver is the approver's own reading, not the platform.
 
 What the first real-model run showed (`examples/use-cases/bank/README.md`, "The first real-model run"): in case 0005 the agent requested approval and then retried a write. The write superseded the request, and the answer still said the request was pending. The fix put a notice in the write's result and told the agent to read `get_approval` before reporting. The evaluation set cannot say "when the answer says pending, the state must be pending" as one rule.
 
@@ -60,14 +62,16 @@ General practice, stated without naming products because none were checked for t
 |---|---|---|---|
 | A. `ApprovalRequest` kind, created by the controller when a run reaches a tool marked for approval; the tool server holds the call | One place for every approval; RBAC separates requester and approver | Points 1 to 6 above; needs `AgentRun`, durable waits, a store of held arguments, a release path with the backend credential, and a hold feature ToolHive does not have | `approvals.go`, ADR 0012, ADR 0025 Amendment 1, ADR 0026 |
 | B. Approval in the system of record, nothing from the platform | Nothing to build; matches what was built | Every builder invents the result shape; evaluation and the console cannot read approvals in one way; nothing links an approval to its run | The three use cases |
-| C. B, plus a result contract, a rule list and a trace link | Small; works with any runtime and any tool server; evaluation, the console and a later `AgentRun` can read one shape; the approver still sees the record's truth | One public contract (the JSON member names of the result); one doc to keep true; the trace link depends on an upstream fact that is *unverified* | This record |
+| C. B, plus a result convention, a rule list and a trace link | Small; works with any runtime and any tool server; evaluation, the console and a later `AgentRun` can read one shape; the record, not the model, checks the act at decision time | One versioned convention (the JSON member names of the result) with a schema and a test; one doc to keep true; the trace link depends on an upstream fact that is *unverified* | This record |
 | D. MCP elicitation: the tool server asks the user mid-call | In the protocol | A person must be in the conversation; the runtime and vMCP support is *unverified*; still a hold with points 3 and 5 | Not tried |
 
 ## Decision
 
 Option C. Approval stays in the system of record. The platform owns the three parts below and nothing more in this record.
 
-### 1. The approval result (a public contract)
+### 1. The approval result (a versioned convention, v1alpha1)
+
+A JSON Schema of these members is in `docs/diary/guide/`, and the records services are tested against it. It becomes a platform contract in the record that adds the first platform reader (a console page or `AgentRun`); until then nothing in the platform reads it, so a contract could not be tested for compatibility.
 
 A tool that asks for an approval, reads one, or changes a record in a way that cancels one returns these members in the JSON object of its result (the MCP `structuredContent`, and the same JSON as its text content):
 
@@ -78,7 +82,7 @@ A tool that asks for an approval, reads one, or changes a record in a way that c
     "status": "pending",
     "subject": "SVC-2026-0007",
     "kind": "parts_order_with_claim",
-    "payload_sha256": "3f1c...e9",
+    "payload_hash": "3f1c...e9",
     "proposed_by": "agent",
     "decided_by": "",
     "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -91,15 +95,15 @@ A tool that asks for an approval, reads one, or changes a record in a way that c
 |---|---|
 | `approval` | Present in the result of a tool that creates or reads one request. Absent otherwise |
 | `approval.id` | Opaque to the platform, 1 to 64 characters from `A-Z a-z 0-9 . _ : -` |
-| `approval.status` | Exactly one of `pending`, `approved`, `rejected`, `superseded`, `expired`. Only `pending` waits for a person |
+| `approval.status` | Exactly one of `pending`, `approved`, `rejected`, `superseded`, or `expired` for a record that expires requests (the reference records service does not). Only `pending` waits for a person |
 | `approval.subject` | The record the act is about, in the same alphabet, 1 to 64 characters |
 | `approval.kind` | The kind of act, lower case, digits and `_`, 1 to 64 characters |
-| `approval.payload_sha256` | 64 lower-case hex characters: the SHA-256 of the exact payload text the approver reads |
+| `approval.payload_hash` | 64 lower-case hex characters: the SHA-256 of the exact payload text the approver reads. The name stays as the records services, their REST decision body, `ctl.sh` and the evaluation files use it |
 | `approval.proposed_by`, `approval.decided_by` | Opaque ids from the record's own authentication. `decided_by` is empty until a decision. The platform never treats them as verified people |
 | `approval.trace_id` | The W3C trace id (32 lower-case hex) of the call that proposed it, or `unknown` when the record did not receive one |
 | `superseded_approvals` | Present in the result of a write that superseded one or more pending requests: their ids. An agent that sees it must not report those requests as pending |
 
-Text written by people stays outside these members or under names that start with `untrusted_`, as the records services do. The contract carries no payload text and no amount: those are the record's business and the approver reads them in the record.
+Text written by people stays outside these members or under names that start with `untrusted_`, as the records services do. The convention carries no payload text and no amount: those are the record's business and the approver reads them in the record.
 
 The names use the snake case of the existing tool results. The platform reads only these members; a tool may return more.
 
@@ -132,12 +136,17 @@ This is a change of the evaluation file format, not of a resource.
 Docs, the README, the diary and talks say "the reference use cases stop at an approval request in their system of record". They must not say:
 
 - that OpenAgentix has human approval, approval gates, or holds tool calls for approval;
-- that an approver is a verified person (in the examples, an approver is whoever holds a token from a Secret);
+- that an approver is a verified person (an approver is whoever holds, or can read from a Secret, a token);
 - that separation of duties holds beyond what the record enforces;
 - that the approver saw everything that matters (in the bank, gap items the agent writes are not in the hashed payload);
 - that an agent cannot act without approval in general (only that the tools of these profiles cannot perform the act; an endpoint with a write tool and no approval is the builder's risk, ADR 0026 A8);
 - that the approval audit is complete or tamper-evident;
-- that `status.capabilities.approvals` is true for any runtime because of this record.
+- that `status.capabilities.approvals` is true for any runtime because of this record;
+- that the approver reads only the record's own facts (the payload holds drafts and reasons the agent wrote, which may carry injected text aimed at the approver);
+- that a matching `payload_hash` shows a person read the payload (it shows only that the approver's client fetched the same text);
+- that requests expire or are time-bound (the examples have no expiry; a pending request waits until someone decides it);
+- that `trace_id` proves which run or which caller proposed (the caller of the gate chooses the trace id, so it is a lookup hint, not evidence);
+- that every write of an agent waits for approval (in equipment, `create_work_order`, `open_proactive_case`, `set_diagnosis` and `set_timer` write without one).
 
 ### When the platform kind comes back
 
@@ -154,7 +163,7 @@ Docs, the README, the diary and talks say "the reference use cases stop at an ap
 - Ruled out for now: a platform hold on tool calls; a controller-created `ApprovalRequest`; approval of acts whose backend has no approval of its own (use propose-then-review instead).
 - Harder: every builder of a system of record must implement the queue. The records service is the copyable reference, under Apache-2.0 in this repository.
 - Security impact: none at runtime. The platform enforces nothing new. The record gets the trace id of the proposing call, which is an id, not content. The claims list narrows what the docs may say.
-- Compatibility: the records services rename `payload_hash` to `payload_sha256` and add `superseded_approvals` and `trace_id` (example code, slice 2). No platform user changes anything.
+- Compatibility: the records services keep `payload_hash` (SHA-256) and add `superseded_approvals` and `trace_id` (example code, slice 2). No platform user changes anything.
 
 ## Relation to other records
 
@@ -170,10 +179,10 @@ Docs, the README, the diary and talks say "the reference use cases stop at an ap
 
 Each slice is one pull request, tests first.
 
-1. **This record.** Docs build. Issue #12 re-scoped in its text.
-2. **The guide and the reference.** `docs/diary/guide/approval-at-the-system-of-record.md` with the contract and the rules; the records services return the members of section 1 (`payload_sha256`, `superseded_approvals`, `trace_id` as `unknown` until slice 3); a test per member and per status; the bank and equipment tool descriptions and prompts use the members; the claims list goes into the README section on use cases.
-3. **Spike: does the vMCP forward `traceparent` to an endpoint?** On a throwaway kind cluster with its own kubeconfig: an echo endpoint behind `mcp.endpoints` logs whether a `traceparent` arrived and whether its trace id equals the gate's. If yes, the records service stores it with the proposal (example code) and `hack/trace-turn.sh` gains a lookup by approval id. If no, the diary says so and the field stays `unknown`.
-4. **`oa-eval` `when_answer`.** Unit tests (matches, does not match, bad pattern refused with exit 2); the bank case 0005 gets the rule; replay tests in `examples/use-cases/records/replay` show it fails for the answer of the real-model defect.
+1. **This record.** Docs build. Issue #12 re-scoped in its text. `docs/roadmap.md` (the 0.4 row and the Safety row), ADR 0013 (the focus line and the 0.4 row, by a dated amendment note) and `docs/diary/reference/reserved-kinds.md` are changed in the same pull request.
+2. **The guide and the reference.** `docs/diary/guide/approval-at-the-system-of-record.md` with the convention and the rules; the JSON Schema of section 1; the records services return its members (`payload_hash` kept, `superseded_approvals`, `trace_id` as `unknown` until slice 3) and are tested against the schema; a test per member and per status; the bank and equipment tool descriptions and prompts use the members; the claims list goes into the README section on use cases.
+3. **Spike: does the vMCP forward `traceparent` to an endpoint?** On a throwaway kind cluster with its own kubeconfig: an echo endpoint behind `mcp.endpoints` logs whether a `traceparent` arrived and whether its trace id equals the gate's. If yes, the records service stores it with the proposal (example code) and `hack/trace-turn.sh` gains a lookup by approval id. If no, the diary says so and the field stays `unknown`. The same spike checks whether kagent puts a tool's `structuredContent` or its text content in front of the model, which decides where the members must be.
+4. **`oa-eval` `when_answer`.** Unit tests (matches, does not match, bad pattern refused with exit 2); the bank case 0005 gets the rule; replay tests in `examples/use-cases/records/replay` show it fails for the answer of the real-model defect; a test that an answer saying "no longer pending approval" is handled as intended (the pattern is a regular expression over free text).
 
 ## Not checked / open points
 
@@ -183,9 +192,13 @@ Each slice is one pull request, tests first.
 
 ## Questions for the maintainer
 
-1. **Is approval in the system of record the platform's answer for 0.4, with `ApprovalRequest` deferred under the four conditions?** Recommended: yes. A gateway hold would show the approver the model's arguments, not the record's truth, and needs runs, durable waits and approver identity that do not exist.
+1. **Is approval in the system of record the platform's answer for 0.4, with `ApprovalRequest` deferred under the four conditions?** Recommended: yes. A gateway hold would show the approver only the model's arguments, not the record's truth, and needs runs, durable waits and approver identity that do not exist.
 2. **Re-scope issue #12 to this record, or close it and open a new one later?** Recommended: re-scope it, keep the reserved name, and list the four conditions in the issue.
-3. **Make the result shape a platform contract now, with only example code using it?** Recommended: yes. The names are cheap to fix now and expensive once a console page and `AgentRun` read them.
+3. **Make the result shape a platform contract now, with only example code using it?** Recommended: no. A versioned convention (v1alpha1) with a JSON Schema and a test now; a platform contract in the record that adds the first platform reader.
 4. **Does a "stops at an approval" claim need a security review of the system of record?** Recommended: yes, an independent review of the approval routes before a use case's docs say it.
-5. **The software organisation's acting agents (wave 2 of #229)**: approval at a record, or propose a change for review in Git? Recommended: propose in Git (a pull request to a GitOps repository) with the forge's review as the approval point, per ADR 0012.
+5. **The software organisation's acting agents (wave 2 of #229)**: approval at a record, or propose a change for review in Git? Recommended: propose in Git (a pull request to a GitOps repository) with the forge's review as the approval point, per ADR 0012. The agent's Git identity can neither approve nor merge; branch protection requires a review by another identity.
 6. **Review window.** Recommended: 7 days. It changes a release promise of ADR 0013.
+
+## Review notes
+
+An independent review (2026-11-28) found one false sentence in Context (the approver's payload does hold agent-written text), five missing items in the claims list, release promises in the roadmap and ADR 0013 that had to change in the same pull request, and a result shape with no platform reader that should be a versioned convention, not a contract. This text takes all of it. Of the two choices it offered for the hash member, this record keeps the name `payload_hash` (documented as SHA-256) rather than renaming it, because the rename would touch the approver's REST body, `ctl.sh` and the evaluation files for no gain.
