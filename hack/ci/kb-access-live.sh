@@ -78,6 +78,10 @@ mcp_open() {
   [ -z "$sid" ] || mcp_post "$1" "$2" "$sid" '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
   printf '%s' "${sid:--}"
 }
+# The tool gateways read the trust of the API server's tokens (hack/ci/kb-access-ci-setup.sh) when they start, and the first live run showed that a vMCP
+# started during the install answers "token is unverifiable". Restarting them once after the install, as hack/ci/endpoints-live.sh does, settles it.
+for v in tools-alpha tools-beta tools-sharedkb; do $K rollout restart "deployment/$v" -n "$MCPNS" >/dev/null 2>&1; done
+for v in tools-alpha tools-beta tools-sharedkb; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP $v: the restart was not confirmed)"; done
 # one port-forward, token and session per profile
 declare -A PORT SID
 n=0
