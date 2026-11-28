@@ -44,7 +44,7 @@ The chart refuses what the gate would refuse and more: unknown keys in any calle
 | Rate and open calls | Go tests with a fake clock (burst, refill, `Retry-After`, a refusal counts for the rate), open calls released when the client goes away, and a test that states that a new gate starts with full buckets |
 | The chart refuses what the ADR lists | 94 shell checks over `helm template` in `charts/openagentix/tests/run.sh` |
 | The runtime keeps message ids per user id | `hack/ci/msgid-scope.sh`, run by every `e2e` job |
-| Live: an event caller starts a run and the runtime side received exactly the gate's serialisation | The opt-in job `event_triggers` (see the pull request for the run) |
+| Live: an event caller starts a run and the runtime side received exactly the gate's serialisation | The opt-in job `event_triggers`, run 46106433654: 47 checks passed, 0 failed |
 
 ## Limits, as stated in the ADR
 
