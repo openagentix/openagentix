@@ -1,9 +1,11 @@
 # ADR 0030: knowledge base isolation per tool group, and an optional graph schema per collection
 
-Status: Proposed
+Status: Accepted (2026-11-28)
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/272 (graph schema), reference use cases #229 (the shared knowledge base)
 Replaces: none. Builds on ADR 0004 (knowledge graph), ADR 0006 (tool profiles), ADR 0025 section 4 (credentials as mounted files) and ADR 0026 (tool groups, mirror entries, header credentials). Depends on ADR 0031 (proposed) for one threat, named in "What this does not stop". See "Relation to other records".
+
+The 7-day review period was waived by the maintainer on 2026-11-28; an independent review was done and its changes are in this text. The owner's decisions on the open questions are at the end, under "Decisions on the open questions".
 
 Two per-collection settings for the knowledge base. First, **isolation**: the operator lists, per tool profile, the collections its agents may read; the knowledge base itself enforces the list, on a bearer value that each tool group's entry sends and that the knowledge base checks. `kb_search` without a collection searches only the caller's collections. Writes stay an operator path. Second, an optional **graph schema** per collection: entity types with a key pattern, relation types with the entity types allowed at each end. A graph load that does not fit is refused, and one read tool shows the schema to the agent. Both are off by default. With them off, the chart renders byte for byte what it renders today, and the knowledge base behaves as today, which means **no isolation**: every caller reads every collection. Nothing here is built. Everything is *unverified* until the slices below are done.
 
@@ -239,14 +241,16 @@ Each slice is one pull request that `Refs #272`, tests first, off by default, wi
 - *Unverified*: everything above; that `headerForward` on a mirror entry of the knowledge base behaves as on an endpoint entry (ADR 0026 slice 2 showed it for endpoints only); that a tool server keeps the kb backend `ready` after the knowledge base starts refusing calls without a value (the order of the roll-out in one upgrade); the cost of the filter in the store query on a large collection; whether deleting a document removes every extracted fact of it in practice (read in the schema, not run).
 - Read again before quoting: the ToolHive version pinned by `components/tools/install.sh` and its `headerForward` fields.
 
-### Open questions, with recommended answers
+## Decisions on the open questions
 
-1. **Where the list lives.** On the profile (`mcp.profiles[].knowledgeCollections`), with one list per group enforced, or one map keyed by group in the `knowledge` block? *Recommended:* on the profile. A use case owns its profile, the compose helper merges profiles by name, and a later resource holds rights per profile. The rule that profiles of one group must agree keeps the enforcement honest.
-2. **Keep the `report` mode?** *Recommended:* yes. It lets a team turn the check on without an outage and gives the live proof a log of every call that would change.
-3. **Refuse a render with a shared knowledge base and no list?** *Recommended:* not now. A warning in `install.sh` and the refusal to turn `enforce` off. A refusal comes with the record that makes `enforce` the default, after one release with the reference use cases on it.
-4. **Writer rights per collection.** *Recommended:* not in this record. Writes stay with the operator's admin token. A team that needs to load its own collection gets a separate record with writer values per collection.
-5. **Extraction in a collection with a schema.** *Recommended:* off in this record. Curated facts are what the use cases load, and extraction under a schema needs a new prompt version and its own measurements.
-6. **Build order against ADR 0031.** *Recommended:* build slices 2 and 3 first. They close the path the use cases actually showed (the model reading the other collection). Claim isolation against a compromised tool server only after ADR 0031's chart slice is live.
+These were the open questions of the proposed record. The owner decided them on 2026-11-28, taking every recommended answer, as below.
+
+1. **Where the list lives.** On the profile (`mcp.profiles[].knowledgeCollections`), with one list per group enforced, or one map keyed by group in the `knowledge` block? Decided, as recommended: on the profile. A use case owns its profile, the compose helper merges profiles by name, and a later resource holds rights per profile. The rule that profiles of one group must agree keeps the enforcement honest.
+2. **Keep the `report` mode?** Decided, as recommended: yes. It lets a team turn the check on without an outage and gives the live proof a log of every call that would change.
+3. **Refuse a render with a shared knowledge base and no list?** Decided, as recommended: not now. A warning in `install.sh` and in the chart's `NOTES.txt` and the refusal to turn `enforce` off. A refusal comes with the record that makes `enforce` the default, after one release with the reference use cases on it.
+4. **Writer rights per collection.** Decided, as recommended: not in this record. Writes stay with the operator's admin token. A team that needs to load its own collection gets a separate record with writer values per collection.
+5. **Extraction in a collection with a schema.** Decided, as recommended: off in this record. Curated facts are what the use cases load, and extraction under a schema needs a new prompt version and its own measurements.
+6. **Build order against ADR 0031.** Decided, as recommended: build slices 2 and 3 first. They close the path the use cases actually showed (the model reading the other collection). Claim isolation against a compromised tool server only after ADR 0031's chart slice is live.
 
 ## Review notes
 
