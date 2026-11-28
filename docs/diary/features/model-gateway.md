@@ -95,7 +95,7 @@ Limits: an entry lives 5 minutes, and the call that writes it costs 25% more. ka
 
 ## Budget classes (2026-11-28, ADR 0029, slice 3)
 
-Every key had the same budget. A class gives some agents a smaller or a larger one, or one budget that several agents share. The decision and its limits are in [ADR 0029](../../decisions/0029-per-agent-token-budgets.md).
+Every key had the same budget. A class gives some agents a smaller or a larger one, or one budget that several agents share. The decision and its limits are in [ADR 0029](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0029-per-agent-token-budgets.md).
 
 How to set it, in the chart values:
 

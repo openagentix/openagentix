@@ -8,7 +8,7 @@ trap 'rm -f "$BCX"' EXIT
 POL='.[]|select(.kind=="AgentgatewayPolicy")|.spec.traffic.rateLimit'
 # bc_render_ok / bc_fail <description> <sentence part> <helm args...>
 bc_fail() { local d=$1 s=$2; shift 2; eq "$d" "$(render_err "$@" | /usr/bin/grep -cF -- "$s")" 1; }
-CLS2='[{"name":"bank-agents","tokens":300000,"unit":"Hours","per":"agent"},{"name":"fernvale-all","tokens":500000,"unit":"Hours","per":"class"}]'
+CLS2='[{"name":"bank-agents","tokens":300000,"unit":"Hours","per":"agent"},{"name":"shared-pool","tokens":500000,"unit":"Hours","per":"class"}]'
 
 echo "# budget classes: nothing set renders what it rendered before"
 DEF=$(docs)
@@ -39,7 +39,7 @@ D=$(docs --set-json "gateway.policy.budgetClasses=$CLS2")
 RL=$(q "$D" "$POL")
 eq "two classes and the fallback: three conditional entries, no plain local" "$(jq -r '[(.conditional|length),(has("local"))]|join(" ")' <<<"$RL")" "3 false"
 eq "class 1: condition on the metadata member, one local entry per agent (key apiKey.user_id)" "$(jq -c '.conditional[0]' <<<"$RL")" '{"condition":"apiKey.budget_class == \"bank-agents\"","policy":{"local":[{"tokens":300000,"unit":"Hours","key":"apiKey.user_id"}]}}'
-eq "class 2: per class, no key (one shared bucket)" "$(jq -c '.conditional[1]' <<<"$RL")" '{"condition":"apiKey.budget_class == \"fernvale-all\"","policy":{"local":[{"tokens":500000,"unit":"Hours"}]}}'
+eq "class 2: per class, no key (one shared bucket)" "$(jq -c '.conditional[1]' <<<"$RL")" '{"condition":"apiKey.budget_class == \"shared-pool\"","policy":{"local":[{"tokens":500000,"unit":"Hours"}]}}'
 eq "the fallback is last, has no condition, and is today's budget" "$(jq -c '.conditional[2]' <<<"$RL")" '{"policy":{"local":[{"tokens":1000000,"unit":"Hours","key":"apiKey.user_id"}]}}'
 D=$(docs --set-json "gateway.policy.budgetClasses=$CLS2" --set gateway.policy.tokenBudget.tokens=42000 --set gateway.policy.tokenBudget.unit=Minutes)
 eq "the fallback follows gateway.policy.tokenBudget" "$(q "$D" "$POL|.conditional[2]|tojson")" '{"policy":{"local":[{"tokens":42000,"unit":"Minutes","key":"apiKey.user_id"}]}}'
@@ -122,11 +122,11 @@ D=$(docs "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.defini
 KEYRULE="[$GUARD_CM|.spec.validations[]|select(.message|test(\"key ConfigMap|an entry of the key\"))]"
 KR=$(q "$D" "$KEYRULE|map(.expression)|join(\"\\n\")")
 eq "definitions=bank-agents: the key rule accepts one optional last member, that class, written out" "$(printf '%s' "$KR" | /usr/bin/grep -cF '(,"budget_class":"bank-agents")?\\}\\}$')" 1
-eq "definitions=bank-agents: no other class name is in the key rule" "$(printf '%s' "$KR" | /usr/bin/grep -c 'fernvale-all')" 0
+eq "definitions=bank-agents: no other class name is in the key rule" "$(printf '%s' "$KR" | /usr/bin/grep -c 'shared-pool')" 0
 eq "definitions=bank-agents: the rule still pins user_id and the key hash" "$(printf '%s' "$KR" | /usr/bin/grep -cE 'keyHash.*user_id|user_id.*keyHash')" 1
 eq "definitions set: the rule is the only difference from the default guard (no other policy changes)" "$(q "$D" '[.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name!="openagentix-control-plane-guard-configmaps")]|tojson' | shasum -a 256)" "$(q "$DG0" '[.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name!="openagentix-control-plane-guard-configmaps")]|tojson' | shasum -a 256)"
 eq "definitions empty with classes defined: the guard is byte-identical to the default guard" "$(q "$(docs "${CP9[@]}" "${DEFS[@]}")" "$GUARD_CM|tojson" | shasum -a 256)" "$(q "$DG0" "$GUARD_CM|tojson" | shasum -a 256)"
-bc_fail "definitions naming a per: class class is refused, and says why" "per: agent" "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=fernvale-all
+bc_fail "definitions naming a per: class class is refused, and says why" "per: agent" "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=shared-pool
 bc_fail "definitions naming a class that does not exist is refused" "controlPlane.policy.budgetClasses.definitions" "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=nope
 bc_fail "definitions with no classes defined is refused" "controlPlane.policy.budgetClasses.definitions" "${CP9[@]}" --set controlPlane.policy.budgetClasses.definitions=bank-agents
 bc_fail "definitions=default is refused (reserved)" "default" "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=default

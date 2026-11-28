@@ -25,7 +25,7 @@ func classEntry(user, hash, team, project, class string) string {
 
 var budgetSets = []string{
 	"gateway.policy.budgetClasses[0].name=bank-agents", "gateway.policy.budgetClasses[0].tokens=300000", "gateway.policy.budgetClasses[0].unit=Hours", "gateway.policy.budgetClasses[0].per=agent",
-	"gateway.policy.budgetClasses[1].name=fernvale-all", "gateway.policy.budgetClasses[1].tokens=500000", "gateway.policy.budgetClasses[1].unit=Hours", "gateway.policy.budgetClasses[1].per=class",
+	"gateway.policy.budgetClasses[1].name=shared-pool", "gateway.policy.budgetClasses[1].tokens=500000", "gateway.policy.budgetClasses[1].unit=Hours", "gateway.policy.budgetClasses[1].per=class",
 }
 
 func keyUpdate(name string, newData m, oldData m) expectation {
@@ -96,7 +96,7 @@ func TestBudgetClassGuard(t *testing.T) {
 			mk("set: the class of definitions is allowed", true, classEntry(k, hash64, "", "", "bank-agents")),
 			mk("set: the class with team and project before it is allowed", true, classEntry(k, hash64, "platform", "demo", "bank-agents")),
 			mk("set: an entry with no class is still allowed", true, classEntry(k, hash64, "", "", "")),
-			mk("set: another class of the operator is refused (a shared one)", false, classEntry(k, hash64, "", "", "fernvale-all")),
+			mk("set: another class of the operator is refused (a shared one)", false, classEntry(k, hash64, "", "", "shared-pool")),
 			mk("set: a class nobody defined is refused", false, classEntry(k, hash64, "", "", "other")),
 			mk("set: a longer name that starts with the class is refused", false, classEntry(k, hash64, "", "", "bank-agents-big")),
 			mk("set: a class that ends with the class name is refused", false, classEntry(k, hash64, "", "", "xbank-agents")),

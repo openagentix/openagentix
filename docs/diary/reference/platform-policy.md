@@ -45,6 +45,7 @@ The values below are the defaults from `charts/openagentix/values.yaml`. They ar
 <!-- generated:begin policy-defaults -->
 | Key | Default |
 |---|---|
+| `controlPlane.policy.budgetClasses.definitions` | `""` |
 | `controlPlane.policy.maxAgents` | `5` |
 | `controlPlane.policy.allowedModels` | `[]` |
 | `controlPlane.policy.requireToolProfile` | `true` |
