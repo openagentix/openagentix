@@ -1108,6 +1108,7 @@ jobs:
           set -o pipefail
           ./install.sh 2>&1 | tee install-off.log
       - name: live check, off
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
         env:
           TA_INSTALL_LOG: install-off.log
         run: |
@@ -1120,6 +1121,7 @@ jobs:
           set -o pipefail
           ./install.sh 2>&1 | tee install-on.log
       - name: live check, on
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
         env:
           TA_INSTALL_LOG: install-on.log
         run: |
@@ -1136,6 +1138,7 @@ jobs:
           echo "install.sh exit code: $rc"
           [ "$rc" != 0 ] || { echo "install.sh did NOT refuse to turn the switch off"; exit 1; }
       - name: live check, refused
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
         env:
           TA_INSTALL_LOG: install-refused.log
         run: |
@@ -1149,6 +1152,7 @@ jobs:
           set -o pipefail
           ./install.sh 2>&1 | tee install-back-off.log
       - name: live check, back off (the old behaviour is back)
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
         env:
           TA_INSTALL_LOG: install-back-off.log
         run: |
@@ -1161,6 +1165,7 @@ jobs:
           set -o pipefail
           ./install.sh 2>&1 | tee install-on2.log
       - name: live check, on again
+        continue-on-error: true   # the later phases still run; the last step fails the job when any phase failed
         env:
           TA_INSTALL_LOG: install-on2.log
         run: |
@@ -1190,6 +1195,16 @@ jobs:
           kubectl get serviceaccount,role,rolebinding -n mcp-tools || true
           kubectl logs -n toolhive-system deploy/toolhive-operator --tail=300 || true
           kind export logs ./kind-logs --name openagentix || true
+      - name: verdict (every phase must have run and passed)
+        if: always()
+        run: |
+          rc=0
+          for p in off on refused back-off on2; do
+            line=$(grep -E 'tool-accounts-live \(.*\): passed=' "live-$p.log" 2>/dev/null | tail -1)
+            echo "$p: ${line:-did not run}"
+            case "$line" in *"failed=0") ;; *) rc=1;; esac
+          done
+          exit $rc
       - name: upload cluster logs and the results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

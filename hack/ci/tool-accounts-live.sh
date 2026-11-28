@@ -175,6 +175,10 @@ echo "# no forbidden line in the log of any tool server"
 no_forbidden
 
 echo "# real calls through the groups (the tool servers trust the API server's own tokens in this job)"
+# As hack/ci/endpoints-live.sh does: restart the tool servers once the CA ConfigMap and the JWKS binding are there, so each starts with a fresh fetch of the keys.
+$K get configmap kube-root-ca.crt -n "$MCPNS" -o json | jq --arg n ci-apiserver-ca '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:$n,namespace:.metadata.namespace},data:{"ca.crt":.data["ca.crt"]}}' | $K apply -f - >/dev/null
+for n in $SERVERS; do $K rollout restart "deployment/$n" -n "$MCPNS" >/dev/null 2>&1; done
+for n in $SERVERS; do $K rollout status "deployment/$n" -n "$MCPNS" --timeout=240s >/dev/null 2>&1 || echo "       (tool server $n: restart not confirmed)"; done
 mcp_token() { $K create token default -n "$MCPNS" --audience "$1" --duration 10m 2>/dev/null; }
 mcp_post() {  # mcp_post <port> <token file> <session id or -> <json>
   local port=$1 tf=$2 sid=$3 body=$4 out hdr=()
@@ -191,7 +195,7 @@ mcp_open() {
 mcp_call() { mcp_post "$1" "$2" "$3" "{\"jsonrpc\":\"2.0\",\"id\":$4,\"method\":\"$5\",\"params\":$6}"; }
 sess_debug() {  # sess_debug <port> <token file> <tool server>: why no session opened (a status line, the start of the body, the end of the log; never a token)
   [ "$SID" = - ] || return 0
-  echo "       no session on $3: $(curl -s -m 20 -i -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$2")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ta-live","version":"0"}}}' "http://127.0.0.1:$1/mcp" 2>&1 | tr '\r\n' '  ' | cut -c1-300)"
+  echo "       no session on $3: $(curl -s -m 20 -i -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$2")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ta-live","version":"0"}}}' "http://127.0.0.1:$1/mcp" 2>&1 | tr "\r\n" "  " | cut -c1-900)"
   $K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=$3" --all-containers --tail=15 2>/dev/null | cut -c1-260 | sed 's/^/       | /'
 }
 TD=$(mktemp -d)
