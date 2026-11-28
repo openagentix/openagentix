@@ -121,6 +121,10 @@ ids=$(sed -nE 's/^  - id: *([A-Za-z0-9._-]+).*/\1/p' "$cases")
 [ -z "$only" ] || ids=$only
 rep='{"version":1,"mode":"run","cases":[]}'; p=0; anyfail=0; refused=0
 for id in $ids; do
+  if [ "${FAKE_NOCAUSE_AT:-}" = "$n:$id" ]; then
+    rep=$(jq -c --arg id "$id" '.cases += [{id: $id, pass: false, failed_cause_not_recorded: true, task_state: "TASK_STATE_FAILED", ms: 1700, tools_seen: ["t","t"], checks: [{name: "state", pass: false, detail: "expected TASK_STATE_COMPLETED, got TASK_STATE_FAILED"}]}]' <<<"$rep")
+    anyfail=1; p=$((p + 1)); continue
+  fi
   if [ "$refused" = 1 ] || [ "${FAKE_REFUSE_AT:-}" = "$n:$id" ]; then
     refused=1
     rep=$(jq -c --arg id "$id" '.cases += [{id: $id, pass: false, not_run: true, not_run_reason: "the model call was refused: 429 (no tool call)", ms: 1500, checks: []}]' <<<"$rep")
@@ -420,6 +424,16 @@ run env CLUSTER=oa-test FAKE_JOB_FAIL=1 FAKE_JOB_LOG='{"error":"task ended in TA
 check "a sweep job refused by the model with no tool call is NOT RUN, not a failure: exit 3" "$RC" 3
 check "  the summary says not run and does not say it only read" "$(jq -c '.sweep | {not_run, only_read}' "$T/b6/summary.json")" '{"not_run":true,"only_read":null}'
 check "  the job is deleted" "$(grep -c 'delete job -n openagentix-schedules deadline-sweep-eval-' "$T/calls")" 1
+
+echo "# a failed task with no cause recorded is shown apart from check failures"
+setup_state DSP
+export FAKE_VM_UID=dispute-agent
+run env CLUSTER=oa-test FAKE_NOCAUSE_AT="1:pressure-prompt-holds" FAKE_FAIL="1:duplicate-charge:state_checks[1]" bash "$S" bank --runs 1 --reset-records --out "$T/nc1"
+check "the run is measured (exit 0)" "$RC" 0
+check "the failed task with no cause is counted apart: one, not a check failure" "$(jq -c '.cases[] | select(.id == "pressure-prompt-holds") | {passed, runs, failed_no_cause, failed_checks}' "$T/nc1/summary.json")" '{"passed":0,"runs":1,"failed_no_cause":1,"failed_checks":[]}'
+check "it is still a failed run of the case, not left out of the pass rate" "$(jq -r '.cases[] | select(.id == "pressure-prompt-holds") | .pass_rate' "$T/nc1/summary.json")" 0
+check "a check failure of another case stays a check failure" "$(jq -c '.cases[] | select(.id == "duplicate-charge") | {failed_no_cause, c: [.failed_checks[].check]}' "$T/nc1/summary.json")" '{"failed_no_cause":0,"c":["state_checks[1]"]}'
+check "the table says so" "$(grep -c 'failed task, cause not recorded x1' "$T/out")" 1
 
 echo; echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

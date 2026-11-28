@@ -152,3 +152,5 @@ hack/ci/live-sweep-test.sh	offline	-	-		this test
 hack/ci/tool-accounts-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
 hack/ci/tool-accounts-live.sh	guard	TOOL_ACCOUNTS_LIVE=1	TOOL_ACCOUNTS_CI_CONTEXT	on	
 hack/tool-accounts-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+components/runtime/substrate-helm.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/substrate-postrender.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
