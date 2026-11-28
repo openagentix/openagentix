@@ -1229,67 +1229,7 @@ jobs:
             install-*.log
           retention-days: 7
 
-  # Opt-in (workflow_dispatch with the input `adr0031`): the spike of ADR 0031 (issue #229). The cluster of the endpoints job (two tiny endpoints with header
-  # Secrets, the quick start, the stub model), then hack/spikes/adr0031_tool_server_spike.py writes ServiceAccounts and Roles by hand, sets spec.serviceAccount on
-  # the tool servers and records what ToolHive 0.67.1 does. It changes the throwaway cluster only and refuses to run anywhere else. Notes: docs/diary/features/.
-  e2e-adr0031-spike:
-    name: e2e (adr 0031 spike, tool server accounts)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.adr0031 }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
-        with:
-          version: v3.22.0
-      - run: hack/ci/install-tools.sh yq kind
-      - name: cluster, then the endpoints (their namespace and workload come before the platform values)
-        env:
-          ENDPOINTS: "1"
-        run: |
-          set -o pipefail
-          kind create cluster --name openagentix --config hack/kind-config.yaml
-          hack/ci/endpoints-ci-setup.sh 2>&1 | tee setup.log
-      - name: install (PROFILE=quickstart plus the endpoints values, no key, no token)
-        env:
-          PROFILE: quickstart
-          VALUES_FILE: hack/ci/endpoints-ci-values.yaml
-          AGENT_WAIT: 300s
-        run: |
-          set -o pipefail
-          ./install.sh 2>&1 | tee install.log
-      - name: spike
-        env:
-          SPIKE_OUT: ${{ github.workspace }}/spike-out
-        run: |
-          set -o pipefail
-          timeout 3000 python3 -I hack/spikes/adr0031_tool_server_spike.py 2>&1 | tee spike.log
-      - name: job summary
-        if: always()
-        run: |
-          [ -f spike-out/results-adr0031.md ] && cat spike-out/results-adr0031.md >> "$GITHUB_STEP_SUMMARY" || true
-      - name: diagnostics
-        if: always()
-        run: |
-          mkdir -p spike-out
-          kubectl get pods -A -o wide > spike-out/pods.txt 2>&1 || true
-          kubectl get virtualmcpserver -n mcp-tools -o yaml > spike-out/vmcp.yaml 2>&1 || true
-          kubectl logs -n toolhive-system deploy/toolhive-operator --tail=3000 > spike-out/log-operator.txt 2>&1 || true
-          for d in tools tools-disputes tools-lookup tools-lookup-cm tools-disputes-workload probe-own; do kubectl logs -n mcp-tools "deploy/$d" --all-containers --tail=1500 > "spike-out/log-$d.txt" 2>&1 || true; done
-      - name: upload the results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: adr0031-spike
-          path: |
-            spike-out/
-            spike.log
-            install.log
-          if-no-files-found: ignore
-          retention-days: 30
-# Opt-in (workflow_dispatch with the input `kb_access`; KB_ACCESS=1 for the scripts): the knowledge base isolation on a real cluster (ADR 0030, slice 3, issue #272).
+  # Opt-in (workflow_dispatch with the input `kb_access`; KB_ACCESS=1 for the scripts): the knowledge base isolation on a real cluster (ADR 0030, slice 3, issue #272).
   # The quick start plus hack/ci/kb-access-ci-values.yaml: two tool groups of their own (from the two tiny endpoints of the endpoints job), each with its own
   # collection, and a profile on the shared group, the stub model, no paid call. The platform is installed three times with the same values and a different mode
   # (none, report, enforce), and after each install hack/ci/kb-access-live.sh makes real calls through the tool gateways. It settles that each group reads its own
