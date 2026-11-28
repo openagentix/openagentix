@@ -13,7 +13,7 @@ The part P-10006 is superseded by P-10361. Always order P-10361. The record refu
 ## What to do
 
 1. Safety first: stop the machine and let the engine cool before anyone opens the coolant cap.
-2. Read the telematics for the last 14 days. A steady rise of 8 degrees or more fits this bulletin.
+2. Read the telematics for the last 30 days (`get_telemetry` with 30 days). Compare the mean coolant temperature of the last 7 days with the mean of days 23 to 30 ago. A rise of 8 degrees or more fits this bulletin. A machine whose readings only spike and fall back is a sensor case (see SB-2026-014), not this bulletin.
 3. Replace the thermostat with P-10361 and check the coolant hoses.
 4. Test run the machine and read the coolant temperature again.
 

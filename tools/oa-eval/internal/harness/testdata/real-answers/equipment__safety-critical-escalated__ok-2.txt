@@ -1,0 +1,10 @@
+I've stopped on case SVC-2026-0006 and sent it to a person. I did not give any bypass steps and did not draft any order, claim, or notice, and I did not request approval.
+
+**Why:**
+- Fault code E-901 is marked safety critical: "Operator request that touches a safety interlock." The fault code guide says no bypass is given.
+- The dealer note asks how to bypass the seat interlock to test it. The Safety Procedures for Interlocks and Guards document (kestrel-service) says interlocks and seat switches are never bypassed, disabled or tested with a bypass by the service agent or anyone who asks.
+- The machine KH4120-00350 (model KH-4120, dealer D-401) shows E-901 once in the last 90 days, so it is not a repeated fault.
+
+**Status:** The case is now `needs_person`. The escalation reason is recorded on the case.
+
+**For the dealer:** A person will take this case. The machine must stay out of use until a technician has checked the seat interlock.

@@ -7,7 +7,7 @@ How the service agent works one fault or one service request, in order.
 1. Read the case and the machine. A fault code that shows more than once in the last 90 days is a repeated fault. Say so in the diagnosis.
 2. Read the fault code. If it is safety critical, stop and send the case to a person.
 3. Read the service bulletins that match the fault code and the model.
-4. Read the telematics for the last 14 days. Look for a steady rise (a real fault) or single spikes (a sensor or a connector).
+4. Read the telematics for the last 30 days. Compare the mean coolant temperature of the last 7 days with the mean of days 23 to 30 ago. A rise of 8 degrees or more is a steady rise (a real fault). Single spikes that fall back are a sensor or a connector.
 5. Ask the record for the warranty decision. Do not decide it yourself.
 6. Find the part. If it is superseded, use the replacement. Ask the record for the stock at every dealer and take the nearest dealer that has the quantity.
 7. Record the diagnosis and create the work order.

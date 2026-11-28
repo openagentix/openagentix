@@ -44,17 +44,20 @@ type LabelRule struct {
 
 // Expect lists the machine checks. An empty list or field means no check of that kind.
 type Expect struct {
-	State         string         `yaml:"state"`           // A2A task state; default TASK_STATE_COMPLETED; "any" skips the check
-	AnswerMust    []string       `yaml:"answer_must"`     // regular expressions that must match the answer
-	AnswerMustNot []string       `yaml:"answer_must_not"` // regular expressions that must not match
-	Cites         []string       `yaml:"cites"`           // titles that must appear in the answer
-	ToolsCalled   []string       `yaml:"tools_called"`    // tool names that must be in the audit events of this run
-	ToolsNot      []string       `yaml:"tools_not_called"`
-	ToolOrder     []string       `yaml:"tool_order"`   // these tools must appear in this order (others may sit between)
-	Requires      []ApprovalRule `yaml:"requires"`     // a tool may be called only after another one was
-	StateChecks   []StateCheck   `yaml:"state_checks"` // reads of the system of record after the run
-	MaxMillis     int            `yaml:"max_ms"`
-	MaxToolCalls  *int           `yaml:"max_tool_calls"` // at most this many tool calls (audit events) in the run; needs an audit source
+	State           string         `yaml:"state"`             // A2A task state; default TASK_STATE_COMPLETED; "any" skips the check
+	AnswerMust      []string       `yaml:"answer_must"`       // regular expressions that must match the answer
+	AnswerMustNot   []string       `yaml:"answer_must_not"`   // regular expressions that must not match
+	AnswerClaimsNot []string       `yaml:"answer_claims_not"` // like answer_must_not, but a match inside a denying clause ("no credit was posted") is ignored
+	Cites           []string       `yaml:"cites"`             // titles that must appear in the answer
+	ToolsCalled     []string       `yaml:"tools_called"`      // tool names that must be in the audit events of this run
+	ToolsNot        []string       `yaml:"tools_not_called"`
+	ToolsOnly       []string       `yaml:"tools_only"`   // every tool call of the run is one of these (any subset, any order)
+	ToolOrder       []string       `yaml:"tool_order"`   // these tools must appear in this order (others may sit between)
+	Requires        []ApprovalRule `yaml:"requires"`     // a tool may be called only after another one was
+	StateChecks     []StateCheck   `yaml:"state_checks"` // reads of the system of record after the run
+	MaxMillis       int            `yaml:"max_ms"`
+	MaxToolCalls    *int           `yaml:"max_tool_calls"` // at most this many tool calls (audit events) in the run; needs an audit source
+	MinToolCalls    *int           `yaml:"min_tool_calls"` // at least this many tool calls in the run; needs an audit source
 }
 
 // ApprovalRule: Tool must not be called unless After was called earlier in the same run (After is the approval tool).
@@ -69,6 +72,7 @@ type StateCheck struct {
 	URL     string `yaml:"url"`
 	Path    string `yaml:"path"`    // dot path into the JSON answer, e.g. items.0.status; empty is the whole body
 	Equals  any    `yaml:"equals"`  // the value must equal this
+	OneOf   []any  `yaml:"one_of"`  // the value must equal one of these (more than one final state is acceptable)
 	Matches string `yaml:"matches"` // the value, as text, must match this regular expression
 	Count   *int   `yaml:"count"`   // the value is an array or object with this many entries
 	Exists  *bool  `yaml:"exists"`  // the path exists (true) or does not (false)
@@ -104,6 +108,8 @@ type CaseResult struct {
 	ID           string   `json:"id"`
 	Pass         bool     `json:"pass"`
 	TaskState    string   `json:"task_state,omitempty"`
+	NotRun       bool     `json:"not_run,omitempty"`        // the model refused the call (a budget or a provider error): not a pass and not a failure
+	NotRunReason string   `json:"not_run_reason,omitempty"` // why
 	Millis       int64    `json:"ms"`
 	Checks       []Check  `json:"checks"`
 	Tools        []string `json:"tools_seen,omitempty"`
@@ -131,6 +137,7 @@ type Report struct {
 	Total     int          `json:"total"`
 	Passed    int          `json:"passed"`
 	Failed    int          `json:"failed"`
+	NotRun    int          `json:"not_run,omitempty"`
 	Cases     []CaseResult `json:"cases"`
 	Agreement *Agreement   `json:"agreement,omitempty"`
 }

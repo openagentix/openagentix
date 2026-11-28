@@ -97,6 +97,16 @@
 # pinned Kourier release (components/channels/kourier.sh, cosign-verified when cosign exists) BEFORE the chart, generates the
 # Secret of each webhook connection when absent (random, never printed), and the chart admits Kourier's pod to the kagent controller.
 #   RELEASE_NS=openagentix-system  AGENT_WAIT=900s
+#   ALLOW_VALUE_REMOVAL=1  Helm replaces the user-supplied values of the release on every run, so a shorter VALUES_FILE list than the one you installed
+#                        with would drop whole features and agents without a word. Before anything is changed, hack/release-values-diff.sh compares the
+#                        key paths and named list entries of the existing release with the values of this run and, when the release has some that this
+#                        run lacks, lists them and stops (exit 1). ALLOW_VALUE_REMOVAL=1 prints the list and goes on. A first install and an unchanged
+#                        list pass silently. A release that cannot be read stops the installer in every case. The keys the installer sets itself are
+#                        not compared (hack/release-values-ignore.txt).
+#   CHECK_NETPOL=1       after the install, run hack/netpol-check.sh: two throwaway pods in $RELEASE_NS, a deny-all ingress policy on one, and a PASS only
+#                        when the other is cut off. It prints PASS, FAIL (the network plugin does not enforce NetworkPolicy, so the isolation claims do
+#                        not hold on this cluster) or INCONCLUSIVE. Off by default. It says nothing about egress to the internet.
+#   REQUIRE_NETPOL=1     with CHECK_NETPOL=1: a FAIL or INCONCLUSIVE makes the installer exit non-zero (after the install is done).
 # Tool profiles and per-agent egress (ADR 0006, round 2) are opt-in too: mcp.profiles, agents[].toolProfile and agents[].egress.allow
 # (components/governance/profiles-demo-values.yaml, which must come LAST in VALUES_FILE because it restates the agents list). This script
 # only waits for the extra vMCP of each profile; there is nothing else to create, and no Secret.
@@ -266,6 +276,12 @@ fi
 # The cluster may not exist yet (a fresh kind or k3d install): then there is nothing to find.
 if [ "$CLUSTER_UP" = 1 ]; then
   printf '%s\n' "$RENDERED" | KUBECTL=$K KUBE_CONTEXT=$CTX RELEASE=$RELEASE bash hack/pdb-check.sh || exit 1
+fi
+# Helm replaces the user-supplied values of the release on every run (issue #212). When the release holds a key path or a named list entry that this run's
+# values (VALS: the -f files and the --set-file scenarios) lack, a run with a shorter VALUES_FILE list would remove whole features and agents without a word.
+# Read only; it stops here, before anything is changed, unless ALLOW_VALUE_REMOVAL=1. A first install (no release) and an unchanged list pass silently.
+if [ "$CLUSTER_UP" = 1 ]; then
+  bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${VALS[@]+"${VALS[@]}"} || exit 1
 fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
@@ -1098,6 +1114,11 @@ if [ "$QS" = 1 ]; then
     $K wait agentdefinition/echo-go -n $KAGENT_NS --for=condition=Ready --timeout="$AGENT_WAIT" \
       || { echo "WARN: the echo-go agent is not Ready yet: $K get agentdefinition echo-go -n $KAGENT_NS -o yaml" >&2; QS_NOT_READY=1; $K get agentdefinition echo-go -n $KAGENT_NS -o jsonpath='{.status}' >&2; echo >&2; }
   fi
+fi
+
+if [ "${CHECK_NETPOL:-0}" = 1 ]; then   # issue #212: does the network plugin enforce NetworkPolicy? Off by default; REQUIRE_NETPOL=1 turns FAIL and INCONCLUSIVE into an exit status
+  echo
+  KUBECTL=$K KUBE_CONTEXT=$CTX NETPOL_NAMESPACE="$RELEASE_NS" bash hack/netpol-check.sh || exit 1
 fi
 
 log "DONE"
