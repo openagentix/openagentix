@@ -194,7 +194,10 @@ def q1():
 
 def find_tasks(marker):
     """Tasks that hold the marker text: the runtime's own database (session_task)."""
-    q = "select id, state, status_timestamp, left(data::text, 160) from session_task where data::text like '%%%s%%' order by created_at limit 5" % marker
+    rc, sch, err = k("exec", "-n", "kagent", "kagent-pg-0", "--", "psql", "--no-psqlrc", "-U", "postgres", "-d", "kagent", "-tAc",
+                     "select table_schema from information_schema.tables where table_name='session_task' limit 1")
+    sch = sch.strip() or "public"
+    q = "select id, state, status_timestamp, left(data::text, 160) from " + sch + ".session_task where data::text like '%%%s%%' order by created_at limit 5" % marker
     rc, out, err = k("exec", "-n", "kagent", "kagent-pg-0", "--", "psql", "--no-psqlrc", "-U", "postgres", "-d", "kagent", "-tAc", q)
     return ["session_task rows holding the marker: " + (short(out, 700) or "none") + ((" [stderr] " + short(err, 200)) if err.strip() else "")]
 
