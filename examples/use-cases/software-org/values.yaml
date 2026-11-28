@@ -40,11 +40,20 @@ mcp:
       tools:
         cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
 
+# The budget class of the root-cause agent (ADR 0029). 300,000 tokens an hour for this agent's key. A measured eight-case run on a real model used about 200,000 to
+# 240,000 tokens (about 25,000 to 30,000 a case), so one full run fits: about 10 to 12 cases an hour. It is a soft limit, not a spend cap: it is counted per
+# gateway replica, a restart empties it, and a call in flight passes.
+gateway:
+  policy:
+    budgetClasses:
+      - {name: rca-diagnostic-agent, tokens: 300000, unit: Hours, per: agent}
+
 agents:
   - name: pod-rca
     description: Finds the likely cause of a failing pod from status, events and capped logs, and writes a report for a person
     model: quickstart-model
     toolProfile: rca
+    budgetClass: rca-diagnostic-agent
     systemPrompt: |
       You are the Brambleworks pod root-cause agent. Brambleworks is a fictional software company. You explain why a workload in the
       namespace rca-demo is not healthy. You can only read: you have no write tools. You cannot restart, delete, scale, patch, roll back or

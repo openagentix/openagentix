@@ -390,6 +390,20 @@ cp "$TMP/release-on.json" "$LOG/release.json"
 jq '.networkPolicy.extraA2ACallers += [{"namespace":"somewhere-else","podLabels":{"app":"records"}}] | .networkPolicy.extraA2ACallers |= map(select(.namespace != "kestrel-records"))' "$TMP/release-on.json" > "$LOG/release.json"
 FAKE_STUB=1 run; rc=$?
 check "a release with another namespace entry of the same shape, and this use case's own entry gone: the other entry is named and refused" "[ $rc = 1 ] && grep -q 'extraA2ACallers\[somewhere-else\]' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+echo "# budget classes (ADR 0029): the class of this use case is composed with the classes of the other two, on the first run, the second run and beside the full demo"
+ALL_FD="$RT/examples/use-cases/bank/values-full-demo.yaml $RT/examples/use-cases/software-org/values-full-demo.yaml"
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+bash "$RT/hack/compose-values.sh" -o "$TMP/af/release-all.yaml" "$TMP/af/user.json" $ALL_FD 2>/dev/null && yq . "$TMP/af/release-all.yaml" > "$LOG/release.json"
+ALSO_COMPOSE="$ALL_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "beside the full demo with the other two use cases listed in ALSO_COMPOSE: the first run passes" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+check "the platform values hold the three classes once each (this one's last, as composed) and the agent names its class" "[ \"\$(yq -c '.gateway.policy.budgetClasses | map(.name) | sort' '$LOG/platform-values.yaml')\" = '[\"bank-case-agent\",\"equipment-case-agent\",\"rca-diagnostic-agent\"]' ] && [ \"\$(yq -r '.agents[] | select(.name==\"service-agent\") | .budgetClass' '$LOG/platform-values.yaml')\" = 'equipment-case-agent' ]"
+yq . "$LOG/platform-values.yaml" > "$TMP/af/release-all2.json"
+reset; cp "$TMP/af/release-all2.json" "$LOG/release.json"
+ALSO_COMPOSE="$ALL_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "the second run on the release it made passes (the release guard knows the classes)" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+reset; cp "$TMP/af/release-all2.json" "$LOG/release.json"
+ALSO_COMPOSE="$RT/examples/use-cases/bank/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "leaving a use case out of ALSO_COMPOSE when the release holds its class and agent is refused, naming the class" "[ $rc = 1 ] && grep -q 'budgetClasses' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
 echo "# checks on the platform after the install"
 reset
 FAKE_NO_AGENT=1 run; rc=$?

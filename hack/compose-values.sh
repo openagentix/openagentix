@@ -235,7 +235,8 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
         | ($h or hidekey($k)) as $h2
         # networkPolicy is merged key by key even when no earlier file has it, so that extraA2ACallers (a list of namespaces, joined by namespace) is not
         # compared with the chart default as a whole; every other networkPolicy key is still a security key
-        | if (.v | has($k)) or ($c == "networkPolicy" and ($b[$k] | isobj) and ($b[$k] | has("extraA2ACallers"))) or ($c == "gateway.policy" and ($b[$k] | isobj) and ($b[$k] | has("budgetClasses"))) then
+        | if (.v | has($k)) or ($c == "networkPolicy" and ($b[$k] | isobj) and ($b[$k] | has("extraA2ACallers"))) or ($c == "gateway.policy" and ($b[$k] | isobj) and ($b[$k] | has("budgetClasses")))
+              or ($c == "gateway" and ($b[$k] | isobj) and (($b[$k].policy | type) == "object") and ($b[$k].policy | has("budgetClasses"))) then
             merge($cps; (if (.v | has($k)) then .v[$k] else {} end); $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st
           elif namelist($c) and ($b[$k] | isarr) then
             mergelist($c; []; $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st

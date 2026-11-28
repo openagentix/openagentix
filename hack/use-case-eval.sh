@@ -25,7 +25,11 @@
 #                  and after a run, one total per run. per-case: cases run one by one with a reading around each, which needs one scrape interval
 #                  (default 30 s, METRICS_SCRAPE_SECONDS) per case. off: do not read. If the metric is not there, the summary says "not available"
 #                  and why. Other traffic on the same gateway key during a run is counted too: use a quiet cluster. Tokens only, never a price.
-# --budget-tokens-per-hour N   The hourly token budget of the agent's gateway key (default 1000000, the chart default of gateway.policy.tokenBudget).
+# --budget-tokens-per-hour N   The hourly token budget of the agent's gateway key. Without the flag the script reads it from the release it is measuring
+#                  (helm get values RELEASE, default openagentix in openagentix-system; env HELM, RELEASE, RELEASE_NS): the budget class that the agent names
+#                  (agents[].budgetClass, ADR 0029), or the release's gateway.policy.tokenBudget when the agent names none. When it cannot read the release
+#                  (no helm, no release, no such class) it uses 1000000, the chart default, and says why. The flag always wins. The output and summary.json
+#                  say which one was used.
 #                  Before each run after the first, the script estimates the run from the largest run so far (input plus output tokens, read from
 #                  the metric) and, if it does not fit in what is left of the last hour, waits with a printed countdown until it does. --no-wait
 #                  stops instead. Needs the token metric; without it there is no estimate and no wait.
@@ -55,7 +59,8 @@ log() { printf '%s\n' "$*"; }
 case "$1" in -h | --help) usage 0 ;; esac
 UC=$1; shift
 case "$UC" in bank | equipment | software-org) ;; *) echo "ERROR: the use case is bank, equipment or software-org, not '$UC'" >&2; usage 2 ;; esac
-BUDGET=1000000; NO_WAIT=0; RUNS=""; OUT=""; RESET=0; SWEEP=0; TOKENS_MODE=per-run; ONLY=""; INCLUDE_ANSWERS=0; METRICS_UID_ARG=""
+BUDGET_FLAG=0; BUDGET_SOURCE=""
+BUDGET=1000000; NO_WAIT=0; RUNS=""; OUT=""; RESET=0; SWEEP=0; TOKENS_MODE="per-run"; ONLY=""; INCLUDE_ANSWERS=0; METRICS_UID_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --runs) RUNS=${2:-}; shift 2 || usage 2 ;;
@@ -66,7 +71,7 @@ while [ $# -gt 0 ]; do
     --only) ONLY=${2:-}; shift 2 || usage 2 ;;
     --metrics-user-id) METRICS_UID_ARG=${2:-}; shift 2 || usage 2 ;;
     --include-answers) INCLUDE_ANSWERS=1; shift ;;
-    --budget-tokens-per-hour) BUDGET=${2:-}; shift 2 || usage 2 ;;
+    --budget-tokens-per-hour) BUDGET=${2:-}; BUDGET_FLAG=1; shift 2 || usage 2 ;;
     --no-wait) NO_WAIT=1; shift ;;
     -h | --help) usage 0 ;;
     *) echo "ERROR: unknown argument '$1'" >&2; usage 2 ;;
@@ -194,6 +199,48 @@ if [ -z "$OA" ]; then
   (cd "$ROOT/tools/oa-eval" && CGO_ENABLED=0 go build -trimpath -o "$OA" ./cmd/oa-eval) || die "oa-eval did not build"
 fi
 [ -x "$OA" ] || die "OA_EVAL=$OA is not an executable file"
+
+# ---- the budget of the key: the flag, else the class of the release (helm get values), else the chart default ---------------------------------------
+resolve_budget() {
+  local helm=${HELM:-helm} rel=${RELEASE:-openagentix} relns=${RELEASE_NS:-openagentix-system} vals err why line kind cls tok unit per
+  if [ "$BUDGET_FLAG" = 1 ]; then BUDGET_SOURCE="from the flag --budget-tokens-per-hour"; return 0; fi
+  why=""
+  if ! command -v "$helm" >/dev/null 2>&1; then why="helm was not found, so the release was not read"
+  else
+    err="$PRIV/helm.err"
+    if ! vals=$("$helm" get values "$rel" -n "$relns" --kube-context "$KUBE_CONTEXT" -o json 2>"$err"); then
+      if grep -qxF "Error: release: not found" "$err" 2>/dev/null; then why="no release values: $rel in $relns on $KUBE_CONTEXT has none"; else why="could not read the release $rel: $(head -n 1 "$err" 2>/dev/null | cut -c1-200)"; fi
+    fi
+  fi
+  if [ -z "$why" ]; then
+    line=$(printf '%s' "$vals" | jq -r --arg a "$AGENT" '
+      (((.agents // []) | map(select(.name == $a)) | .[0].budgetClass) // "") as $c
+      | if $c != "" then
+          (((.gateway.policy.budgetClasses // []) | map(select(.name == $c)) | .[0]) // null) as $k
+          | if $k == null then "missing|\($c)|0||" else "class|\($c)|\($k.tokens)|\($k.unit)|\($k.per)" end
+        elif (.gateway.policy.tokenBudget.tokens // null) != null then "default||\(.gateway.policy.tokenBudget.tokens)|\(.gateway.policy.tokenBudget.unit // "Hours")|agent"
+        else "none||0||" end' 2>/dev/null) || line=""
+    IFS='|' read -r kind cls tok unit per <<<"$line"
+    case "$kind" in
+      class | default)
+        case "$unit" in Hours) ;; Minutes) tok=$((tok * 60)) ;; Seconds) tok=$((tok * 3600)) ;; *) why="the release has an unknown unit '$unit' for the budget" ;; esac
+        if [ -z "$why" ]; then
+          BUDGET=$tok
+          if [ "$kind" = class ]; then
+            BUDGET_SOURCE="the class $cls of the release (read with helm get values $rel)"
+            [ "$per" != class ] || BUDGET_SOURCE="$BUDGET_SOURCE; the class is shared by every key of the class, so other agents of it spend from the same budget and this script counts only its own runs"
+          else BUDGET_SOURCE="the release's default budget (gateway.policy.tokenBudget; $AGENT names no class)"; fi
+          return 0
+        fi ;;
+      missing) why="$AGENT names the class $cls, which the release does not define" ;;
+      *) why="the release sets no budget for $AGENT (no class, no gateway.policy.tokenBudget)" ;;
+    esac
+  fi
+  BUDGET=1000000
+  BUDGET_SOURCE="the default 1000000 ($why)"
+}
+resolve_budget
+log "# budget of the key of $AGENT: $BUDGET tokens an hour ($BUDGET_SOURCE)"
 
 TOKEN_DURATION=${EVAL_TOKEN_DURATION:-30m}; SETTLE=${EVAL_AUDIT_SETTLE:-6s}; CASE_TIMEOUT=${EVAL_CASE_TIMEOUT:-300s}
 SCRAPE_WAIT=$(( ${METRICS_SCRAPE_SECONDS:-30} + ${METRICS_SCRAPE_MARGIN:-5} ))
@@ -518,7 +565,7 @@ write_summary() { # write_summary <runs completed>
   local completed=$1
   [ -s "$OUT/results.jsonl" ] || { log "no results were collected"; return 0; }
   jq -s --arg uc "$UC" --arg ctx "$KUBE_CONTEXT" --argjson requested "$RUNS" --argjson completed "$completed" --arg scope "$TOKENS_SCOPE" --argjson tokok "$([ "$TOK_OK" = 1 ] && echo true || echo false)" \
-    --arg reason "$TOK_REASON" --arg tuid "$METRICS_UID" --slurpfile runs "$OUT/runs.jsonl" --argjson sweep "$SWEEP_JSON" --arg abort "$ABORT" --argjson budget "$BUDGET" --arg stop "$BUDGET_STOP" '
+    --arg reason "$TOK_REASON" --arg tuid "$METRICS_UID" --slurpfile runs "$OUT/runs.jsonl" --argjson sweep "$SWEEP_JSON" --arg abort "$ABORT" --argjson budget "$BUDGET" --arg bsrc "$BUDGET_SOURCE" --arg stop "$BUDGET_STOP" '
     def median: sort | if length == 0 then null elif length % 2 == 1 then .[(length - 1) / 2] else (.[length / 2 - 1] + .[length / 2]) / 2 end;
     def maxv: if length == 0 then null else max end;
     def tokmed($k): [.[] | .tokens | select(. != null) | .[$k] // empty] | median;
@@ -532,7 +579,7 @@ write_summary() { # write_summary <runs completed>
         tool_calls: {median: ([$c[].tool_calls] | median), max: ([$c[].tool_calls] | maxv)},
         tokens: (if ([$c[] | select(.tokens != null)] | length) == 0 then null else {measured_runs: ([$c[] | select(.tokens != null)] | length), input_median: ($c | tokmed("input")), output_median: ($c | tokmed("output")), budget_tokens_median: ($c | budgetmed)} end)})),
      tokens_per_run: ($runs | map(select(.tokens != null) | {run: .run, tokens: .tokens, budget_tokens: ((.tokens.input // 0) + (.tokens.output // 0)), audit_tool_calls: .audit_tool_calls})),
-     budget: {tokens_per_hour_per_key: $budget, stopped_by_budget: ($stop != ""), message: (if $stop == "" then null else $stop end), counts: "input plus output tokens of a run count against the key; a case that was refused is not run and is not in the pass rate"},
+     budget: {tokens_per_hour_per_key: $budget, source: $bsrc, stopped_by_budget: ($stop != ""), message: (if $stop == "" then null else $stop end), counts: "input plus output tokens of a run count against the key; a case that was refused is not run and is not in the pass rate"},
      sweep: $sweep}' "$OUT/results.jsonl" >"$OUT/summary.json"
   log; log "=== summary ($UC, $completed of $RUNS run(s) completed; $OUT/summary.json)"
   jq -r '.cases[] | [.id, "\(.passed)/\(.runs)" + (if .not_run > 0 then " (+\(.not_run) not run)" else "" end), (.duration_ms.median | tostring) + "ms", (.duration_ms.max | tostring) + "ms", (.tool_calls.median | tostring), (.tool_calls.max | tostring),
