@@ -1095,7 +1095,7 @@ TA_ROWS=$(ta_vmcp_rows <<<"$RENDERED")
 if [ -n "$TA_ROWS" ]; then
   log "tool server accounts: the tool servers cannot read Secrets"
   # shellcheck source=hack/endpoints-check.sh
-  . hack/endpoints-check.sh   # ep_check_backends (also sourced above when mcp.endpoints is on)
+  source hack/endpoints-check.sh   # ep_check_backends (also sourced above when mcp.endpoints is on)
   while IFS=$'\t' read -r ta_ns ta_name ta_sa; do
     ta_wait_running "$K" "$ta_ns" "$ta_name" "$ta_sa" "${TA_SETTLE:-240}" || die "the tool server $ta_name does not run under $ta_sa (see above)."
     $K wait "virtualmcpserver/$ta_name" -n "$ta_ns" --for=condition=Ready --timeout=300s || die "the tool server $ta_name is not Ready under the account $ta_sa: $K get virtualmcpserver $ta_name -n $ta_ns -o yaml"
@@ -1103,9 +1103,13 @@ if [ -n "$TA_ROWS" ]; then
     ta_grp=$(jq -r --arg n "$ta_name" 'select(.kind=="VirtualMCPServer" and .metadata.name==$n)|.spec.groupRef.name' <<<"$RENDERED")
     ta_backends=$(jq -rs --arg g "$ta_grp" '[.[]|select((.kind=="MCPServer" or .kind=="MCPServerEntry") and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$RENDERED")
     if [ -n "$ta_backends" ]; then
-      DIAG_CHECK_WHAT="the group $ta_grp, under the account $ta_sa" diag_check_vmcps "$K" "${TA_SETTLE_CONDITIONS:-30}" 0 "$ta_ns/$ta_name" || die "the tool server $ta_name dropped a backend under the account $ta_sa (see above): a right is missing in its Role."
+      if ! DIAG_CHECK_WHAT="the group $ta_grp, under the account $ta_sa" diag_check_vmcps "$K" "${TA_SETTLE_CONDITIONS:-30}" 0 "$ta_ns/$ta_name"; then
+        die "the tool server $ta_name dropped a backend under the account $ta_sa (see above): a right is missing in its Role."
+      fi
       # shellcheck disable=SC2086   # one word per backend
-      ep_check_backends "$K" "${TA_SETTLE_BACKENDS:-90}" "$ta_ns/$ta_name" $ta_backends || die "the tool server $ta_name does not list every backend as ready under the account $ta_sa (see above): a right is missing in its Role."
+      if ! ep_check_backends "$K" "${TA_SETTLE_BACKENDS:-90}" "$ta_ns/$ta_name" $ta_backends; then
+        die "the tool server $ta_name does not list every backend as ready under the account $ta_sa (see above): a right is missing in its Role."
+      fi
     fi
   done <<<"$TA_ROWS"
   while IFS=$'\t' read -r ta_ns ta_name ta_sa; do
