@@ -795,6 +795,7 @@ jobs:
         env:
           PROFILE: quickstart
           VALUES_FILE: hack/ci/budget-classes-ci-values.yaml
+          CLUSTER: oa-budget-ci   # never the default name: the live script refuses kind-openagentix
           AGENT_WAIT: 300s
         run: |
           set -o pipefail
@@ -802,6 +803,7 @@ jobs:
       - name: live proof of budget classes
         env:
           BUDGET_CLASSES_LIVE: "1"
+          BUDGET_CLASSES_CI_CONTEXT: kind-oa-budget-ci
         run: |
           set -o pipefail
           hack/ci/budget-classes-live.sh 2>&1 | tee budget-classes-live.log
@@ -827,7 +829,7 @@ jobs:
           echo "--- the key entries, without the hashes"
           kubectl get configmap llm-api-keys -n agentgateway-system -o json | jq -c '.data|with_entries(.value|=(fromjson|.metadata))' || true
           kubectl logs -n agentgateway-system -l gateway.networking.k8s.io/gateway-name=model-gateway --tail=200 --all-containers | cut -c1-400 || true
-          kind export logs ./kind-logs --name openagentix || true
+          kind export logs ./kind-logs --name oa-budget-ci || true
       - name: upload cluster logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

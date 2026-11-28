@@ -133,3 +133,14 @@ bc_fail "definitions=default is refused (reserved)" "default" "${CP9[@]}" "${DEF
 bc_fail "definitions that is not a string is refused" "controlPlane.policy.budgetClasses.definitions" "${CP9[@]}" "${DEFS[@]}" --set-json controlPlane.policy.budgetClasses.definitions=5
 eq "definitions set but the control plane off: still validated (a typo fails, it does not wait for the switch)" "$(render_err "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=nope | /usr/bin/grep -c 'controlPlane.policy.budgetClasses.definitions')" 1
 eq "definitions set and the control plane off: the render has no guard and no key rule" "$(count "$(docs "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=bank-agents)" '.kind=="ValidatingAdmissionPolicy"')" 0
+
+echo "# budget classes: agents[].budgetClass is checked with the gateway off too (security review of PR 267, F1)"
+GOFF=(--set gateway.enabled=false)
+HOSTILE_A='[{"name":"a","description":"x","model":"claude-haiku","budgetClass":"Evil\",\"admin\":\"1","systemPrompt":"x","tools":[]}]'
+HOSTILE_B='[{"name":"a","description":"x","model":"claude-haiku","budgetClass":{"x":1},"systemPrompt":"x","tools":[]}]'
+HOSTILE_C='[{"name":"a","description":"x","model":"claude-haiku","budgetClass":"wide","systemPrompt":"x","tools":[]}]'
+bc_fail "gateway off: a class with quotes is refused" "budgetClass" "${GOFF[@]}" --set-json "agents=$HOSTILE_A"
+bc_fail "gateway off: a class that is a map is refused" "budgetClass" "${GOFF[@]}" --set-json "agents=$HOSTILE_B"
+bc_fail "gateway off: a class that no class list defines is refused" "agents[a]: budgetClass \"wide\"" "${GOFF[@]}" --set-json "agents=$HOSTILE_C"
+HOSTILE_D='[{"name":"a","description":"x","model":"claude-haiku","systemPrompt":"x","tools":[]}]'
+eq "gateway off: an agent with no class renders" "$([ -z "$(render_err "${GOFF[@]}" --set-json "agents=$HOSTILE_D")" ] && echo rendered || echo failed)" rendered

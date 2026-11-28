@@ -14,14 +14,17 @@
 #   4 a refused call never reaches the model (the stand-in counts the same number of requests as there were 200 answers)
 #   5 the overshoot with parallel calls: how many calls pass a bucket that has room for one more (the number is printed, not hidden)
 # It changes the cluster it runs on (the model's base URL, a stand-in, a ConfigMap of test keys) and puts both back. It refuses to run anywhere but a
-# GitHub Actions run on a kind cluster. It prints no key and puts none on a command line (a header file is used). Exit 1 when a check fails.
+# GitHub Actions run on a kind cluster whose context is named by BUDGET_CLASSES_CI_CONTEXT (the workflow sets both), and never on kind-openagentix, the default
+# name of a cluster somebody uses. It prints no key and puts none on a command line (a header file is used). Exit 1 when a check fails.
 set -u
 [ "${BUDGET_CLASSES_LIVE:-0}" = 1 ] || { echo "budget-classes-live: set BUDGET_CLASSES_LIVE=1 to run this against the current cluster (it is opt-in)"; exit 0; }
 K=${KUBECTL:-kubectl}
 here=$(cd "$(dirname "$0")" && pwd)
 CTX_NOW=$($K config current-context 2>/dev/null || true)
 case "$CTX_NOW" in kind-*) ;; *) echo "budget-classes-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind context. Nothing was changed." >&2; exit 2;; esac
+[ "$CTX_NOW" != kind-openagentix ] || { echo "budget-classes-live: refusing to run on kind-openagentix, the default cluster of the installer. Nothing was changed." >&2; exit 2; }
 [ "${GITHUB_ACTIONS:-}" = true ] || { echo "budget-classes-live: refusing to run outside GitHub Actions: it changes the cluster it runs on. Nothing was changed." >&2; exit 2; }
+[ -n "${BUDGET_CLASSES_CI_CONTEXT:-}" ] && [ "${BUDGET_CLASSES_CI_CONTEXT}" = "$CTX_NOW" ] || { echo "budget-classes-live: refusing to run: BUDGET_CLASSES_CI_CONTEXT ('${BUDGET_CLASSES_CI_CONTEXT:-}') does not name the current context '$CTX_NOW'. Nothing was changed." >&2; exit 2; }
 # shellcheck source=hack/key-entry.sh
 . "$here/../key-entry.sh"
 
@@ -35,7 +38,7 @@ chk() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; f
 note() { printf '  --   %s\n' "$1"; }
 cleanup() {
   [ -z "$PF" ] || kill "$PF" 2>/dev/null
-  $K delete configmap budget-proof-keys -n "$GW_NS" --ignore-not-found >/dev/null 2>&1
+  $K delete configmap budget-proof-keys budget-proof-pool -n "$GW_NS" --ignore-not-found >/dev/null 2>&1
   if [ -n "$ORIG_URL" ]; then
     $K patch agentgatewaymodel quickstart-model -n "$GW_NS" --type merge -p "{\"spec\":{\"baseURL\":\"$ORIG_URL\"}}" >/dev/null 2>&1
   fi
@@ -47,9 +50,10 @@ trap cleanup EXIT
 
 echo "# 1 the rendered policy and the key entries"
 POL=$($K get agentgatewaypolicy -n "$GW_NS" -o json | jq -c '.items[]|select(.spec.traffic.apiKeyAuthentication!=null)')
-chk "one gateway policy has the conditional rate limit of the chart (two classes, then the default)" "$(jq -c '.spec.traffic.rateLimit.conditional|map(.condition//"default")' <<<"$POL")" '["apiKey.budget_class == \"tight\"","apiKey.budget_class == \"wide\"","default"]'
-chk "the limits are 300, 100000 and 800 tokens an hour" "$(jq -c '[.spec.traffic.rateLimit.conditional[].policy.local[0]|[.tokens,.unit]]' <<<"$POL")" '[[300,"Hours"],[100000,"Hours"],[800,"Hours"]]'
-note "policy status (Accepted and Attached, as the gateway reports it): $(jq -c '[.status.ancestors[]?.conditions[]?|select(.type=="Accepted" or .type=="Attached")|{type,status}]' <<<"$POL")"
+chk "one gateway policy has the conditional rate limit of the chart (three classes, then the default)" "$(jq -c '.spec.traffic.rateLimit.conditional|map(.condition//"default")' <<<"$POL")" '["apiKey.budget_class == \"tight\"","apiKey.budget_class == \"wide\"","apiKey.budget_class == \"pool\"","default"]'
+chk "the limits are 300, 100000, 300 and 800 tokens an hour" "$(jq -c '[.spec.traffic.rateLimit.conditional[].policy.local[0]|[.tokens,.unit]]' <<<"$POL")" '[[300,"Hours"],[100000,"Hours"],[300,"Hours"],[800,"Hours"]]'
+chk "the gateway reports the policy Accepted and Attached (both True)" "$(jq -r '[.status.ancestors[]?.conditions[]?|select(.type=="Accepted" or .type=="Attached")|.status] as $s|"\($s|length>=2) \($s|all(.=="True"))"' <<<"$POL")" "true true"
+chk "the third class of the values (pool, per class) is in the policy without a key" "$(jq -c '.spec.traffic.rateLimit.conditional[]|select(.condition=="apiKey.budget_class == \"pool\"")|.policy.local[0]|has("key")' <<<"$POL")" false
 ENT=$($K get configmap llm-api-keys -n "$GW_NS" -o json | jq -c '.data|with_entries(.value|=(fromjson|.metadata))')
 note "key entries (hashes left out): $ENT"
 chk "budget-tight's entry carries class tight" "$(jq -r '.["budget-tight"].budget_class' <<<"$ENT")" tight
@@ -139,6 +143,12 @@ for i in $(seq 1 60); do
 done
 chk "the first call through the stand-in is answered (the model path works)" "$(st "warm-$i")" 200
 
+echo "# authentication still holds with the conditional policy"
+NOKEY=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"model":"quickstart-model","messages":[{"role":"user","content":"budget-proof nokey"}]}' http://127.0.0.1:18080/v1/chat/completions)
+chk "a call with no key is refused with 401" "$NOKEY" 401
+printf 'Authorization: Bearer vk-unknown-%s\n' "$(openssl rand -hex 12)" > "$TD/h-unknown"; chmod 600 "$TD/h-unknown"
+call "$TD/h-unknown" unknown-key; chk "a call with a key that is in no ConfigMap is refused with 401" "$(st unknown-key)" 401
+
 echo "# 2 a key of class tight is refused after its limit, a key of class wide still passes"
 read -r TA TTOK TLAST < <(drain "$TD/h-budget-tight" tight 40)
 note "tight: $TA calls admitted ($TTOK tokens counted), then HTTP $TLAST"
@@ -182,7 +192,7 @@ i=0
 for n in "${OVK[@]}"; do
   i=$((i+1)); par=$K1; [ $i = 2 ] && par=$K2; [ $i = 3 ] && par=$K3
   # the gateway needs a moment to read the new ConfigMap: a 401 spends no tokens
-  for w in $(seq 1 45); do call "$TD/h-$n" "$n-first"; [ "$(st "$n-first")" != 401 ] && break; sleep 2; done
+  for _ in $(seq 1 45); do call "$TD/h-$n" "$n-first"; [ "$(st "$n-first")" != 401 ] && break; sleep 2; done
   used=1
   while [ "$used" -lt $((TA-1)) ]; do used=$((used+1)); call "$TD/h-$n" "$n-seq-$used"; done
   pids=(); for j in $(seq 1 "$par"); do call "$TD/h-$n" "$n-par-$j" & pids+=($!); done; wait "${pids[@]}"
@@ -196,6 +206,33 @@ done
 OVMAX=$OV1; [ "$OV2" -gt "$OVMAX" ] && OVMAX=$OV2; [ "$OV3" -gt "$OVMAX" ] && OVMAX=$OV3
 note "OVERSHOOT: $OV1 of $K1, $OV2 of $K2, $OV3 of $K3 parallel calls were admitted with room for one more call (largest $OVMAX). The limit is soft: the calls in flight when the bucket runs out all pass."
 $K get --raw "/api/v1/namespaces/$PNS/services/budget-recorder:8080/proxy/events" | jq 'length' | xargs -I{} echo "  --   requests the model saw in all: {}"
+
+echo "# 6 a class shared by two keys (pool, per: class, no key in the policy entry): one bucket"
+PD=()
+for n in pool1 pool2; do
+  key="vk-pool-$(openssl rand -hex 12)"
+  printf 'Authorization: Bearer %s\n' "$key" > "$TD/h-$n"; chmod 600 "$TD/h-$n"
+  PD+=(--from-literal="$n=$(key_entry "$n" "sha256:$(printf '%s' "$key" | shasum -a 256 | awk '{print $1}')" pool)")
+  unset key
+done
+$K create configmap budget-proof-pool -n "$GW_NS" "${PD[@]}" --dry-run=client -o yaml | $K label --local -f - agentgateway.dev/apikey=true -o yaml | $K apply -f - >/dev/null
+for _ in $(seq 1 45); do call "$TD/h-pool1" pool1-first; [ "$(st pool1-first)" != 401 ] && break; sleep 2; done
+PA=0; [ "$(st pool1-first)" = 200 ] && PA=1
+for i in $(seq 1 40); do call "$TD/h-pool1" "pool1-$i"; s=$(st "pool1-$i"); [ "$s" = 200 ] && PA=$((PA+1)); [ "$s" = 429 ] && break; done
+chk "the first key of the shared class is refused with 429 after $PA calls" "$s" 429
+for _ in $(seq 1 45); do call "$TD/h-pool2" pool2-first; [ "$(st pool2-first)" != 401 ] && break; sleep 2; done
+chk "the second key of the same class is refused at once (it never had a call admitted): one bucket for the class" "$(st pool2-first)" 429
+call "$TD/h-budget-wide" wide-last; chk "a key of another class still passes" "$(st wide-last)" 200
+
+echo "# 7 the rendered policy with the most classes the chart allows, against the real CRD (server-side dry run)"
+# (the three classes the chart agents name, which the values must keep, and twelve more)
+MAXC=$(jq -nc '[{name:"tight",tokens:300,unit:"Hours",per:"agent"},{name:"wide",tokens:100000,unit:"Hours",per:"agent"},{name:"pool",tokens:300,unit:"Hours",per:"class"}] + [range(12)|{name:("c"+tostring),tokens:1000,unit:"Hours",per:(if .%2==0 then "agent" else "class" end)}]')
+helm template openagentix "$here/../../charts/openagentix" -n openagentix-system -f "$here/../../components/quickstart/values.yaml" -f "$here/budget-classes-ci-values.yaml" --set-json "gateway.policy.budgetClasses=$MAXC" 2>/dev/null \
+  | yq -c 'select(.kind=="AgentgatewayPolicy")' > "$TD/max.json"
+chk "15 classes and the fallback are 16 conditional entries" "$(jq '.spec.traffic.rateLimit.conditional|length' "$TD/max.json")" 16
+$K apply --dry-run=server --server-side --force-conflicts -f "$TD/max.json" >/dev/null 2>"$TD/max.err" && ok "the API server accepts the policy with 16 conditional entries" || bad "the API server refused the policy with 16 entries: $(head -c 300 "$TD/max.err")"
+jq -c '.spec.traffic.rateLimit.conditional |= (.[0:15] + [{"condition":"apiKey.budget_class == \"c15\"","policy":{"local":[{"tokens":1,"unit":"Hours"}]}}] + .[15:])' "$TD/max.json" > "$TD/over.json"
+if $K apply --dry-run=server --server-side --force-conflicts -f "$TD/over.json" >/dev/null 2>"$TD/over.err"; then bad "the API server accepted 17 conditional entries (the limit of 15 classes would not come from the CRD)"; else ok "the API server refuses 17 conditional entries: $(tr '\n' ' ' < "$TD/over.err" | grep -o 'Too many[^"]*\|must have at most[^"]*' | head -1)"; fi
 
 echo
 echo "passed=$PASS failed=$FAIL"

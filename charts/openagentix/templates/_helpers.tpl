@@ -713,7 +713,8 @@ Used in each pod template as: with (include "oa.priorityClass" $), then the fiel
 
 {{/* ADR 0029: the budget classes of the one gateway policy. Validates gateway.policy.budgetClasses, the budgetClass of each chart agent and
 controlPlane.policy.budgetClasses.definitions, and prints the classes as a JSON list ("[]" when there are none). Any fault fails the render.
-Used by gateway.yaml (the conditional entries), kagent.yaml (the check) and control-plane-guard.yaml (the class of definitions). */}}
+Used by gateway.yaml (the conditional entries), kagent.yaml (the class of each chart agent, also with the gateway off) and
+control-plane-guard.yaml (the class of definitions). */}}
 {{- define "oa.budgetClasses" -}}
 {{- $raw := .Values.gateway.policy.budgetClasses | default list -}}
 {{- if not (kindIs "slice" $raw) }}{{ fail (printf "gateway.policy.budgetClasses must be a list, got %s" (kindOf $raw)) }}{{ end -}}

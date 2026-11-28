@@ -4,6 +4,7 @@
 # short call with about 74 tokens, so a class of 300 tokens an hour is spent in about five calls. Do not use these numbers anywhere else.
 #   tight:   300 tokens an hour for each key of the class
 #   wide:    100000 tokens an hour for each key of the class
+#   pool:    300 tokens an hour in all, shared by every key of the class (no chart agent names it; the live script makes two test keys)
 #   (no class) the default budget, set here to 800 tokens an hour so that it is spent too, and not at the usual 1,000,000
 # Three chart agents, one for each case. Their keys come from install.sh, which writes the class into the key entry from the chart's annotation.
 gateway:
@@ -12,6 +13,7 @@ gateway:
     budgetClasses:
       - {name: tight, tokens: 300, unit: Hours, per: agent}
       - {name: wide, tokens: 100000, unit: Hours, per: agent}
+      - {name: pool, tokens: 300, unit: Hours, per: class}   # shared by every key of the class: the live script makes two test keys of it
 
 # a list replaces the quick start's empty list
 agents:

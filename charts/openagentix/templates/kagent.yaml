@@ -1,5 +1,7 @@
 {{- if .Values.kagent.enabled }}
 {{- $k := .Values.kagent }}
+{{- /* ADR 0029: the class of each chart agent is checked here too, so a value that is not a class never reaches an annotation, whatever gateway.enabled says */ -}}
+{{- $_ := include "oa.budgetClasses" . }}
 {{- $modelNames := list }}
 {{- range .Values.gateway.models }}{{ $modelNames = append $modelNames .name }}{{ end }}
 {{- if $k.remoteMCPServer.enabled }}

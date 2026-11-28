@@ -257,8 +257,8 @@ gateway:
     tokenBudget: {tokens: 1000000, unit: Hours}   # per virtual key, per proxy replica: the budget of every key with no class
     # Budget classes (ADR 0029): a smaller or larger token limit for some agents, or one shared limit for several. Default: none, and the
     # render is the one above, byte for byte. Each class becomes one conditional entry of the one policy; the entry for a key with no class
-    # (tokenBudget) comes last. A chart agent names its class with agents[].budgetClass; every AgentDefinition gets the one class named in
-    # controlPlane.policy.budgetClasses.definitions. At most 15 classes. The fields, all required:
+    # (tokenBudget) comes last. A chart agent names its class with agents[].budgetClass; every AgentDefinition will get the one class named in
+    # controlPlane.policy.budgetClasses.definitions (ADR 0029, slice 4; today a definition gets the default budget). At most 15 classes. The fields, all required:
     #   name:   a DNS label of at most 40 characters, unique; "default" is reserved
     #   tokens: 1 to 2147483647
     #   unit:   Hours, Minutes or Seconds (quote nothing: they are plain words)

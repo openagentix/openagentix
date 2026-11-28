@@ -124,6 +124,8 @@ What the chart does:
 
 The `definitions` value is in the chart in this slice, and the admission guard uses it: the key ConfigMap of the controller may then hold one more optional member, `budget_class`, at the end of the metadata, and only that one class. The controller does not write the member yet. That is the next slice of the ADR, so today a definition still gets the default budget.
 
+For the controller slice (ADR 0029, slice 4): the admission guard keeps an entry that is unchanged, so after the operator changes `definitions` from one class to another, an entry that holds the old class stays valid, and keeps that class while the class exists, until the controller rewrites it. If the old class is removed from the list, the entry matches no condition and gets the default budget, never more. The controller must rewrite every entry when `definitions` changes, and a test must show it.
+
 Limits, from the ADR, stated plainly:
 
 - **Soft.** The count is per gateway replica: two replicas allow twice the class. A restart of the gateway empties every counter.
