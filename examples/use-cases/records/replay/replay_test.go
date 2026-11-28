@@ -68,13 +68,14 @@ func kbAnswer(tool, args string) string {
 func hash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 
 type env struct {
-	t      *testing.T
-	rest   http.Handler
-	mcp    *mcp.ClientSession
-	stub   string
-	tools  []string // names as the agent sees them: records_<tool>, knowledge-disputes_<tool>
-	called []string
-	kb     func(tool, args string) string // set by a test to change what the knowledge base answers
+	t       *testing.T
+	rest    http.Handler
+	mcp     *mcp.ClientSession
+	stub    string
+	tools   []string // names as the agent sees them: records_<tool>, knowledge-disputes_<tool>
+	called  []string
+	kb      func(tool, args string) string // set by a test to change what the knowledge base answers
+	results []toolResult                   // every tool result of the run, in order, for the tests of the approval convention
 }
 
 var (
@@ -253,6 +254,7 @@ func (e *env) run(user string) string {
 				}
 			}
 			result = sb.String()
+			e.results = append(e.results, toolResult{Name: short, Text: result, Structured: res.StructuredContent})
 			if res.IsError {
 				e.t.Fatalf("tool %s failed: %s (arguments %s)", name, result, tc.Function.Arguments)
 			}

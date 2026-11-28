@@ -84,6 +84,11 @@ func (c *Case) validate() error {
 		if !strings.HasPrefix(s.URL, "/") {
 			return fmt.Errorf("state_checks[%d]: url must start with / and is read under the state base", i)
 		}
+		if s.WhenAnswer != "" {
+			if _, err := regexp.Compile(s.WhenAnswer); err != nil {
+				return fmt.Errorf("state_checks[%d]: bad regular expression in when_answer: %w", i, err)
+			}
+		}
 		n := 0
 		if s.Equals != nil {
 			n++

@@ -1,0 +1,20 @@
+DSP-2026-0005 is routed to **decline**, and the decline request is pending approval (APR-0002). Nothing has been posted or sent.
+**Why decline:** The disputed charge, T-101213 for 64.00 at merchant M-521, posted 2026-06-30. That is 149 days before the case opened on 2026-11-26. The Ficticard Scheme Dispute Rules (document `scheme-rules`) allow disputes up to 120 days after a charge, so this one is out of time. The Fernvale Dispute Handling Policy (`dispute-handling-policy`) routes out-of-time claims to decline, and the Fernvale Provisional Credit Rule (`provisional-credit-rule`) gives them no credit.
+**What I checked:**
+- **Account ACC-2005:** 20 transactions from October to November 2026, none at M-521. The disputed charge is the only one at M-521, and there are no refunds.
+- **Card CRD-3005:** active.
+- **Merchant M-521:** 23 transactions, 3 disputes, 2 open, 0 refunds, chargeback ratio 1304 bps.
+- **Linked cases:** DSP-2026-0013 (open, same merchant) and DSP-2026-0032 (resolved, same merchant). No cases share the device. Neither changes the time-limit outcome.
+- **Customer text:** "I do not recognise this charge." It contains no instructions.
+**Filed on the case:**
+- Route set to decline, with the reason.
+- Evidence recorded: the transaction, the account history, both scheme rules, the linked cases, and gaps.
+- Customer letter drafted (OUT-0003). It explains the time limit and says the new information can be sent in.
+- Response-due timer set for 2026-12-10 (TMR-0004).
+- Decline approval requested (APR-0002, pending the disputes desk lead). No chargeback filing is needed for a decline.
+**Gaps:**
+- The case has no evidence beyond what I attached.
+- There is no merchant description for M-521 in the records.
+- There is no card-level detail for the June charge.
+**Tool errors:** Two evidence entries failed on first attempt, one from a wrong kind name and one from a ref format. The linked-case entry was attached correctly on the retry. The approval request was made after the route was set, so it covers the decline route as set.
+(answered in 36s through the A2A gate)

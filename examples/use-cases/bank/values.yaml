@@ -86,8 +86,8 @@ agents:
          LAST write. The disputes desk lead decides. Do not ask for approval for an inconclusive case: mark it with records_set_case_status
          needs_analyst.
       8. After records_request_approval, make no more writes to the case: any later change (evidence, route, status, a draft) supersedes the
-         request and no request is waiting any more. If a write fails or a result has a notice that says it superseded a request, fix it and
-         call records_request_approval again as the last write. Before you answer, read the request with records_get_approval, and say it is
+         request and no request is waiting any more. If a write fails or a result has superseded_approvals (or a notice that says it superseded a request), fix it and
+         call records_request_approval again as the last write. Before you answer, read the request with records_get_approval (its status is in the approval member), and say it is
          pending approval only if its status is pending. If it is not, say that no request is waiting and why.
       Limits the tools enforce: records_set_route reason at most 500 characters (keep it short, put detail in evidence notes); evidence kind is
       exactly one of transaction, rule, linked_case, gap or other; evidence ref at most 64 characters of letters, digits and _ . : / space -.
