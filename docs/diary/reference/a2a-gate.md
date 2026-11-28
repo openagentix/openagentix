@@ -241,6 +241,19 @@ A caller with `memory: true` may call two RPCs of kagent's MemoryService over bi
 | Body | One frame, at most 600 bytes of message. It must hold exactly one string field, number 1 (`agent_name`), and nothing else. The agent must be one the rule lists |
 | Without `memory: true` | 403, reason `memory` |
 
+## Event callers
+
+A caller rule may have an optional `event` block (ADR 0027), for a system of record that starts one agent run for one of its records. Such a caller sends `SendMessage` only, as one short text that matches the operator's pattern (an identifier, never free text), on the JSON-RPC route, to a built-in agent. The gate parses the message strictly, builds its own body and request headers, asks the runtime to return at once (`returnImmediately: true`), answers with the task id and state only, and limits the caller's rate and open calls.
+
+| Member | Rule |
+|---|---|
+| `event.text` | Required, at most 256 characters. The gate anchors it as `^(?:pattern)$` and refuses to start unless it has only: literals from `A-Z a-z 0-9 _ . : -` and the space; non-negated classes inside `[A-Za-z0-9_.:-]`; `{n}`, `{n,m}` (`m` at most 64) and `?`; concatenation; groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, escape classes, negated classes, flags, `^`, `$`, and a pattern that matches the empty text. The message text must be printable ASCII and at most 1024 bytes |
+| `event.rate.perMinute`, `event.rate.burst` | Required. 1 to 600 and 1 to 60. A token bucket per caller and per gate replica |
+| `event.maxInFlight` | Required. 1 to 32. Open calls of this caller at the gate |
+| the rest of the rule | ServiceAccount only; no `methods`, `memory` or `key`; `userId` must be `fixed` and no other rule may equal or cover it; at most 16 event callers |
+
+Allowed keys in the message: `jsonrpc`, `id`, `method`, `params` at the top; `message` in `params`; `messageId`, `role`, `parts` in the message; one part with one key, `text`. A repeated key, a key that differs only in case, any other key, and a `Content-Encoding` header are 403 with reason `message_shape`. The request the runtime gets has the message id `<caller>:<messageId>:<16 hex of the SHA-256 of the text>` and only these headers: `Content-Type`, `A2A-Version`, a well-formed `Traceparent` and `Tracestate`, and `X-User-Id`. Over the rate: 429 `rate`; over `maxInFlight`: 429 `caller_busy`. The limits are per process: N replicas multiply them and a restart refills the buckets.
+
 ## Audit line
 
 The gate writes one JSON line to standard output for each request (not for `/healthz` and `/readyz`). The log message is `audit`. It never holds message text.
@@ -258,6 +271,7 @@ The gate writes one JSON line to standard output for each request (not for `/hea
 | `method` | string | The HTTP method |
 | `rpc` | string | Only on POST. The A2A method, for example `SendMessage`. `unknown` when it could not be found. `invalid` when it does not look like a method name. For memory calls: `MemoryService/List` or `MemoryService/Delete` |
 | `reason` | string | Only on a refusal or failure. See the reason table |
+| `event_id` | string | Only for a caller with an `event` block (ADR 0027). The `messageId` the caller sent, once the message shape check passed; `invalid` before that. Never the message text and never the message id the gate forwards |
 
 The audit user id is a hash so that the log does not hold personal ids. The hash changes when the pod restarts.
 
@@ -277,10 +291,13 @@ The body of an error is `{"error":"<text>"}`, with `Content-Type: application/js
 | 403 | `forbidden` | `method` | The A2A method is not in the caller's list, or the method cannot be found |
 | 403 | `forbidden` | `memory` | A memory call from a caller without `memory: true` |
 | 403 | `forbidden` | `frame` | A memory call whose frame is not exactly one valid `agent_name` |
+| 403 | `forbidden` | `message_shape` | An event caller's message is not exactly the allowed shape (a key that is not allowed, a repeated key, a case variant, a text that does not match the rule's pattern, more than one part, a `configuration`, a `contextId`), the body does not fit in `A2A_GATE_SNIFF_BYTES`, or the request has a `Content-Encoding` header. The answer names no part of the body |
 | 408 | `request timeout` | `body_timeout` | The start of the body did not arrive within 10 seconds. The connection is closed |
 | 413 | `request too large` | `body_too_large` | Body over `A2A_GATE_MAX_BODY`, or a memory call body over 605 bytes |
 | 431 | none (plain text from Go) | none | Header block over 16 KiB |
-| 502 | `bad gateway` | `upstream` | The controller did not answer |
+| 429 | `too many requests` | `rate` | An event caller is over its token bucket (`event.rate`). Header `Retry-After` in whole seconds |
+| 429 | `too many requests` | `caller_busy` | An event caller has `event.maxInFlight` calls open. Header `Retry-After: 1` |
+| 502 | `bad gateway` | `upstream` | The controller did not answer; or, for an event caller, its answer could not be read or was over 1 MiB |
 | 503 | `service unavailable` | `auth_unavailable` | The token check could not run (TokenReview failed, or too many checks at once) |
 | 503 | `service unavailable` | `busy` | `A2A_GATE_MAX_INFLIGHT` requests are in progress. Header `Retry-After: 1` |
 

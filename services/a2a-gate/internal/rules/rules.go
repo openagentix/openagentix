@@ -45,6 +45,8 @@ type Caller struct {
 	// Memory lets the caller use two RPCs of kagent's MemoryService, List and Delete, for the user ids and agents its rule
 	// allows (ADR 0006, round 3). Default false: every gRPC and gRPC-Web call is refused.
 	Memory bool `json:"memory,omitempty"`
+	// Event, when set, makes this an event caller (ADR 0027): the gate rebuilds its message and limits its rate. See event.go.
+	Event *Event `json:"event,omitempty"`
 }
 
 // DefaultMethods are what a caller without its own list may use: send a message, and stream one. Reading, cancelling
@@ -82,6 +84,18 @@ func Parse(b []byte) (*Rules, error) {
 	}
 	if dec.More() {
 		return nil, errors.New("parse rules: trailing data")
+	}
+	// "event": null decodes like no block at all, and that would leave a free-text caller: refuse it
+	var raw struct {
+		Callers []map[string]json.RawMessage `json:"callers"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("parse rules: %w", err)
+	}
+	for i, m := range raw.Callers {
+		if ev, ok := m["event"]; ok && string(bytes.TrimSpace(ev)) == "null" {
+			return nil, fmt.Errorf("callers[%d]: event must be an object, not null", i)
+		}
 	}
 	names := map[string]bool{}
 	sas := map[ServiceAccount]bool{}
@@ -127,6 +141,9 @@ func Parse(b []byte) (*Rules, error) {
 				seen[m] = true
 			}
 		}
+		if err := c.checkEvent(); err != nil {
+			return nil, err
+		}
 		set := 0
 		for _, v := range []string{c.UserID.Exact, c.UserID.Prefix, c.UserID.Fixed} {
 			if v != "" {
@@ -139,6 +156,9 @@ func Parse(b []byte) (*Rules, error) {
 		if set != 1 {
 			return nil, fmt.Errorf("caller %q: userId needs exactly one of exact, prefix and fixed", c.Name)
 		}
+	}
+	if err := r.checkEventCallers(); err != nil {
+		return nil, err
 	}
 	return &r, nil
 }
