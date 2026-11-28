@@ -310,9 +310,19 @@ http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- if or (gt (len $num) 2) (gt (int $num) 64) }}{{ fail (printf "%s: event.text %q repeats more than 64 times (%s)" $where $t $rep) }}{{ end -}}
 {{- end -}}
 {{- end -}}
-{{- if or (regexMatch "\\([^)]* " $t) (regexMatch " [?{]" $t) }}{{ fail (printf "%s: event.text %q has a space inside a group or before ? or {: that lets words repeat. Keep spaces as fixed text, for example 'Work case CASE-[0-9]{4}'" $where $t) }}{{ end -}}
+{{- if or (regexMatch "\\(.* .*\\)" $t) (regexMatch " [?{]" $t) }}{{ fail (printf "%s: event.text %q has a space inside a group (also a nested one) or before ? or {: that lets words repeat. Keep spaces as fixed text, for example 'Work case CASE-[0-9]{4}'" $where $t) }}{{ end -}}
+{{- if or (regexMatch "[?}][?]" $t) (regexMatch "\\(\\)" $t) }}{{ fail (printf "%s: event.text %q has a lazy repeat (?? or }?) or an empty group ()" $where $t) }}{{ end -}}
+{{- if gt (len (regexFindAll " " $t -1)) 3 }}{{ fail (printf "%s: event.text %q has more than 3 spaces: fixed words would make a sentence. Use an identifier, for example 'Work case CASE-[0-9]{4}'" $where $t) }}{{ end -}}
+{{- if gt (len (regexFindAll "\\[[^\\]]*[A-Za-z][^\\]]*\\]" $t -1)) 2 }}{{ fail (printf "%s: event.text %q has more than 2 character classes with letters: variable-length words would make a sentence. Digits are the safe variable part" $where $t) }}{{ end -}}
 {{- /* plain regexMatch hides a compile error, so the pattern is compiled with mustRegexMatch, anchored the way the gate anchors it */ -}}
 {{- $_ := mustRegexMatch (printf "^(?:%s)$" $t) "" -}}
+{{- /* the gate parses the pattern on its own, before it anchors it: a ")" that only closes the wrapper (a)(b) would compile here and not there */ -}}
+{{- $depth := 0 -}}
+{{- range $par := regexFindAll "[()]" $bare -1 -}}
+{{- if eq $par "(" }}{{ $depth = add1 $depth }}{{ else }}{{ $depth = sub $depth 1 }}{{ end -}}
+{{- if lt (int $depth) 0 }}{{ fail (printf "%s: event.text %q closes a group that was not opened" $where $t) }}{{ end -}}
+{{- end -}}
+{{- if ne (int $depth) 0 }}{{ fail (printf "%s: event.text %q has a group that is not closed" $where $t) }}{{ end -}}
 {{- if regexMatch (printf "^(?:%s)$" $t) "" }}{{ fail (printf "%s: event.text %q matches the empty text" $where $t) }}{{ end -}}
 {{- if not (kindIs "map" $ev.rate) }}{{ fail (printf "%s: event.rate is required: {perMinute: 1..600, burst: 1..60}" $where) }}{{ end -}}
 {{- range $k, $v := $ev.rate -}}

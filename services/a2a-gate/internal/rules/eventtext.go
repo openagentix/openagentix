@@ -13,6 +13,8 @@ const (
 	MaxEventTextBytes   = 1024 // bytes of a message text, whatever the pattern
 	MaxEventRepeat      = 64
 	MaxEventCallers     = 16
+	MaxEventSpaces      = 3 // spaces in a pattern: more would let fixed words make a sentence
+	MaxEventLetterSlots = 2 // character classes with letters under a repeat: variable-length words
 )
 
 // allowedEventRune is the alphabet of an event text: letters, digits, '_', '.', ':', '-' and the space.
@@ -49,8 +51,15 @@ func CompileEventText(pattern string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, errors.New("event text pattern does not parse")
 	}
-	if err := checkEventTree(tree, false); err != nil {
+	var st treeStats
+	if err := checkEventTree(tree, false, &st); err != nil {
 		return nil, err
+	}
+	if st.spaces > MaxEventSpaces {
+		return nil, fmt.Errorf("event text pattern has more than %d spaces", MaxEventSpaces)
+	}
+	if st.slots > MaxEventLetterSlots {
+		return nil, fmt.Errorf("event text pattern has more than %d repeated classes with letters", MaxEventLetterSlots)
 	}
 	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
 	if err != nil {
@@ -100,8 +109,14 @@ func isAlnum(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
+// treeStats counts what the caps of the grammar limit.
+type treeStats struct {
+	spaces int // literal spaces
+	slots  int // character classes that hold a letter and sit under a repeat or an optional
+}
+
 // repeated is true under a repeat or an optional: a space there would let words repeat, which is prose, not an identifier.
-func checkEventTree(re *syntax.Regexp, repeated bool) error {
+func checkEventTree(re *syntax.Regexp, repeated bool, st *treeStats) error {
 	if re.Flags&syntax.FoldCase != 0 {
 		return errors.New("event text pattern may not fold case")
 	}
@@ -111,16 +126,23 @@ func checkEventTree(re *syntax.Regexp, repeated bool) error {
 			if !allowedEventRune(r) {
 				return errors.New("event text pattern has a literal outside letters, digits and _ . : - space")
 			}
-			if r == ' ' && repeated {
-				return errors.New("event text pattern may not repeat or make optional a space: that lets words repeat")
+			if r == ' ' {
+				if repeated {
+					return errors.New("event text pattern may not repeat or make optional a space: that lets words repeat")
+				}
+				st.spaces++
 			}
 		}
 	case syntax.OpCharClass:
 		if len(re.Rune) == 0 || len(re.Rune)%2 != 0 {
 			return errors.New("event text pattern has an empty character class")
 		}
+		letters := false
 		for i := 0; i < len(re.Rune); i += 2 {
 			lo, hi := re.Rune[i], re.Rune[i+1]
+			if (lo <= 'Z' && hi >= 'A') || (lo <= 'z' && hi >= 'a') { // the range holds a letter
+				letters = true
+			}
 			if lo < 0 || hi < lo || hi > 'z' {
 				return errors.New("event text pattern has a character class outside letters, digits and _ . : -")
 			}
@@ -129,6 +151,9 @@ func checkEventTree(re *syntax.Regexp, repeated bool) error {
 					return errors.New("event text pattern has a character class outside letters, digits and _ . : -")
 				}
 			}
+		}
+		if letters && repeated {
+			st.slots++
 		}
 	case syntax.OpQuest:
 		if re.Flags&syntax.NonGreedy != 0 {
@@ -150,7 +175,7 @@ func checkEventTree(re *syntax.Regexp, repeated bool) error {
 	}
 	sub := repeated || re.Op == syntax.OpRepeat || re.Op == syntax.OpQuest
 	for _, s := range re.Sub {
-		if err := checkEventTree(s, sub); err != nil {
+		if err := checkEventTree(s, sub, st); err != nil {
 			return err
 		}
 	}

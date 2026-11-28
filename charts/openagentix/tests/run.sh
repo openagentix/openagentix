@@ -1324,8 +1324,15 @@ ev_fails "an empty text fails"                         "$(ev_entry fault-events 
 ev_fails "a text over 256 characters fails"            "$(ev_entry fault-events "$(ev_block "$(printf 'a%.0s' $(seq 1 257))" 6 3 2)")" 'event.text.*256' -f "$EVA"
 ev_fails "a non-string text fails"                     "$(ev_entry fault-events "$EV_NUMTEXT")" 'event.text' -f "$EVA"
 ev_fails "a text with a non-ASCII character fails"     "$(ev_entry fault-events "$(ev_block 'Work case é' 6 3 2)")" 'event.text.*ASCII' -f "$EVA"
-for pat in 'a|b' '(a|b)c' 'ab*' 'ab+' 'a.b' 'a{2,}' '(?i)abc' '(?:abc)' 'a\sb' 'a\Sb' 'a\Wb' 'a\Db' 'a\pLb' 'a\PLb' '[^a]b' 'a\db' 'a\wb' 'a{2' '^abc' 'abc$' '[0-9]{0,8}' '[0-9]{100}' '[0-9]{1,65}' 'Work/case [0-9]{4}' 'a,b' 'a=b' 'a@b' 'a#b' 'a\(b' 'a\/b' '[.-:]' 'a[b' '[a b]' '[[:alpha:]]' '[\d]' 'a\\b' '[a-z]{1,12}( [a-z]{1,12}){0,40}' '([A-Za-z0-9:._-]{1,15} ?){1,60}' 'a ?b' 'a {2}b' 'x( y){1,3}' '(a b)?c'; do
-  ev_fails "the text '$pat' is refused at render"      "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'fault-events.*event.text' -f "$EVA"
+# every pattern in event-patterns-refused.txt fails the render, and the gate's own test (event_parity_test.go) requires the gate to refuse each too
+while IFS= read -r pat; do
+  case "$pat" in ''|'#'*) continue;; esac
+  E=$(ev_err "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" -f "$EVA")
+  eq "the shared refused text '$pat' fails the render" "$([ -n "$E" ] && echo failed || echo rendered)" failed
+done < "$(dirname "$0")/event-patterns-refused.txt"
+# refused by the chart only (the gate accepts them: the chart is stricter on purpose)
+for pat in '(?:abc)' '[[:alpha:]]' 'a{2,}b?(?:x)'; do
+  ev_fails "the text '$pat' is refused at render (the chart only)" "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'fault-events.*event.text' -f "$EVA"
 done
 for pat in '(abc' 'abc)'; do
   ev_fails "the text '$pat' does not compile: refused with mustRegexMatch" "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'error parsing regexp' -f "$EVA"

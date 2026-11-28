@@ -247,7 +247,7 @@ A caller rule may have an optional `event` block (ADR 0027), for a system of rec
 
 | Member | Rule |
 |---|---|
-| `event.text` | Required, at most 256 characters. A space may only be fixed text (not under a repeat or an optional). The gate anchors it as `^(?:pattern)$` and refuses to start unless it has only: literals from `A-Z a-z 0-9 _ . : -` and the space; non-negated classes inside `[A-Za-z0-9_.:-]`; `{n}`, `{n,m}` (`m` at most 64) and `?`; concatenation; groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, escape classes, negated classes, flags, `^`, `$`, and a pattern that matches the empty text. The message text must be printable ASCII and at most 1024 bytes |
+| `event.text` | Required, at most 256 characters. A space may only be fixed text (not under a repeat or an optional), at most 3 spaces, and at most 2 character classes that hold a letter under a repeat. The gate anchors it as `^(?:pattern)$` and refuses to start unless it has only: literals from `A-Z a-z 0-9 _ . : -` and the space; non-negated classes inside `[A-Za-z0-9_.:-]`; `{n}`, `{n,m}` (`m` at most 64) and `?`; concatenation; groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, escape classes, negated classes, flags, `^`, `$`, and a pattern that matches the empty text. The message text must be printable ASCII and at most 1024 bytes |
 | `event.rate.perMinute`, `event.rate.burst` | Required. 1 to 600 and 1 to 60. A token bucket per caller and per gate replica |
 | `event.maxInFlight` | Required. 1 to 32. Open calls of this caller at the gate |
 | the rest of the rule | ServiceAccount only; no `methods`, `memory` or `key`; `userId` must be `fixed` and no other rule may equal or cover it; at most 16 event callers |

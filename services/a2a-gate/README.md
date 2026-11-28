@@ -161,7 +161,7 @@ caller behaves exactly as above.
   `{n,m}` with `m` at most 64, and `?`; concatenation and groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, every
   escape class, negated classes, flags, `^` and `$`, a backslash before a letter or digit, a pattern that matches
   the empty text, and a space under a repeat or an optional (it would let words repeat: a space may only be fixed
-  text, as in `Work case CASE-[0-9]{4}`). The text must be printable ASCII and at most 1024 bytes, whatever the pattern.
+  text, as in `Work case CASE-[0-9]{4}`), more than 3 spaces, and more than 2 character classes that hold a letter under a repeat (fixed spaces between word slots would make a sentence). The text must be printable ASCII and at most 1024 bytes, whatever the pattern.
 - **Per request, after authentication, the agent check and the user id rule.** Only the JSON-RPC route (REST routes and
   the agent card: 403 `path`), and never a container agent (403 `agent`). Then the rate and the open calls (see Limits),
   **before any byte of the body is read**. Then `Content-Encoding` is refused. The body must
