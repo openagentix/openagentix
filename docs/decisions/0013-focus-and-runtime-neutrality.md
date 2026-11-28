@@ -2,6 +2,8 @@
 
 Status: Accepted (2026-11-25). Decided by the project owner. It changes the order of work in ADR 0007 and ADR 0012; their designs stay valid.
 
+**Note (2026-11-28), from ADR 0028 (accepted 2026-11-28).** "Human approval" in the focus (decision 1) means approval in the system of record that owns the act, as the reference use cases do, and `ApprovalRequest` leaves the 0.4 row: the kind stays reserved and comes back under the conditions ADR 0028 names. The decision text below is unchanged.
+
 ## Context
 
 The first goal of the project is adoption (`docs/roadmap.md`). A review of the plan against that goal found three problems:

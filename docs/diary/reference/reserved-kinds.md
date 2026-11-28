@@ -17,7 +17,7 @@ The platform group is `openagentix.io`. Each kind will have its own version. The
 | Name | Kind of thing | Planned release | Status | Tracking issue |
 |---|---|---|---|---|
 | `AgentRun` | resource | 0.4 | reserved | [#11](https://github.com/openagentix/openagentix/issues/11) |
-| `ApprovalRequest` | resource | 0.4 | reserved | [#12](https://github.com/openagentix/openagentix/issues/12) |
+| `ApprovalRequest` | resource | not before `AgentRun` and identity (ADR 0028) | reserved; approval stays in the system of record for now | [#12](https://github.com/openagentix/openagentix/issues/12) |
 | `AgentAccess` | resource | 0.3 | reserved | [#3](https://github.com/openagentix/openagentix/issues/3) |
 | `Schedule` | resource | 0.3 | reserved (schedules exist today only as chart values) | [#4](https://github.com/openagentix/openagentix/issues/4) |
 | `Trigger` | resource | 0.4 | reserved (channels exist today only as chart values) | [#16](https://github.com/openagentix/openagentix/issues/16) |
