@@ -14,6 +14,10 @@
 # Exit 1 when a check fails. Never prints a Secret value.
 set -uo pipefail
 K=${KUBECTL:-kubectl}
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=$K; export KUBECTL
+require_ci_context drain-test DRAIN_CI_CONTEXT
 RELEASE=${RELEASE:-openagentix}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
 DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300s}
 NS_RE=${DRAIN_NS_RE:-'^(openagentix-.*|agentgateway-system)$'}

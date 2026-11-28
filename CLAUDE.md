@@ -111,6 +111,7 @@ The full demo needs `ANTHROPIC_API_KEY` and, with the Telegram bridge, `TELEGRAM
 - No personal identifiers (chat ids, email addresses, phone numbers) in files, logs, issues or pull requests.
 - An unfixed security finding never goes in a public issue or pull request. Use private vulnerability reporting ([SECURITY.md](SECURITY.md)).
 - `spikes/` and `WHAT.txt` are local scratch, gitignored, never commit them.
+- Live CI scripts refuse a context that is not a named throwaway cluster; do not run them by hand against the current context (the table is in `hack/ci/README.md`).
 - Do not delete or recreate a cluster the user is using. Use a separately named kind cluster with its own kubeconfig for tests.
 - Do not run `install.sh` while another process edits a service's source (image tags come from a hash of the source).
 - One writer per working tree. Use a git worktree for parallel work.

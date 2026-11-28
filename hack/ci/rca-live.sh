@@ -30,16 +30,12 @@ K=${KUBECTL:-kubectl}
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 UC=$ROOT/examples/use-cases/software-org
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
+require_ci_context rca-live RCA_CI_CONTEXT
 CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "rca-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
 K="$K --context=$CTX_NOW"   # every kubectl call below names the context this script checked: a later change of the current context cannot move it
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${RCA_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "rca-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and RCA_CI_CONTEXT does not name this context. Nothing was changed." >&2
-  exit 2
-fi
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; KNS=${KAGENT_NAMESPACE:-kagent}; GATE_NS=${GATE_NAMESPACE:-openagentix-gateway}; DNS=openagentix-diagnostics
 PROFILE=rca; USER_ID=${RCA_USER_ID:-sre:eval}
 AUDIT_SETTLE=${RCA_AUDIT_SETTLE:-6s}; CASE_TIMEOUT=${RCA_CASE_TIMEOUT:-300s}; SETTLE=${RCA_SETTLE_SECONDS:-300}

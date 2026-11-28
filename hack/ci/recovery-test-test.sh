@@ -31,6 +31,7 @@ cat > "$D/bin/kubectl" <<EOS
 echo "kubectl \$*" >> "$D/calls"
 bump(){ n=\$(cat "$D/\$1" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$D/\$1"; echo \$n; }
 case "\$*" in
+  "config current-context") echo kind-oa-rec;;
   "get --raw /readyz") [ -f "$D/restarted" ] || exit 0; n=\$(bump api); [ "\$n" -gt "\${FAKE_API_DOWN:-0}" ] || exit 1; echo ok;;
   "get pods -A -o json")
     if [ ! -f "$D/restarted" ]; then "$D/mkpods" 0 stale True; exit 0; fi
@@ -63,7 +64,7 @@ chmod +x "$D/bin/"* "$D/now" "$D/sleep" "$D/mkpods" "$D/smoke"
 
 # r <VAR=value>...: one run with a fresh state; prints the output and exit=<code>; the summary is in $D/summary.md
 r(){ rm -f "$D/calls" "$D/restarted" "$D/api" "$D/pods" "$D/smoke-n" "$D/summary.md"; echo 1800000000 > "$D/clock"; : > "$D/calls"
-  env -i PATH="$D/bin:$PATH" HOME="$HOME" CLUSTER=oa-rec RECOVERY_NOW_CMD="cat $D/clock" RECOVERY_SLEEP="$D/sleep" RECOVERY_SMOKE_CMD="$D/smoke" \
+  env -i PATH="$D/bin:$PATH" HOME="$HOME" GITHUB_ACTIONS=true CLUSTER=oa-rec RECOVERY_NOW_CMD="cat $D/clock" RECOVERY_SLEEP="$D/sleep" RECOVERY_SMOKE_CMD="$D/smoke" \
     RECOVERY_SUMMARY="$D/summary.md" RECOVERY_ALLOW="$D/allow" RECOVERY_SETTLE=60 RECOVERY_POLL=10 "$@" bash hack/ci/recovery-test.sh 2>&1; echo "exit=$?"; }
 : > "$D/allow"
 calls(){ cat "$D/calls"; }

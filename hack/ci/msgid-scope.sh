@@ -13,8 +13,10 @@
 # Prints one line per check; exit 1 if a check failed. It never prints a token (it uses none).
 set -uo pipefail
 K=${KUBECTL:-kubectl}
-case "$($K config current-context 2>/dev/null)" in kind-*) ;; *) echo "msgid-scope: the current kube context is not a kind context: refusing to run" >&2; exit 2;; esac
-[ "${GITHUB_ACTIONS:-}" = true ] || [ "${MSGID_SCOPE_LOCAL:-}" = 1 ] || { echo "msgid-scope: set MSGID_SCOPE_LOCAL=1 to run it outside GitHub Actions, on a throwaway kind cluster of your own" >&2; exit 2; }
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=$K; export KUBECTL
+require_ci_context msgid-scope MSGID_SCOPE_CI_CONTEXT
 pass=0; fail=0
 ok(){ pass=$((pass+1)); printf 'ok    %s\n' "$1"; }
 bad(){ fail=$((fail+1)); printf 'FAIL  %s\n' "$1" >&2; [ -z "${2:-}" ] || printf '      %s\n' "$2" >&2; }
