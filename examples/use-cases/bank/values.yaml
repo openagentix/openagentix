@@ -39,6 +39,10 @@ knowledge:
       extractModel: quickstart-model
 
 mcp:
+  virtual:
+    # ADR 0031: the tool servers run under accounts of the chart that have no right on Secrets, so the tool server of another use case cannot read the header
+    # credential of the records service. A platform switch: the file components/tools/own-service-accounts-values.yaml sets the same. install.sh refuses to turn it off.
+    ownServiceAccounts: true
   endpoints:
     - name: records
       url: http://records.fernvale-records.svc.cluster.local:8080/mcp

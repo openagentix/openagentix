@@ -24,6 +24,9 @@
 #     allowedProfiles, allowedSkills, egress, requireToolProfile, allowKnowledge, allowNotify, memory, allowedRuntimes, runtimes),
 #     controlPlane.containerAgents.toolProfiles, networkPolicy.*, governance.a2a.enabled, mcp.virtual.incomingAuth.*,
 #     mcp.virtual.codeMode.enabled, mcp.egress.allow, observability.capture.content, gateway.policy.* and the egress of every agent.
+#     One exception to "may not change": mcp.virtual.ownServiceAccounts (ADR 0031) is a security key that a later file may turn ON (it takes the right to read
+#     Secrets from the tool servers; the change is reported) and never OFF: a later file that sets it false after one that set it true is refused, with
+#     --later-wins too. Leave the file that sets it false out of the list.
 #     "Change" is measured against what the files before it give. When no earlier file sets the key, the base is the chart default
 #     (charts/openagentix/values.yaml, read as an implicit first file): a later file that sets a security key to anything else is refused.
 #     The first file is taken as it is. Allow lists are never joined: a union would widen access without anyone writing it down. With
@@ -101,7 +104,9 @@ def secpfx: [
   "controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge",
   "controlPlane.policy.allowNotify","controlPlane.policy.memory","controlPlane.policy.allowedRuntimes","controlPlane.policy.runtimes",
   "controlPlane.containerAgents.toolProfiles","networkPolicy","governance.a2a.enabled","mcp.virtual.incomingAuth",
-  "mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy","agents[].egress"];
+  "mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy","agents[].egress","mcp.virtual.ownServiceAccounts"];
+# The one security key that a later file may turn ON (it narrows what the tool servers may read, ADR 0031) and never off, with or without --later-wins.
+def ratchetp($p): $p == "mcp.virtual.ownServiceAccounts";
 def isobj: type == "object";
 def isarr: type == "array";
 def pj($ps): $ps | join(".");
@@ -250,6 +255,7 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
                 | if issec($lp) and ($lp | contains("[") | not) then
                     (try ($base[0] | getpath($lps)) catch null) as $d
                     | if $d == $lv then .
+                      elif ratchetp($lp) and $lv == true then .st.rep += ["turned on security key " + $lp + " (chart default false -> true, from " + $fb + "): a later file may turn it on, never off"]
                       else ($h2 or any($lps[]; hidekey(.))) as $hh
                         | (if $d == null then "(not set in the chart)" else showv($hh; $d) end) as $ds
                         | if $lw then .st.rep += ["changed security key " + $lp + ": " + $ds + " -> " + showv($hh; $lv) + " (chart default -> " + $fb + ")"]
@@ -263,7 +269,11 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
     else
       findsrc($st.src; $p) as $fa
       | (issec($p) or issecanc($p)) as $s
-      | if $s and ($lw | not) then
+      | if ratchetp($p) and ($a == true) and ($b != true) then
+          {v: $a, st: ($st | .err += ["refused: " + $fb + " turns security key " + $p + " off (" + $fa + ": true; " + $fb + ": " + ($b | tojson) + "). A later file may turn it on, never off, and --later-wins does not change that. Leave the file that sets it false out of the list."])}
+        elif ratchetp($p) and ($b == true) then
+          {v: $b, st: ($st | .src[$p] = $fb | .rep += ["turned on security key " + $p + " (" + $fa + ": " + ($a | tojson) + " -> true, from " + $fb + "): a later file may turn it on, never off"])}
+        elif $s and ($lw | not) then
           {v: $a, st: ($st | .err += ["refused: " + $fb + " changes security key " + $p + " (" + $fa + ": " + showv($h; $a) + "; " + $fb + ": " + showv($h; $b) + "). Give --later-wins to take the later value."])}
         else
           {v: $b, st: ($st | .src[$p] = $fb | .rep += [leafline($p; $a; $b; $fa; $fb; $h)])}

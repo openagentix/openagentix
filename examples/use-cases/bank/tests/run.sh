@@ -30,6 +30,11 @@ check "the quick start plus the bank values render" "[ $BANK_RC = 0 ]" "$(cat "$
 ids "$T/qs.yaml" > "$T/qs.ids"; ids "$T/bank.yaml" > "$T/bank.ids"
 comm -13 "$T/qs.ids" "$T/bank.ids" > "$T/added.ids"; comm -23 "$T/qs.ids" "$T/bank.ids" > "$T/removed.ids"
 check "the values remove no object of the quick start" "[ ! -s '$T/removed.ids' ]" "$(cat "$T/removed.ids")"
+# ADR 0031: the use case turns the switch on, so every tool server names an account of the chart and has a ServiceAccount, a Role and a RoleBinding
+yq -r 'select(.kind=="VirtualMCPServer")|.metadata.name+" "+(.spec.serviceAccount // "none")' "$T/bank.yaml" | sort > "$T/tsa.vmcps"
+yq -r 'select(.kind=="Role" and .metadata.namespace=="mcp-tools")|.metadata.name' "$T/bank.yaml" | sort > "$T/tsa.roles"
+check "the values turn mcp.virtual.ownServiceAccounts on: every tool server names the account openagentix-<name>" "[ -s '$T/tsa.vmcps' ] && ! grep -q ' none\$' '$T/tsa.vmcps' && [ \"\$(awk '{print \"openagentix-\"\$1}' '$T/tsa.vmcps')\" = \"\$(cat '$T/tsa.roles')\" ]" "$(cat "$T/tsa.vmcps") / $(cat "$T/tsa.roles")"
+check "the quick start alone renders no tool server account (the switch is the use case's)" "! grep -q 'name: openagentix-tools' '$T/qs.yaml'"
 for want in "Agent kagent dispute-agent" "AgentTemplate kagent dispute-agent-template" "ModelConfig kagent gateway-dispute-agent" "Harness kagent dispute-agent-harness" \
             "CronJob openagentix-schedules deadline-sweep" "Deployment openagentix-knowledge kb" "StatefulSet openagentix-knowledge kb-postgres" "MCPServerEntry mcp-tools knowledge" \
             "MCPGroup mcp-tools disputes" "MCPServerEntry mcp-tools records" "MCPServerEntry mcp-tools knowledge-disputes" "VirtualMCPServer mcp-tools tools-disputes" \

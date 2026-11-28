@@ -36,10 +36,11 @@ check "the values remove no object of the quick start (only additions)" "[ ! -s 
 for want in "Agent kagent pod-rca" "AgentTemplate kagent pod-rca-template" "ModelConfig kagent gateway-pod-rca" "Harness kagent pod-rca-harness" \
             "Deployment openagentix-diagnostics cluster-read" "MCPGroup mcp-tools diagnostics" "MCPServerEntry mcp-tools cluster-read" \
             "VirtualMCPServer mcp-tools tools-rca" "RemoteMCPServer kagent toolhive-vmcp-rca" "ValidatingAdmissionPolicy - openagentix-diagnostics-rbac" \
-            "RoleBinding rca-demo openagentix-cluster-read" "RoleBinding rca-demo openagentix-cluster-read-logs"; do
+            "RoleBinding rca-demo openagentix-cluster-read" "RoleBinding rca-demo openagentix-cluster-read-logs" \
+            "ServiceAccount mcp-tools openagentix-tools-rca" "Role mcp-tools openagentix-tools-rca" "RoleBinding mcp-tools openagentix-tools-rca"; do
   check "adds: $want" "grep -qx '$want' '$T/added.ids'" "added: $(tr '\n' ';' < "$T/added.ids" | cut -c1-600)"
 done
-check "no binding of the read roles outside rca-demo (no platform namespace is read: least privilege)" "[ \"\$(grep -c 'RoleBinding .* openagentix-cluster-read' '$T/added.ids')\" = 3 ] && ! grep -Eq 'RoleBinding (kagent|mcp-tools|kube-system) ' '$T/added.ids'" "$(grep RoleBinding "$T/added.ids" | tr '\n' ';')"
+check "no binding of the read roles outside rca-demo (no platform namespace is read: least privilege)" "[ \"\$(grep -c 'RoleBinding .* openagentix-cluster-read' '$T/added.ids')\" = 3 ] && ! grep -Eq 'RoleBinding (kagent|mcp-tools|kube-system) openagentix-cluster-read' '$T/added.ids'" "$(grep RoleBinding "$T/added.ids" | tr '\n' ';')"
 check "adds no Secret (the installer makes the bearer Secrets)" "! grep -q '^Secret' '$T/added.ids'"
 check "adds no EgressPolicy: the agent reaches the gateway and its tool path only" "! grep -q '^EgressPolicy' '$T/added.ids'"
 check "adds no schedule, bridge, channel binding or notify" "! grep -Eq '^(CronJob|Deployment openagentix-(channels|notify))' '$T/added.ids' && ! grep -qi 'bridge\|kourier\|notify' '$T/added.ids'"

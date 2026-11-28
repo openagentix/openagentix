@@ -97,7 +97,12 @@
 # pinned Kourier release (components/channels/kourier.sh, cosign-verified when cosign exists) BEFORE the chart, generates the
 # Secret of each webhook connection when absent (random, never printed), and the chart admits Kourier's pod to the kagent controller.
 #   RELEASE_NS=openagentix-system  AGENT_WAIT=900s
-#   ALLOW_VALUE_REMOVAL=1  Helm replaces the user-supplied values of the release on every run, so a shorter VALUES_FILE list than the one you installed
+#   mcp.virtual.ownServiceAccounts (ADR 0031): with it true (components/tools/own-service-accounts-values.yaml) the chart gives every tool server an account with no
+#                        right on Secrets, and this script checks as each account that it cannot read a Secret or create a pod, StatefulSet or Deployment (a yes
+#                        fails the install, naming the account), that every backend of each tool server is ready, and then deletes the operator's <name>-vmcp
+#                        objects. Turning it from true to false on a live release is refused unless ALLOW_TOOL_SECRET_READ=1. With it false, and header
+#                        credentials in the install, a warning names their Secrets (not their values).
+#   ALLOW_VALUE_REMOVAL=1 Helm replaces the user-supplied values of the release on every run, so a shorter VALUES_FILE list than the one you installed
 #                        with would drop whole features and agents without a word. Before anything is changed, hack/release-values-diff.sh compares the
 #                        key paths and named list entries of the existing release with the values of this run and, when the release has some that this
 #                        run lacks, lists them and stops (exit 1). ALLOW_VALUE_REMOVAL=1 prints the list and goes on. A first install and an unchanged
