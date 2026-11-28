@@ -49,7 +49,7 @@
           "tool": "get_telemetry",
           "args": {
             "serial": "{{result.0.output.case.serial}}",
-            "days": 14
+            "days": 30
           }
         },
         {
@@ -80,7 +80,7 @@
           "args": {
             "case_id": "{{user.id}}",
             "cause": "{{result.2.output.first_cause}}",
-            "text": "Fault {{result.0.output.case.fault_code}}: {{result.2.output.description}}. The telematics of the last 14 days shows the coolant temperature rising. Bulletin: {{result.7.output.results.0.title}}. The fitted part {{result.4.output.id}} is superseded by {{result.4.output.superseded_by}}."
+            "text": "Fault {{result.0.output.case.fault_code}}: {{result.2.output.description}}. The telematics of the last 30 days shows the mean coolant temperature of the last 7 days well above the mean of days 23 to 30 ago, a steady rise. Bulletin: {{result.7.output.results.0.title}}. The fitted part {{result.4.output.id}} is superseded by {{result.4.output.superseded_by}}."
           }
         },
         {
@@ -437,7 +437,7 @@
           "tool": "get_telemetry",
           "args": {
             "serial": "{{result.0.output.case.serial}}",
-            "days": 14
+            "days": 30
           }
         },
         {

@@ -251,7 +251,7 @@ func seedData(ctx context.Context, tx *sql.Tx, now time.Time) error {
 			cool := 85 + s.r.NormFloat64()*0.8
 			hyd := 21000 + s.r.NormFloat64()*150
 			if ramp[serial] && ageDays < 30 {
-				cool += 14 * (1 - ageDays/30)
+				cool += 18 * (1 - ageDays/30)
 			}
 			if serial == "KH4120-00310" && s.r.Float64() < 0.06 {
 				cool += 40
