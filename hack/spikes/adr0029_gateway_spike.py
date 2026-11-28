@@ -45,7 +45,7 @@ def chat(port, name, label=None, secret=None):
     h = {"Content-Type": "application/json"}
     if key:
         h["Authorization"] = "Bearer " + key
-    r = L.http("POST", "http://127.0.0.1:%d/v1/chat/completions" % port, h, body_for(label or name), 30)
+    r = L.http("POST", "http://127.0.0.1:%d/v1/chat/completions" % port, h, body_for(label or name), 20)
     tokens = 0
     try:
         tokens = json.loads(r["body"])["usage"]["total_tokens"]
@@ -89,6 +89,7 @@ def drain(port, name, limit=80, label=None):
 
 
 def compress(st):
+    st = [("err" if x is None else x) for x in st]
     out, prev, n = [], None, 0
     for s in st + [object()]:
         if s == prev:
@@ -153,10 +154,22 @@ def setup():
     while time.time() - t0 < 180:
         r = chat(pf.port, "kprobe")
         seen.append(r["status"])
+        if len(seen) >= 8 and all(x not in (200, 429) for x in seen[-8:]):
+            break
         if r["status"] == 429:
             break
         time.sleep(2)
     rec(Q[1], "warmup", "INFO", "calls with key kprobe (class alpha) every 2 s until the first 429", "statuses: %s after %.0f s" % (compress(seen), time.time() - t0))
+    dbg = chat(pf.port, "kprobe", "debug")
+    rec(Q[1], "debug-call", "INFO", "one more call with kprobe", "status %s error %s body %s headers %s" % (dbg["status"], dbg["error"], short(dbg["body"], 300), dbg["headers"]))
+    spf = L.PF(L.SPIKE_NS, "svc/slow-model", "8080")
+    try:
+        d2 = L.http("POST", "http://127.0.0.1:%d/v1/chat/completions" % spf.port, {"Content-Type": "application/json"}, body_for("direct"), 20)
+    finally:
+        spf.stop()
+    rec(Q[1], "debug-stand-in", "INFO", "the same chat request straight to the stand-in", "status %s error %s body %s" % (d2["status"], d2["error"], short(d2["body"], 300)))
+    lg = k("logs", "-n", GW_NS, "-l", "gateway.networking.k8s.io/gateway-name=model-gateway", "--tail=15")[1]
+    rec(Q[1], "debug-gateway-log", "INFO", "kubectl logs (proxy, last 15 lines)", short(lg, 3000))
 
 
 def q1():
