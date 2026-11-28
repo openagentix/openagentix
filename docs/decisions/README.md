@@ -71,5 +71,7 @@ Follow the style of the existing records:
 | [0025](0025-read-only-diagnostic-tools.md) | Read-only cluster and database tools for diagnostic agents, and how a tool server gets a credential | Accepted | 2026-11-27 |
 | [0026](0026-use-case-wiring-contracts.md) | Chart contracts for wiring a use case: running MCP endpoints in tool profiles, stub model scenarios, composed values | Accepted | 2026-11-27 |
 | [0027](0027-event-triggers-through-the-gate.md) | Event triggers, how a system starts an agent run through the A2A gate | Accepted | 2026-11-28 |
+| [0028](0028-approval-at-the-system-of-record.md) | Approval stays in the system of record; the platform gives a result convention and a trace link | Accepted | 2026-11-28 |
+| [0029](0029-per-agent-token-budgets.md) | Per-agent token budgets in the one gateway policy, by budget class | Accepted | 2026-11-28 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.

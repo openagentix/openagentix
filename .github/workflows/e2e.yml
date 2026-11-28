@@ -8,6 +8,9 @@ on:
     paths:
       - install.sh
       - uninstall.sh
+      - hack/netpol-check.sh
+      - hack/release-values-diff.sh
+      - hack/release-values-ignore.txt
       - charts/**
       - components/**
       - services/**
@@ -62,6 +65,11 @@ on:
         description: 'Run the live proof of the pod root-cause agent (examples/use-cases/software-org, issue #229) instead of the profiles: the quick start plus the use case, the stub model with its scenarios, a real agent session through the A2A gate, tools/oa-eval'
         type: boolean
         default: false
+      adr_spikes:
+        description: 'Run the design spikes of ADR 0029 (a, the model gateway) and ADR 0027 (b, the runtime behind the A2A gate), or both (issue #229, hack/spikes/adr-spikes.sh) instead of the profiles. It observes a throwaway cluster and never gates a merge'
+        type: choice
+        options: [none, both, a, b]
+        default: none
 
 permissions:
   contents: read
@@ -73,7 +81,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && inputs.adr_spikes == 'none') }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -105,6 +113,7 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           QUICKSTART_BYO: ${{ matrix.byo }}   # 1: also the sample container agent (bring your own agent, ADR 0015)
           AGENT_WAIT: 300s
+          CHECK_NETPOL: ${{ matrix.profile == 'quickstart' && '1' || '0' }}   # issue #212: prints PASS, FAIL or INCONCLUSIVE for NetworkPolicy; not required here (kind's default plugin may not enforce it)
         run: |
           set -o pipefail
           start=$(date +%s)
@@ -160,6 +169,12 @@ jobs:
             echo "- smoke test (question through the gate, refused tool, refused definition, console API): ${SMOKE_S:-n/a} s"
             echo "- runner: $(nproc) vCPU, $(free -m | awk '/Mem:/{print $2}') MB"
             echo
+            if grep -q '^NetworkPolicy check' install.log 2>/dev/null; then
+              echo "### NetworkPolicy check (CHECK_NETPOL=1, issue #212)"
+              echo '```'
+              grep -A5 '^NetworkPolicy check' install.log
+              echo '```'
+            fi
             echo "### Where the time goes (install.sh steps)"
             echo '```'
             grep '^=== ' install.log 2>/dev/null || true
@@ -703,3 +718,53 @@ jobs:
             kind-logs
           retention-days: 14
           if-no-files-found: ignore
+
+  # Opt-in (workflow_dispatch with the input `adr_spikes`): two design spikes on the quick start, the stub model only (issue #229). Spike A reads what the
+  # model gateway does with a per-key class in a conditional rate limit (ADR 0029, PR #262). Spike B reads what the runtime behind the A2A gate does with a
+  # non-blocking send, a client that leaves, a repeated messageId and unusual message keys, and measures the gate's memory (ADR 0027, PR #260).
+  # It changes the throwaway cluster it runs on and refuses to run anywhere else. Notes: docs/decisions/spikes/.
+  e2e-adr-spikes:
+    name: e2e (adr spikes ${{ inputs.adr_spikes }})
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.adr_spikes != 'none' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install (PROFILE=quickstart, no key, no token)
+        env:
+          PROFILE: quickstart
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: spikes
+        env:
+          SPIKES: ${{ inputs.adr_spikes }}
+          SPIKE_OUT: ${{ github.workspace }}/spike-out
+        run: |
+          set -o pipefail
+          hack/spikes/adr-spikes.sh 2>&1 | tee spike.log
+      - name: diagnostics
+        if: always()
+        run: |
+          mkdir -p spike-out
+          kubectl get pods -A -o wide > spike-out/pods.txt 2>&1 || true
+          kubectl get agentgatewaypolicy -n agentgateway-system -o yaml > spike-out/gateway-policy.yaml 2>&1 || true
+          tail -150 spike.log > spike-out/spike-tail.txt 2>&1 || true
+      - name: upload the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: adr-spikes
+          path: |
+            spike-out/
+            spike.log
+            install.log
+          if-no-files-found: ignore
+          retention-days: 30

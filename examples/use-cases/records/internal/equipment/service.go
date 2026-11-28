@@ -34,12 +34,16 @@ const MaxHeldSlotsPerDealer = 10
 // already covers the fault. Past the bound the event is answered with the open case and not stored again.
 const MaxDuplicateEventsPerDay = 5
 
-// Fleet trend rules: a machine trends to failure when its coolant mean over the last 14 days is at least
-// TrendThresholdC above its mean 30 to 60 days ago. Many isolated spikes mean a flapping sensor instead.
+// Fleet trend rule, the same one the service bulletin SB-2026-011, the fault code guide and the agent instructions state: a machine trends to failure when
+// the mean coolant temperature of the last RecentDays days is at least TrendThresholdC above the mean of days BaselineFromDays to BaselineToDays ago. Both windows
+// are inside the 30 days that get_telemetry serves, so the agent can compute what the sweep computes. Many isolated spikes mean a flapping sensor instead.
 const (
-	TrendThresholdC = 8.0
-	SpikeThreshold  = 10
-	spikeAboveC     = 25.0
+	RecentDays       = 7
+	BaselineFromDays = 23
+	BaselineToDays   = 30
+	TrendThresholdC  = 8.0
+	SpikeThreshold   = 10
+	spikeAboveC      = 25.0
 )
 
 var (
@@ -436,7 +440,7 @@ func trendFor(ctx context.Context, q querier, now time.Time, serial string) (Tre
 	if err := q.QueryRowContext(ctx, `SELECT
 		(SELECT AVG(coolant_c) FROM telemetry WHERE machine=? AND ts>=?),
 		(SELECT AVG(coolant_c) FROM telemetry WHERE machine=? AND ts>=? AND ts<?)`,
-		serial, core.FormatTime(now.AddDate(0, 0, -14)), serial, core.FormatTime(now.AddDate(0, 0, -60)), core.FormatTime(now.AddDate(0, 0, -30))).Scan(&recent, &base); err != nil {
+		serial, core.FormatTime(now.AddDate(0, 0, -RecentDays)), serial, core.FormatTime(now.AddDate(0, 0, -BaselineToDays)), core.FormatTime(now.AddDate(0, 0, -BaselineFromDays))).Scan(&recent, &base); err != nil {
 		return t, err
 	}
 	if !recent.Valid || !base.Valid {

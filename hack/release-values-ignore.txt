@@ -1,0 +1,56 @@
+# Chart value keys that install.sh sets itself with --set, --set-string or --set-json (issue #212). hack/release-values-diff.sh does not report these
+# as lost when the release has them and the new values do not. One exact key per line, no patterns. A list value (apiServerCIDRs) is named by its key.
+# hack/ci/release-values-diff-test.sh fails when install.sh gains a --set key that is not listed here. The scenario files of the stub model
+# (--set-file gateway.stubModel.scenarios.files.<name>) are not listed: the check counts them as values of the run, so a scenario file that is left out is reported.
+
+# image tag, repository and digest of each image the installer builds (tag_image and finish_builds in install.sh)
+bridge.image.tag
+bridge.image.repository
+bridge.image.digest
+scheduling.image.tag
+scheduling.image.repository
+scheduling.image.digest
+knowledge.kb.image.tag
+knowledge.kb.image.repository
+knowledge.kb.image.digest
+notify.image.tag
+notify.image.repository
+notify.image.digest
+governance.a2a.image.tag
+governance.a2a.image.repository
+governance.a2a.image.digest
+gateway.stubModel.image.tag
+gateway.stubModel.image.repository
+gateway.stubModel.image.digest
+controlPlane.image.tag
+controlPlane.image.repository
+controlPlane.image.digest
+console.image.tag
+console.image.repository
+console.image.digest
+diagnostics.image.tag
+diagnostics.image.repository
+diagnostics.image.digest
+
+# hashes of the source, which roll the pods when the source changes
+gateway.stubModel.sourceHash
+bridge.sourceHash
+scheduling.sourceHash
+knowledge.kb.sourceHash
+notify.sourceHash
+governance.a2a.sourceHash
+controlPlane.sourceHash
+diagnostics.sourceHash
+console.sourceHash
+
+# the API server addresses the installer reads from the cluster
+controlPlane.apiServerCIDRs
+diagnostics.apiServerCIDRs
+console.apiServerCIDRs
+# only in the planning render (never reaches the release), listed so that the test sees every --set key
+diagnostics.allowAnyApiServerAddress
+
+# the service account issuer, the skill reference, and the notify switch the installer turns off while no destination exists
+controlPlane.containerAgents.serviceAccountTokens.issuer
+skills.openagentix-canary.oci
+notify.requireReady

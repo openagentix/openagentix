@@ -5,7 +5,7 @@
 //	oa-eval replay --cases cases.yaml --gate-url URL --baseline report.json [flags]
 //
 // Exit codes: 0 all good, 1 a case failed (run) or a regression or agreement drop was found (replay), 2 bad usage or
-// setup. A token is read from a file, never from a flag, and is never printed.
+// setup, 3 the model refused a call (a spent budget or a provider error): those cases are "not run". A token is read from a file, never from a flag, and is never printed.
 package main
 
 import (
@@ -106,6 +106,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if mode == "run" {
 		if rep.Failed > 0 {
 			return 1
+		}
+		if rep.NotRun > 0 {
+			return 3 // the model refused a call: nothing failed, and nothing can be called a pass
 		}
 		return 0
 	}
