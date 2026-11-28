@@ -34,8 +34,8 @@
 #
 # Env: CLUSTER (REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER; k3d-<name> is accepted)  KUBECTL  HELM
 #      VALUES_FILE (--beside-full-demo only: the files of the install you have, space separated, relative to the repository root or absolute)
-#      ALSO_COMPOSE (--beside-full-demo only: the values-full-demo.yaml files of other use cases installed beside yours, composed by entry name after your
-#      list and before this agent's file; no detection: a use case you leave out is refused by the release check, which says to add it here)
+#      ALSO_COMPOSE (--beside-full-demo only: the values-full-demo.yaml files of other use cases installed beside yours, and the values-events.yaml of a use
+#      case that was installed with EVENTS=1, composed by entry name in the order given, after your list and before this agent's file; no detection: a use case you leave out is refused by the release check, which says to add it here)
 #      PLATFORM_INSTALL (the platform installer, default ./install.sh in the repository root; a test sets a fake)  COMPOSE (compose-values.sh)
 #      Any other variable of the platform installer (SKIP_*, AGENT_WAIT, STUB_SCENARIOS with --beside-full-demo, ...) goes through to it.
 set -euo pipefail
@@ -126,7 +126,9 @@ release_extras() { # release_extras <json file of the values this script will ha
   printf '%s' "$rel" | jq -r --argjson beside "$BESIDE" --slurpfile exp "$1" '
     def flat($pre):
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
-      elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
+      elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]")
+        elif $pre == ".networkPolicy.extraA2ACallers" and type == "object" and ((.namespace | type) == "string") then flat($pre + "[" + .namespace + "]")
+        else flat($pre + "[]") end)) end)
       else $pre end;
     # the scenario file this script ships is software-org-rca.json: it is replaced without complaint when the release holds an earlier copy. A scenario.json (the
     # bank, or another use case) and any other file stay in the list, unless STUB_SCENARIOS gives them again (they are then in the expected values).
@@ -162,8 +164,10 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     ALSO=()
     for f in ${ALSO_COMPOSE:-}; do
       [ -r "$f" ] || die "cannot read $f (ALSO_COMPOSE is read from the repository root). Nothing was changed."
-      case "$(basename "$f")" in values-full-demo.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml files of other use cases, not $f. Nothing was changed." ;; esac
-    [ ! "$f" -ef "$HERE/values-full-demo.yaml" ] || die "ALSO_COMPOSE lists this use case's own values-full-demo.yaml ($f): this script composes it itself. List the files of the OTHER use cases. Nothing was changed."
+      case "$(basename "$f")" in values-full-demo.yaml|values-events.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml and values-events.yaml files of other use cases, not $f. Nothing was changed." ;; esac
+      for own in "$HERE/values-events.yaml" "$HERE/values-full-demo.yaml"; do
+        [ ! "$f" -ef "$own" ] || die "ALSO_COMPOSE lists this use case's own $(basename "$own") ($f): it is composed by this script itself (and this use case has no events file). List the files of the OTHER use cases. Nothing was changed."
+      done
       ALSO+=("$f")
     done
     "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO[@]+"${ALSO[@]}"} "$HERE/values-full-demo.yaml" || die "the values did not compose (the reason is above): your install, the files of ALSO_COMPOSE and this agent do not fit together as they are. Nothing was changed."
@@ -192,7 +196,7 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
   if [ -n "$EXTRAS" ]; then
     LIST=$(printf '%s' "$EXTRAS" | head -n 20 | tr '\n' ';' | sed 's/;/; /g')
     if [ "$BESIDE" = 1 ]; then
-      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list (and STUB_SCENARIOS) do not have: $LIST. The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files, and the same STUB_SCENARIOS (a directory with every scenario file), you installed with. If the release holds another use case (the bank, equipment), add its values-full-demo.yaml to ALSO_COMPOSE. Nothing was changed."
+      die "the release $RELEASE in $KUBE_CONTEXT has values that your VALUES_FILE list (and STUB_SCENARIOS) do not have: $LIST. The platform installer replaces the release values with your list plus this agent, so it would drop them. Give the same list of files, and the same STUB_SCENARIOS (a directory with every scenario file), you installed with. If the release holds another use case (the bank, equipment), add its values-full-demo.yaml to ALSO_COMPOSE, and its values-events.yaml too when it was installed with EVENTS=1 (its event caller is in the release). Nothing was changed."
     else
       die "the release $RELEASE in $KUBE_CONTEXT has more than the quick start and this use case: $LIST. The platform installer would replace those values and drop them. Use a cluster of its own, or add the agent to your install with: VALUES_FILE=\"<your files>\" CLUSTER=<its cluster> $0 --beside-full-demo. Nothing was changed."
     fi

@@ -323,10 +323,39 @@ ALSO_COMPOSE="$BANKFD" CLUSTER=oa-rca-demo run; rc=$?
 check "ALSO_COMPOSE without --beside-full-demo is refused" "[ $rc = 1 ] && grep -q 'beside-full-demo only' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
 reset
 ALSO_COMPOSE="components/quickstart/values.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
-check "ALSO_COMPOSE takes values-full-demo.yaml files only: another file is refused" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml files' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+check "ALSO_COMPOSE takes values-full-demo.yaml files only: another file is refused" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml and values-events.yaml files' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
 reset
 ALSO_COMPOSE="examples/use-cases/nope/values-full-demo.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
 check "a file of ALSO_COMPOSE that cannot be read is refused" "[ $rc = 1 ] && grep -q 'cannot read' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+echo "# ALSO_COMPOSE takes the values-events.yaml of other use cases too (the bank and the equipment installed with EVENTS=1), as the two other installers do"
+BANKEV="examples/use-cases/bank/values-events.yaml"; EQFD="examples/use-cases/equipment/values-full-demo.yaml"; EQEV="examples/use-cases/equipment/values-events.yaml"
+ALL_ALSO="$BANKFD $BANKEV $EQFD $EQEV"
+reset
+ALSO_COMPOSE="$ALL_ALSO" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "the full demo plus the bank and the equipment with both event files in ALSO_COMPOSE: exits 0 and the platform installer runs once" "[ $rc = 0 ] && [ \"\$(wc -l < '$LOG/platform.calls' | tr -d ' ')\" = 1 ]" "rc=$rc $(tail -4 "$LOG/out")"
+check "the composed values hold both event callers, both namespaces for the gate, the three classes and this agent" "yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) != null and (.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and ((.networkPolicy.extraA2ACallers | map(.namespace) | sort) == [\"fernvale-records\",\"kestrel-records\"]) and ((.gateway.policy.budgetClasses | map(.name) | length) == 3) and (.agents | map(.name) | index(\"pod-rca\")) != null' '$LOG/platform.values' >/dev/null"
+check "the files are composed in the order of ALSO_COMPOSE, then this use case's own file: the events files come after the full demo files they belong to" "[ \"\$(yq -r '[.governance.a2a.callers[].name] | (index(\"disputes-desk\") < index(\"fernvale-case-events\")) and (index(\"fernvale-case-events\") < index(\"kestrel-fault-events\")) and (index(\"kestrel-fault-events\") < index(\"rca-desk\"))' '$LOG/platform.values')\" = true ]"
+yq . "$LOG/platform.values" > "$TMP/composed-ev.json"
+jq -c ". * $installer_keys" "$TMP/composed-ev.json" > "$TMP/release-ev.json"
+reset
+FAKE_HELM_VALUES="$(cat "$TMP/release-ev.json")" ALSO_COMPOSE="$ALL_ALSO" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a second run on the release it made passes its release guard" "[ $rc = 0 ] && [ -s '$LOG/platform.calls' ]" "rc=$rc $(tail -4 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(cat "$TMP/release-ev.json")" ALSO_COMPOSE="$BANKFD $BANKEV $EQFD" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a run that leaves the equipment's events file out is refused, naming the caller that would be lost, with the hint to list its values-events.yaml; nothing is installed" "[ $rc = 1 ] && grep -qF 'kestrel-fault-events' '$LOG/out' && grep -qF 'values-events.yaml' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -4 "$LOG/out")"
+reset
+FAKE_HELM_VALUES="$(cat "$TMP/release-ev.json")" ALSO_COMPOSE="$BANKFD $EQFD $EQEV" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a run that leaves the bank's events file out is refused, naming fernvale-case-events" "[ $rc = 1 ] && grep -qF 'fernvale-case-events' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]" "rc=$rc $(tail -4 "$LOG/out")"
+reset
+ALSO_COMPOSE="examples/use-cases/software-org/values-events.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a file named values-events.yaml that does not exist (this use case has none) is refused as unreadable, before the platform installer" "[ $rc = 1 ] && grep -q 'cannot read' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
+reset
+mkdir -p "$TMP/other-ev"; cp "$ROOT/$BANKEV" "$TMP/other-ev/values-events.yaml"
+ALSO_COMPOSE="$BANKFD $TMP/other-ev/values-events.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a file with that base name, wherever it is, is accepted (the rule is the base name, as in the other two installers)" "[ $rc = 0 ]" "rc=$rc $(tail -3 "$LOG/out")"
+reset
+ALSO_COMPOSE="examples/use-cases/bank/values.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "a values.yaml is still refused, and the message names both accepted file names" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml and values-events.yaml files of other use cases' '$LOG/out'"
 
 echo "# the model keys of the quick start are ignored only in the default modes"
 reset
