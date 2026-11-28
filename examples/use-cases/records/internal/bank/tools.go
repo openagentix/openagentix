@@ -67,6 +67,9 @@ type caseResult struct {
 	Case caseOut `json:"case"`
 	// Notice is set when this write superseded a pending approval request: no request is waiting any more.
 	Notice string `json:"notice,omitempty"`
+	// SupersededApprovals is the machine readable form of the same fact (the approval result convention, v1alpha1, ADR 0028): the ids of the
+	// requests this write superseded. Absent when none was.
+	SupersededApprovals []string `json:"superseded_approvals,omitempty"`
 }
 type listCasesIn struct {
 	DueWithinDays int `json:"due_within_days,omitempty" jsonschema:"only cases whose response deadline is within this many days (0 means any)"`
@@ -110,6 +113,8 @@ type draftOut struct {
 	Kind    string `json:"kind"`
 	Status  string `json:"status"`
 	Notice  string `json:"notice,omitempty"`
+	// SupersededApprovals: see caseResult.
+	SupersededApprovals []string `json:"superseded_approvals,omitempty"`
 }
 type timerIn struct {
 	CaseID string `json:"case_id"`
@@ -135,15 +140,18 @@ type approvalOut struct {
 // approvalView is an approval as the agent sees it. The route reason and the drafts came from the agent or from
 // the REST port, so they are labelled as text, not as instructions.
 type approvalView struct {
-	ID                   string `json:"id"`
-	Subject              string `json:"subject"`
-	Kind                 string `json:"kind"`
-	AmountCents          int64  `json:"amount_cents"`
-	Status               string `json:"status"`
-	ProposedBy           string `json:"proposed_by"`
-	DecidedBy            string `json:"decided_by,omitempty"`
-	DecisionNote         string `json:"untrusted_decision_note,omitempty"`
-	PayloadHash          string `json:"payload_hash"`
+	ID           string `json:"id"`
+	Subject      string `json:"subject"`
+	Kind         string `json:"kind"`
+	AmountCents  int64  `json:"amount_cents"`
+	Status       string `json:"status"`
+	ProposedBy   string `json:"proposed_by"`
+	DecidedBy    string `json:"decided_by"` // always present, empty until a decision (the approval result convention, v1alpha1)
+	DecisionNote string `json:"untrusted_decision_note,omitempty"`
+	PayloadHash  string `json:"payload_hash"` // the SHA-256 of the exact payload text the approver reads
+	// TraceID is the W3C trace id of the call that proposed the act, or "unknown". It is "unknown" until the trace link is built (ADR 0028, slice 3):
+	// the vMCP may not forward traceparent to this endpoint, and nothing here reads it yet.
+	TraceID              string `json:"trace_id"`
 	UntrustedRouteReason string `json:"untrusted_route_reason"`
 	UntrustedLetter      string `json:"untrusted_letter"`
 	UntrustedFiling      string `json:"untrusted_filing,omitempty"`
@@ -152,12 +160,17 @@ type approvalView struct {
 
 func agentApproval(a core.Approval) approvalView {
 	v := approvalView{ID: a.ID, Subject: a.Subject, Kind: a.Kind, AmountCents: a.AmountCents, Status: a.Status, ProposedBy: a.ProposedBy,
-		DecidedBy: a.DecidedBy, DecisionNote: a.DecisionNote, PayloadHash: a.PayloadHash}
+		DecidedBy: a.DecidedBy, DecisionNote: a.DecisionNote, PayloadHash: a.PayloadHash, TraceID: "unknown"}
 	var p proposalPayload
 	if json.Unmarshal([]byte(a.Payload), &p) == nil {
 		v.UntrustedRouteReason, v.UntrustedLetter, v.UntrustedFiling, v.CaseVersion = p.RouteReason, p.Letter, p.Filing, p.CaseVersion
 	}
 	return v
+}
+
+// approvalGetOut is the result of get_approval: the approval member of the convention, as request_approval has it.
+type approvalGetOut struct {
+	Approval approvalView `json:"approval"`
 }
 
 type approvalGetIn struct {
@@ -208,17 +221,21 @@ func (d *Domain) pendingApprovals(ctx context.Context, caseID string) []string {
 	return ids
 }
 
-// supersededNotice says which of those requests the write superseded, and what to do. It is empty when none was.
-func (d *Domain) supersededNotice(ctx context.Context, ids []string) string {
-	var gone []string
+// superseded says which of those requests the write superseded: the ids (the convention's superseded_approvals) and a notice that says what to do.
+// Both are empty when none was.
+func (d *Domain) superseded(ctx context.Context, ids []string) (notice string, gone []string) {
 	for _, id := range ids {
 		if a, err := d.approvals.Get(ctx, id); err == nil && a.Status == "superseded" {
 			gone = append(gone, id)
 		}
 	}
 	if len(gone) == 0 {
-		return ""
+		return "", nil
 	}
+	return supersededNotice(gone), gone
+}
+
+func supersededNotice(gone []string) string {
 	return "This write superseded the pending approval request " + strings.Join(gone, ", ") + ". No request is waiting for a decision now and the case is back in review. " +
 		"Finish your writes, then call request_approval again as the last write, and do not report the old request as pending."
 }
@@ -274,35 +291,40 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 			v, err := d.timers.List(ctx, "fired", "")
 			return timersOut{Timers: v}, err
 		})
-	register(d, srv, "attach_evidence", "Attach one evidence item to a case. kind is exactly one of transaction, rule, linked_case, gap or other. ref is an id or rule reference of at most 64 characters (letters, digits and _ . : / space -). note is at most 1000 characters. Any change to a case after request_approval supersedes that request.", false, func(in evidenceIn) string { return in.CaseID },
+	register(d, srv, "attach_evidence", "Attach one evidence item to a case. kind is exactly one of transaction, rule, linked_case, gap or other. ref is an id or rule reference of at most 64 characters (letters, digits and _ . : / space -). note is at most 1000 characters. Any change to a case after request_approval supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in evidenceIn) string { return in.CaseID },
 		func(ctx context.Context, in evidenceIn) (caseResult, error) {
 			ids := d.pendingApprovals(ctx, in.CaseID)
 			c, err := s.AttachEvidence(ctx, in.CaseID, in.Kind, in.Ref, in.Note)
-			return caseResult{Case: agentCase(c), Notice: d.supersededNotice(ctx, ids)}, err
+			n, g := d.superseded(ctx, ids)
+			return caseResult{Case: agentCase(c), Notice: n, SupersededApprovals: g}, err
 		})
-	register(d, srv, "set_route", "Set the route and the reason on a case. This moves no money. The reason is at most 500 characters. Changing the route after an approval was requested supersedes that request.", false, func(in routeIn) string { return in.CaseID },
+	register(d, srv, "set_route", "Set the route and the reason on a case. This moves no money. The reason is at most 500 characters. Changing the route after an approval was requested supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in routeIn) string { return in.CaseID },
 		func(ctx context.Context, in routeIn) (caseResult, error) {
 			ids := d.pendingApprovals(ctx, in.CaseID)
 			c, err := s.SetRoute(ctx, in.CaseID, in.Route, in.Reason)
-			return caseResult{Case: agentCase(c), Notice: d.supersededNotice(ctx, ids)}, err
+			n, g := d.superseded(ctx, ids)
+			return caseResult{Case: agentCase(c), Notice: n, SupersededApprovals: g}, err
 		})
-	register(d, srv, "set_case_status", "Mark a case in_review or needs_analyst. This too supersedes a pending approval request.", false, func(in statusIn) string { return in.CaseID },
+	register(d, srv, "set_case_status", "Mark a case in_review or needs_analyst. This too supersedes a pending approval request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in statusIn) string { return in.CaseID },
 		func(ctx context.Context, in statusIn) (caseResult, error) {
 			ids := d.pendingApprovals(ctx, in.CaseID)
 			c, err := s.SetStatus(ctx, in.CaseID, in.Status)
-			return caseResult{Case: agentCase(c), Notice: d.supersededNotice(ctx, ids)}, err
+			n, g := d.superseded(ctx, ids)
+			return caseResult{Case: agentCase(c), Notice: n, SupersededApprovals: g}, err
 		})
-	register(d, srv, "draft_letter", "Store the customer letter as a draft (at most 4000 characters). It is not sent until an approver approves. A new draft after request_approval supersedes that request.", false, func(in bodyIn) string { return in.CaseID },
+	register(d, srv, "draft_letter", "Store the customer letter as a draft (at most 4000 characters). It is not sent until an approver approves. A new draft after request_approval supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in bodyIn) string { return in.CaseID },
 		func(ctx context.Context, in bodyIn) (draftOut, error) {
 			ids := d.pendingApprovals(ctx, in.CaseID)
 			it, err := s.DraftLetter(ctx, in.CaseID, in.Body)
-			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status, Notice: d.supersededNotice(ctx, ids)}, err
+			n, g := d.superseded(ctx, ids)
+			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status, Notice: n, SupersededApprovals: g}, err
 		})
-	register(d, srv, "draft_chargeback", "Store the chargeback filing as a draft (at most 4000 characters). It is not filed until an approver approves. A new draft after request_approval supersedes that request.", false, func(in bodyIn) string { return in.CaseID },
+	register(d, srv, "draft_chargeback", "Store the chargeback filing as a draft (at most 4000 characters). It is not filed until an approver approves. A new draft after request_approval supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in bodyIn) string { return in.CaseID },
 		func(ctx context.Context, in bodyIn) (draftOut, error) {
 			ids := d.pendingApprovals(ctx, in.CaseID)
 			it, err := s.DraftChargeback(ctx, in.CaseID, in.Body)
-			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status, Notice: d.supersededNotice(ctx, ids)}, err
+			n, g := d.superseded(ctx, ids)
+			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status, Notice: n, SupersededApprovals: g}, err
 		})
 	register(d, srv, "set_timer", "Set a deadline timer on a case. When it is due it is marked fired for the next sweep.", false, func(in timerIn) string { return in.CaseID },
 		func(ctx context.Context, in timerIn) (timerOut, error) {
@@ -318,10 +340,10 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 			a, err := s.RequestApproval(ctx, in.CaseID, in.Kind, in.AmountCents)
 			return approvalOut{Approval: agentApproval(a), Next: "A named approver must approve or reject. Any later change to the case (evidence, route, status, a draft) supersedes this request, so request_approval must be your last write. Read get_approval before you report the request as pending; do nothing else for money or letters."}, err
 		})
-	register(d, srv, "get_approval", "Read the status of an approval request.", true, func(in approvalGetIn) string { return in.ApprovalID },
-		func(ctx context.Context, in approvalGetIn) (approvalView, error) {
+	register(d, srv, "get_approval", "Read an approval request. The result has an approval member with its id, status (pending, approved, rejected or superseded), payload_hash, proposed_by and decided_by. Report a request as pending only when status is pending.", true, func(in approvalGetIn) string { return in.ApprovalID },
+		func(ctx context.Context, in approvalGetIn) (approvalGetOut, error) {
 			a, err := d.approvals.Get(ctx, in.ApprovalID)
-			return agentApproval(a), err
+			return approvalGetOut{Approval: agentApproval(a)}, err
 		})
 	return withHealth(d, mcpMount(srv))
 }

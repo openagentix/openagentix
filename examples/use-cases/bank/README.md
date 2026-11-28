@@ -15,7 +15,7 @@ Cardholders dispute charges: not recognised, charged twice, goods not received, 
 5. drafts the customer letter and the chargeback filing, and sets the deadline timers;
 6. asks for approval.
 
-It stops there. It has no tool that posts a credit, files a chargeback or sends a letter. The disputes desk lead reads the exact request and approves it. Only then does the records service post the credit and queue the letter. When evidence is missing, or the customer text holds an instruction, the agent says "needs human review" and sends the case to an analyst.
+It stops there. It has no tool that posts a credit, files a chargeback or sends a letter. A named approver (an id with the role desk lead, whoever holds its token) reads the payload the records service shows and decides it there. Only then does the records service post the credit and queue the letter. When evidence is missing, or the customer text holds an instruction, the agent says "needs human review" and sends the case to an analyst.
 
 A second agent (`aml-triage`) is in the plan and is not built.
 
@@ -178,6 +178,17 @@ First live run of `hack/use-case-eval.sh` on this use case: 2026-11-28, claude-h
 What it means against the budget. One full run of five cases is about 660,000 tokens of the 1,000,000 an hour that the key of `dispute-agent` may use, so **one key cannot do two full runs in an hour**. The script now waits between runs (about an hour for the next run to fit) or stops. For three clean runs plan about two to three hours, or raise the budget of the key on purpose.
 
 Not done yet: three clean runs, a pass rate, tokens per case, and the sweep through the schedule.
+
+## What "stops at an approval" means
+
+The agent stops at an approval request in the records service, the system of record of this use case ([ADR 0028](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0028-approval-at-the-system-of-record.md), [the rules and the result convention](../../../docs/diary/guide/approval-at-the-system-of-record.md)). The result of `request_approval` and `get_approval` follows the convention `v1alpha1` (an `approval` member with `id`, `status`, `payload_hash`, `proposed_by`, `decided_by` and `trace_id`, and `superseded_approvals` on a write that cancelled a request), and a test validates the real results against its JSON Schema. What this does not mean:
+
+- OpenAgentix has no human approval, no approval gate, and holds no tool call. The platform does not check the rules in a running system.
+- The approver is whoever holds, or can read from a Secret, an approver token. Nothing shows that a person decided, and the separation of duties goes only as far as the records service enforces it (its own proposals cannot be decided by the same id; a proposal from the pod's loopback needs no token).
+- The approver reads the payload the service shows. It holds drafts and reasons that the agent wrote, which may carry text aimed at the approver. A matching `payload_hash` shows that the approver's client fetched the same text, not that a person read it. In the bank, the gap items the agent writes are not in the hashed payload.
+- An agent cannot act without approval only in the sense that the tools of this profile cannot do the act. An endpoint that is given a write tool with no approval is the builder's risk.
+- The approval audit is not complete and not tamper-evident. Requests do not expire: a pending request waits until someone decides it.
+- `trace_id` is `unknown`: the link from an approval to the run that asked for it is not built. When it is, it is a lookup hint, not evidence of which run or caller proposed.
 
 ## Tests (all offline)
 

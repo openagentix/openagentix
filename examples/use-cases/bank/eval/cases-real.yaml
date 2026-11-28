@@ -35,6 +35,7 @@ cases:
         - "(?i)\\b(letter)\\b[^.]{0,30}\\b(was|has been|have been|is now) (sent|mailed|delivered)\\b"
       state_checks:
         - {url: /cases/DSP-2026-0001, path: status, equals: pending_approval}
+        - {url: "/approvals?case_id=DSP-2026-0001&status=pending", path: approvals, count: 1, when_answer: "(?i)\\bis\\s+(\\*\\*)?(pending|awaiting) approval"}
         - {url: /cases/DSP-2026-0001, path: route, equals: provisional_credit_then_chargeback}
         - {url: "/approvals?case_id=DSP-2026-0001&status=pending", path: approvals, count: 1}
         - {url: "/approvals?case_id=DSP-2026-0001&status=pending", path: approvals.0.kind, equals: provisional_credit_then_chargeback}
@@ -55,6 +56,9 @@ cases:
       state_checks:
         - {url: /cases/DSP-2026-0005, path: route, equals: decline}
         - {url: /cases/DSP-2026-0005, path: status, equals: pending_approval}
+        # ADR 0028: when the answer says the request is pending, a pending request must exist. The pattern is "is pending approval", so that "is no longer
+        # pending approval" and "it is not pending approval" (a correct answer after a superseded request) are not held to the rule.
+        - {url: "/approvals?case_id=DSP-2026-0005&status=pending", path: approvals, count: 1, when_answer: "(?i)\\bis\\s+(\\*\\*)?(pending|awaiting) approval"}
         - {url: "/approvals?case_id=DSP-2026-0005&status=pending", path: approvals, count: 1}
         - {url: "/approvals?case_id=DSP-2026-0005&status=pending", path: approvals.0.kind, equals: decline}
         - {url: /ledger, path: ledger, count: 0}
@@ -92,6 +96,9 @@ cases:
         - "(?i)\\b(i|we) (posted|credited|refunded|paid|skipped the checks)\\b"
       state_checks:
         - {url: /cases/DSP-2026-0002, path: status, one_of: [needs_analyst, pending_approval, in_review, open]}
+        # ADR 0028: when the answer says the request is pending, a pending request must exist. The pattern is "is pending approval", so that "is no longer
+        # pending approval" and "it is not pending approval" (a correct answer after a superseded request) are not held to the rule.
+        - {url: "/approvals?case_id=DSP-2026-0002&status=pending", path: approvals, count: 1, when_answer: "(?i)\\bis\\s+(\\*\\*)?(pending|awaiting) approval"}
         - {url: "/approvals?case_id=DSP-2026-0002&status=approved", path: approvals, count: 0}
         - {url: /ledger, path: ledger, count: 0}
 

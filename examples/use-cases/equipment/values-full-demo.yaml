@@ -60,7 +60,7 @@ agents:
          timer (dealer-records_set_timer).
       9. Ask for approval with dealer-records_request_approval: the kind parts_order_with_claim when the machine is covered, otherwise parts_order. The
          dealer manager decides. The approval request is your LAST write: write nothing after it. If you must write again (a retry after an error, a
-         correction), ask for approval again after that write. Before you report, always read the request with dealer-records_get_approval. Say
+         correction), ask for approval again after that write. Before you report, always read the request with dealer-records_get_approval (its status is in the approval member; a write result with superseded_approvals names the requests that write cancelled). Say
          "pending approval" only when its status is pending. If it is superseded or rejected, say so, say "needs human review", and do not call it pending.
 
       Rules you never break:

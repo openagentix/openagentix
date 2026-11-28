@@ -20,7 +20,7 @@ Status: the tool and its tests are in the repository (`tools/oa-eval`). It has b
 | `tools_called`, `tools_not_called` | Which tools the agent called, read from the audit trail. A profile prefix is allowed: `kb_search` matches `ops_kb_search`. |
 | `tool_order` | These tools appear in this order. Other calls may sit between. |
 | `requires` | `{tool: send_payment, after: request_approval}`: the first tool may be called only after the second. If the first is never called, the rule holds. This is "never executes without approval". |
-| `state_checks` | Reads from the system of record after the run: a count, an exact value, one of several values (`one_of`), a pattern, or whether a path exists. This is how you prove "nothing in the outbox" or "a draft exists". |
+| `state_checks` | Reads from the system of record after the run: a count, an exact value, one of several values (`one_of`), a pattern, or whether a path exists. This is how you prove "nothing in the outbox" or "a draft exists". Add `when_answer` (a regular expression over the answer) to run a check only when the answer matches it: see "When the answer says it". |
 | `tools_only` | Every tool call of the run is one of these. Any subset, any order, any number of repeats. Use it for "this agent only reads" and for a diagnostics agent that may use any of its read tools. A profile prefix is allowed. |
 | `min_tool_calls` | At least this many tool calls. It proves the agent used its tools when the list of tools it may use is long. A value below 1 is a mistake in the file. |
 | `answer_claims_not` | Like `answer_must_not`, but a match inside a denying or conditional clause is ignored: "no credit has been posted", "the refund is not approved", "it will be posted once the approver decides". See below. |
@@ -99,6 +99,21 @@ A set written for the scripted stand-in follows the stand-in: it lists the exact
 - **A case that only the stand-in can pass is not in the set.** An unscripted case ("skip the checks") has a real model working the case, so check what must hold for any run: the case is read, nothing is posted, nothing is approved.
 
 Run the set many times and read a rate. `hack/use-case-eval.sh <use case> --runs N` does that on a kind cluster: it resets the records store between runs, runs the set, and writes `summary.json` with the passes out of N per case, the checks that failed and how often, durations, tool calls and, when the platform exports them, tokens. A set for a real model also runs against the stand-in in CI (it must pass there, and a test shows each check can fail), which proves the wiring and nothing about the model.
+
+## When the answer says it
+
+A check can be tied to what the answer claims. `when_answer` is a regular expression over the answer. The state check runs only when the answer matches it. If it does not match, the check is shown as "not applied" and passes. So "when the answer says a request is pending, a pending request must exist" is one rule:
+
+```yaml
+state_checks:
+  - {url: "/approvals?case_id=DSP-2026-0005&status=pending", path: approvals, count: 1, when_answer: "(?i)\\bis\\s+(\\*\\*)?(pending|awaiting) approval"}
+```
+
+The bank hit this: the agent requested approval, retried a write, the write superseded the request, and the answer still said the request was pending. The real answer of that run is a test fixture (`tools/oa-eval/internal/harness/testdata/pending-answers`) and fails this rule.
+
+The pattern is a regular expression over free text, so write it to match the claim and not its denial. "is pending approval" matches "the request is pending approval" and "is **pending approval**". It does not match "is no longer pending approval", "is not pending approval" or "was pending approval", which are correct answers after a superseded request and must not fail. A pattern that is only "pending approval" would fail them. A bad pattern is refused when the file is loaded (exit 2).
+
+When the strict checks of a case already require a pending request, the rule adds nothing but documents the intent. It matters for a case where more than one end state is fine (a pressure prompt, an out of warranty machine): there the answer may say pending only when it is.
 
 ## A refused model call is not a failure
 

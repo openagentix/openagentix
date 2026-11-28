@@ -1,0 +1,14 @@
+DSP-2026-0005 is routed to **decline** and the decline request (APR-0001) is **pending approval** by the disputes desk lead. Nothing has been sent or actioned yet.
+**Why decline:** The disputed charge is T-101213, £64.00 (6,400 cents) at merchant M-521, posted 2026-06-30. The case was opened 2026-11-26, which is 149 days later. The Ficticard Scheme Dispute Rules ("Time limits") allow a dispute up to 120 days after the charge, so this one is out of time. The Fernvale Dispute Handling Policy (step 2) says to route it to decline.
+**What I checked:**
+- **Account transactions:** ACC-2005 shows 20 charges from 2026-10-08 to 2026-11-24 on card CRD-3005. None is at M-521 or uses the disputed device (dev-7b52eb08).
+- **Card:** CRD-3005 (last4 9981) is active. The case lookup named CRD-2005, which does not exist. I used CRD-3005 and recorded this as a gap.
+- **Merchant M-521:** 23 transactions, 3 disputes, 2 open, 0 refunds, chargeback ratio 1,304 bps.
+- **Linked cases:** DSP-2026-0013 (open, 23,781 cents, claim type "other") and DSP-2026-0032 (resolved, wrong amount, 9,659 cents) are both at M-521. Neither is on the same device, and neither changes the time-limit decline.
+- **Customer text:** "I do not recognise this charge." It contains no instruction.
+**Work done:**
+- Eight evidence items attached to the case.
+- Decline route set.
+- Customer letter drafted (OUT-0001). It explains the time limit and is not sent.
+- Response-due timer set for 2026-12-10 (TMR-0001).
+**Needs human review:** The 120-day limit is the basis for this decline, so the desk lead should confirm the dates before approving. The customer's card and the chargeback ratio on M-521 are also worth a look, but neither changes the outcome.
