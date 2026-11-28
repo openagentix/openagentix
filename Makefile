@@ -83,6 +83,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/diagnostics-check-test.sh
 	hack/ci/kb-callers-test.sh
 	hack/ci/kb-live-mode-test.sh
+	hack/ci/compose-reader-test.sh
 	hack/ci/endpoints-check-test.sh
 	hack/ci/recovery-test-test.sh
 	hack/ci/upgrade-test-test.sh
