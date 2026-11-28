@@ -1,0 +1,155 @@
+# The sweep of the scripts that can reach a real kubectl, helm, kind, k3d, docker or the installers (issue #212). One row for each script found by hack/ci/live-sweep-test.sh.
+# Columns (tab separated): path, class, opt-in environment, name of the CI context variable, arguments, note.
+#   guard   live; refuses a context that is not a named throwaway cluster (the shared helper hack/ci/lib/require-ci-context.sh or an own guard); the sweep test runs it
+#           with fake tools and expects exit 2 and nothing but a read of the current context
+#   own     live, but on a kind cluster that it makes itself with a kubeconfig of its own: it cannot reach the current context (checked by the sweep test)
+#   user    a tool for a person's own cluster, by design; it has its own rules
+#   docker  runs docker only (images, throwaway containers); no cluster
+#   pending a live script whose guard another pull request adds; the sweep test names it and skips it
+#   offline fakes, fixtures or no cluster call
+# A script that is found and is not in this file fails the sweep test; a row of class guard without a guard fails it too.
+components/bench/check-values.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/bench/run.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/bench/trace-breakdown.py	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/channels/apiserver-cidrs.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/channels/kourier.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/channels/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+components/model-gateway/install.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/quickstart/model.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/quickstart/preflight.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/quickstart/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+components/runtime/auth-config.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/dl/install-postgres.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/kagent-db.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/kagent-helm.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/kagent-postrender.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/pgvector.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+components/runtime/up.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/tools/install.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/tools/verify/run-a2a.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/tools/verify/run-mcp-check.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+examples/use-cases/bank/ctl.sh	user	-	-		use case installer or desk tool, runs on a person's cluster; its own rules (named cluster, kind only, no default)
+examples/use-cases/bank/install.sh	user	-	-		use case installer or desk tool, runs on a person's cluster; its own rules (named cluster, kind only, no default)
+examples/use-cases/bank/tests/install-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/bank/tests/live-guard-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/bank/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/equipment/ctl.sh	user	-	-		use case installer or desk tool, runs on a person's cluster; its own rules (named cluster, kind only, no default)
+examples/use-cases/equipment/install.sh	user	-	-		use case installer or desk tool, runs on a person's cluster; its own rules (named cluster, kind only, no default)
+examples/use-cases/equipment/tests/install-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/equipment/tests/live-guard-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/equipment/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/records/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+examples/use-cases/software-org/ctl.sh	user	-	-		use case installer or desk tool, runs on a person's cluster; its own rules (named cluster, kind only, no default)
+examples/use-cases/software-org/install.sh	user	-	-		use case installer or desk tool, runs on a person's cluster; its own rules (named cluster, kind only, no default)
+examples/use-cases/software-org/tests/install-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+examples/use-cases/software-org/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ask.sh	user	-	-		asks the quick start agent a question through the gate
+hack/ci/also-compose-cross-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/apiserver-test.sh	own	-	-		creates the kind cluster oa-ci-test with a kubeconfig of its own in a temp file and exports KUBECONFIG to it before any kubectl or helm call
+hack/ci/bank-live.sh	guard	BANK_LIVE=1	BANK_CI_CONTEXT		
+hack/ci/budget-classes-live.sh	guard	BUDGET_CLASSES_LIVE=1	BUDGET_CLASSES_CI_CONTEXT		
+hack/ci/cluster-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/compose-values-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/default-storageclass-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/diagnostics-bearer-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/diagnostics-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/diagnostics-live.sh	guard	DIAGNOSTICS=1	DIAGNOSTICS_CI_CONTEXT		
+hack/ci/drain-test.sh	guard	-	DRAIN_CI_CONTEXT		
+hack/ci/endpoints-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/endpoints-ci-setup.sh	guard	ENDPOINTS=1	ENDPOINTS_CI_CONTEXT		
+hack/ci/endpoints-live.sh	guard	ENDPOINTS=1	ENDPOINTS_CI_CONTEXT		
+hack/ci/equipment-live.sh	guard	EQUIPMENT_LIVE=1	EQUIPMENT_CI_CONTEXT		
+hack/ci/event_live.py	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/event-live.sh	guard	EVENT_LIVE=1	EVENT_LIVE_CI_CONTEXT		
+hack/ci/events-live-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/events-live.sh	guard	EVENTS_LIVE=1	EVENTS_CI_CONTEXT	bank on	
+hack/ci/gateway-service-type-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/guard-probe.sh	user	-	-		read-only diagnostic: a server-side dry run, creates nothing
+hack/ci/image-tag-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/images-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/install-tools.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/key-entry-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/kind-image-digest-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/lib/require-ci-context.sh	offline	-	-		the shared guard itself
+hack/ci/lifecycle-test-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/lifecycle-test.sh	pending	-	LIFECYCLE_CI_CONTEXT		PR 280 adds its guard; adopt hack/ci/lib/require-ci-context.sh there in a follow-up
+hack/ci/msgid-scope.sh	guard	-	MSGID_SCOPE_CI_CONTEXT		
+hack/ci/netpol-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/netpol-test.sh	user	-	-		asks a cluster whether it enforces NetworkPolicy (documented for kind, k3d and GKE); makes and deletes the namespace oa-netpol-test
+hack/ci/pdb-check-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/phases-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/phases.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/preflight-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/rca-live.sh	guard	RCA_LIVE=1	RCA_CI_CONTEXT		
+hack/ci/rca-upload-scan.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/recovery-test-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/recovery-test.sh	guard	-	RECOVERY_CI_CONTEXT		
+hack/ci/release-values-diff-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/sa-issuer-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/smoke.sh	user	-	-		the check people run after the install on their own cluster (documented for kind and GKE); it creates and deletes one definition, smoke-refused
+hack/ci/uninstall-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/upgrade-test-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/upgrade-test.sh	guard	-	UPGRADE_CI_CONTEXT		
+hack/ci/use-case-class-live-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/use-case-class-live.sh	guard	USE_CASE_CLASS_LIVE=1	USE_CASE_CLASS_CI_CONTEXT	bank	
+hack/ci/use-case-classes-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/cluster.sh	user	-	-		creates the kind or k3d cluster for the installer (CLUSTER_TYPE)
+hack/compose-values.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/dashboard.sh	user	-	-		a read-only dashboard over the cluster metrics
+hack/dashboard/serve.py	offline	-	-		no cluster call (documentation tooling or a local server)
+hack/dashboard/tests/fake_prom.py	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/dashboard/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/default-storageclass.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/demo-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/demo.sh	user	-	-		the demo walkthrough on a person's cluster
+hack/diagnostics-bearer.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/diagnostics-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/docs/gen-reference.sh	offline	-	-		no cluster call (documentation tooling or a local server)
+hack/docs/tests/validate-examples.py	offline	-	-		no cluster call (documentation tooling or a local server)
+hack/endpoints-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/gateway-service-type.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/gke/install.sh	user	-	-		GKE tools for a person's own project and cluster (own rules: project, cost cap, login)
+hack/gke/lib.sh	user	-	-		GKE tools for a person's own project and cluster (own rules: project, cost cap, login)
+hack/gke/tests/run.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/gke/up.sh	user	-	-		GKE tools for a person's own project and cluster (own rules: project, cost cap, login)
+hack/image-tag.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/images.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/kb-graph-canary.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/kb-graph-load.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/kb-ingest.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/key-entry.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/kind-image-digest.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/netpol-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/pdb-check.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/preflight.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/release-notes.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/release-values-diff.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/sa-issuer.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/spikes/adr_spike_lib.py	offline	-	-		a library or a step run by a guarded spike script (adr-spikes.sh, toolhive-diagnostics-spike.sh)
+hack/spikes/adr-spikes.sh	guard	-	ADR_SPIKES_CI_CONTEXT		
+hack/spikes/adr0027_gate_spike.py	offline	-	-		a library or a step run by a guarded spike script (adr-spikes.sh, toolhive-diagnostics-spike.sh)
+hack/spikes/adr0029_gateway_spike.py	offline	-	-		a library or a step run by a guarded spike script (adr-spikes.sh, toolhive-diagnostics-spike.sh)
+hack/spikes/adr0031_tool_server_spike.py	offline	-	-		a library or a step run by a guarded spike script (adr-spikes.sh, toolhive-diagnostics-spike.sh)
+hack/spikes/toolhive_spike.py	offline	-	-		a library or a step run by a guarded spike script (adr-spikes.sh, toolhive-diagnostics-spike.sh)
+hack/spikes/toolhive-diagnostics-spike.sh	own	-	-		creates its own kind cluster with a kubeconfig of its own and checks the context it got (kind-<its cluster>) before it goes on
+hack/trace-turn.sh	user	-	-		reads the traces of one turn
+hack/use-case-eval-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/use-case-eval.sh	user	-	-		measures a use case on a real model; kind only, named cluster, no default
+services/a2a-gate/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+services/console/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+services/control-plane/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+services/control-plane/testdata/regen-golden.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+services/diagnostics/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+services/kb/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+services/notify/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+services/stub-model/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+tools/a2a-call/Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+Makefile	docker	-	-		builds and tests with docker (images, throwaway database containers named by the Makefile and stopped by it); no cluster
+install.sh	user	-	-		the installer, runs on a person's cluster; its own rules (named cluster, kind-openagentix default, CLUSTER_TYPE=remote needs KUBE_CONTEXT)
+uninstall.sh	user	-	-		the uninstaller, keep policy and context rules of its own
+hack/ci/live-sweep-test.sh	offline	-	-		this test
+hack/ci/kb-access-ci-setup.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-access-live.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-callers-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/kb-callers.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given

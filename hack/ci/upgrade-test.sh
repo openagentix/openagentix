@@ -23,6 +23,10 @@ export LC_ALL=C
 cd "$(dirname "$0")/../.." || exit 1
 REPO=$PWD
 K=${KUBECTL:-kubectl}; HELM=${HELM:-helm}
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. hack/ci/lib/require-ci-context.sh   # the script has changed to the repository root
+KUBECTL=$K; export KUBECTL
+require_ci_context upgrade-test UPGRADE_CI_CONTEXT allow-none   # on a hosted runner the installer of the old release makes the cluster, so there is no context yet
 FROM=${UPGRADE_FROM:-v0.2.0}
 RELEASE=${RELEASE:-openagentix}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
 KAGENT_NS=${KAGENT_NS:-kagent}; KB_NS=${KB_NS:-openagentix-knowledge}

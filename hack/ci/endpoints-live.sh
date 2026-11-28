@@ -22,15 +22,10 @@ K=${KUBECTL:-kubectl}
 # This script changes the cluster it runs on (a ClusterRoleBinding, a ConfigMap, a restart of two vMCPs, throwaway objects) and the cluster must be a CI cluster:
 # the install used values (hack/ci/endpoints-ci-values.yaml) that break the agents' tool path. It refuses to run anywhere else: on GitHub Actions (GITHUB_ACTIONS=true),
 # or when ENDPOINTS_CI_CONTEXT names the current kube context exactly, and only on a kind or k3d context.
-CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "endpoints-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${ENDPOINTS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "endpoints-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and ENDPOINTS_CI_CONTEXT does not name this context. This script changes the cluster; do not run it on a cluster you use. Nothing was changed." >&2
-  exit 2
-fi
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
+require_ci_context endpoints-live ENDPOINTS_CI_CONTEXT
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; ENS=endpoint-ci; GROUP=disputes; PROFILE=${EP_PROFILE:-disputes}
 PF=""; PF2=""; PF3=""; PF4=""; TD=""
 # undo what this script changed, on every way out

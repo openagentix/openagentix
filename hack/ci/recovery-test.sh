@@ -19,6 +19,10 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 K=${KUBECTL:-kubectl}; DOCKER=${DOCKER:-docker}; KIND=${KIND:-kind}
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. hack/ci/lib/require-ci-context.sh   # the script has changed to the repository root
+KUBECTL=$K; export KUBECTL
+require_ci_context recovery-test RECOVERY_CI_CONTEXT
 CLUSTER=${CLUSTER:-openagentix}; NODE=${RECOVERY_NODE:-$CLUSTER-control-plane}
 NS=${RECOVERY_NAMESPACE:-kagent}; AGENT=${RECOVERY_AGENT:-quickstart}
 BUDGET=${RECOVERY_BUDGET:-600}; SETTLE=${RECOVERY_SETTLE:-60}; POLL=${RECOVERY_POLL:-10}

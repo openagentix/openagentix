@@ -9,8 +9,9 @@
 # elsewhere. It sets no secret on a command line and prints none. No paid model call: the only model is the stub.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-[ "${GITHUB_ACTIONS:-}" = true ] || { echo "adr-spikes: refusing to run outside GitHub Actions: it changes the cluster it runs on" >&2; exit 2; }
-case "$(kubectl config current-context 2>/dev/null)" in kind-*) ;; *) echo "adr-spikes: the current kube context is not a kind context" >&2; exit 2;; esac
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")/../ci" && pwd)/lib/require-ci-context.sh"
+require_ci_context adr-spikes ADR_SPIKES_CI_CONTEXT
 OUT=${SPIKE_OUT:-$PWD/spike-out}; mkdir -p "$OUT"; export SPIKE_OUT="$OUT"
 which=${SPIKES:-both}
 rc=0
