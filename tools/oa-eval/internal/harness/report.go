@@ -19,6 +19,9 @@ func (r *Report) WriteTable(w io.Writer) {
 			res = "NOT RUN"
 		} else if !c.Pass {
 			res = "FAIL"
+			if c.NoCause {
+				res = "FAIL (cause not recorded)"
+			}
 		}
 		var bad []string
 		for _, k := range c.Checks {
@@ -33,6 +36,9 @@ func (r *Report) WriteTable(w io.Writer) {
 	}
 	_ = tw.Flush()
 	fmt.Fprintf(w, "\n%d cases: %d passed, %d failed", r.Total, r.Passed, r.Failed)
+	if r.NoCause > 0 {
+		fmt.Fprintf(w, " (%d of them ended as a failed task with no cause recorded: not a check failure, and not known to be the agent's fault)", r.NoCause)
+	}
 	if r.NotRun > 0 {
 		fmt.Fprintf(w, ", %d not run (the model refused a call: a spent budget or a provider error; they are not counted as failures)", r.NotRun)
 	}

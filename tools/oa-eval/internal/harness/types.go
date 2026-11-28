@@ -113,8 +113,10 @@ type CaseResult struct {
 	ID           string   `json:"id"`
 	Pass         bool     `json:"pass"`
 	TaskState    string   `json:"task_state,omitempty"`
-	NotRun       bool     `json:"not_run,omitempty"`        // the model refused the call (a budget or a provider error): not a pass and not a failure
-	NotRunReason string   `json:"not_run_reason,omitempty"` // why
+	TaskError    string   `json:"task_error,omitempty"`                // the failure message of the task status, when the task did not end COMPLETED (truncated)
+	NoCause      bool     `json:"failed_cause_not_recorded,omitempty"` // the task did not end COMPLETED and gave no message: it is a failure whose cause is not known
+	NotRun       bool     `json:"not_run,omitempty"`                   // the model refused the call (a budget or a provider error): not a pass and not a failure
+	NotRunReason string   `json:"not_run_reason,omitempty"`            // why
 	Millis       int64    `json:"ms"`
 	Checks       []Check  `json:"checks"`
 	Tools        []string `json:"tools_seen,omitempty"`
@@ -143,6 +145,7 @@ type Report struct {
 	Passed    int          `json:"passed"`
 	Failed    int          `json:"failed"`
 	NotRun    int          `json:"not_run,omitempty"`
+	NoCause   int          `json:"failed_cause_not_recorded,omitempty"` // of Failed: the cases whose task did not end COMPLETED and gave no message
 	Cases     []CaseResult `json:"cases"`
 	Agreement *Agreement   `json:"agreement,omitempty"`
 }
