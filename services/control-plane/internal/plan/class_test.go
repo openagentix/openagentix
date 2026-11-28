@@ -3,6 +3,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/openagentix/openagentix/services/control-plane/internal/api"
 	"github.com/openagentix/openagentix/services/control-plane/internal/catalog"
 )
 
@@ -24,6 +25,21 @@ func TestThePlanCarriesTheClassOfThePolicyAndNothingElseSetsIt(t *testing.T) {
 	d.Metadata.Labels = map[string]string{"openagentix.io/team": "x", "openagentix.io/budget-class": "wide", "budget_class": "wide"}
 	if p, err := Build(d, c, tools{c}, &catalog.Policy{}); err != nil || p.BudgetClass != "" {
 		t.Fatalf("a label chose class %q (%v)", p.BudgetClass, err)
+	}
+}
+
+// A container agent has a key at the gateway too: its plan carries the class like a builtin one (review of PR 271).
+func TestAContainerPlanCarriesTheClassOfThePolicy(t *testing.T) {
+	c := cat(t)
+	pl := &catalog.Policy{BudgetClass: "bank-agents", Runtimes: catalog.PolicyRuntimes{Container: catalog.PolicyContainerRuntime{
+		DefaultResources: api.Resources{Requests: api.ResourceList{CPU: "50m", Memory: "64Mi"}, Limits: api.ResourceList{CPU: "400m", Memory: "300Mi"}}}}}
+	p, err := Build(containerDef(), c, tools{c}, pl)
+	if err != nil || p.RuntimeType != api.RuntimeContainer || p.BudgetClass != "bank-agents" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	pl.BudgetClass = ""
+	if p, err := Build(containerDef(), c, tools{c}, pl); err != nil || p.BudgetClass != "" {
+		t.Fatalf("%q %v", p.BudgetClass, err)
 	}
 }
 

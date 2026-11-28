@@ -1187,6 +1187,7 @@ func (a *attempt) refused(violations []string, earlier []string) error {
 	a.st.Violations = violations
 	a.set(api.CondAccepted, "False", "PolicyViolation", fmt.Sprintf("%d rule(s) refused; see status.violations", len(violations)))
 	if !a.running {
+		a.st.Budget = nil // nothing ran, so there is no entry to report
 		a.unknownIfAbsent(api.CondKeyReady, "NotAccepted")
 		a.set(api.CondApplied, "False", "NotAccepted", "the definition is refused; nothing is running")
 		a.set(api.CondReady, "False", "NotAccepted", "")
@@ -1273,16 +1274,36 @@ func (a *attempt) keyForPrevious(pp plan.Plan) error {
 		return err
 	}
 	if pp.Suspended {
-		return a.holdKey(pp.GatewayUserID, entries[pp.GatewayUserID].Hash, entries)
+		if err := a.holdKey(pp.GatewayUserID, entries[pp.GatewayUserID].Hash, entries); err != nil {
+			a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
+			return err
+		}
+		a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown} // the entry is cut: the gateway holds no class for this agent
+		return nil
 	}
 	if held := a.st.Controller.HeldKeyHash; held != "" {
 		if entries[pp.GatewayUserID].Hash == "" {
 			if err := a.c.cfg.Gateway.Register(a.ctx, pp.GatewayUserID, held, pp.Labels, pp.BudgetClass); err != nil {
+				a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 				return err
 			}
 			entries[pp.GatewayUserID] = keys.Entry{Hash: held, Labels: pp.Labels, Class: pp.BudgetClass}
 		}
 		a.st.Controller.HeldKeyHash = ""
+	}
+	// The entry follows the operator's class while the previous generation keeps running: a different class is written again with the same hash.
+	if cur, ok := entries[pp.GatewayUserID]; ok && cur.Hash != "" && cur.Class != pp.BudgetClass {
+		if err := a.c.cfg.Gateway.Register(a.ctx, pp.GatewayUserID, cur.Hash, pp.Labels, pp.BudgetClass); err != nil {
+			a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
+			return err
+		}
+		entries[pp.GatewayUserID] = keys.Entry{Hash: cur.Hash, Labels: pp.Labels, Class: pp.BudgetClass}
+		cur = entries[pp.GatewayUserID]
+	}
+	if cur, ok := entries[pp.GatewayUserID]; ok && cur.Hash != "" {
+		a.st.Budget = &api.BudgetStatus{Class: cmp.Or(cur.Class, api.BudgetDefault)}
+	} else {
+		a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 	}
 	return nil
 }

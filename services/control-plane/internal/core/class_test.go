@@ -133,6 +133,73 @@ func TestAFailedRegistrationLeavesTheClassUnknown(t *testing.T) {
 	}
 }
 
+// Review of PR 271: a refused edit whose previous generation keeps running must follow the operator's class too.
+func TestARefusedEditKeepsTheEntryOnTheCurrentClass(t *testing.T) {
+	e, _ := newEnv(t)
+	e.pol.BudgetClass = "large"
+	e.seed("researcher", nil)
+	e.pass(t)
+	hash := e.gw.entries["kagent.researcher"]
+	e.srv.Modify("agentdefinitions", "kagent", "researcher", func(o kubetest.Object) { o["spec"].(map[string]any)["model"] = "not-in-the-catalog" })
+	e.pass(t)
+	wantCond(t, e.status("researcher"), "Applied", "True", "PreviousGenerationRunning")
+	e.pol.BudgetClass = "small"
+	e.pass(t)
+	if got := e.gw.classes["kagent.researcher"]; got != "small" || e.gw.entries["kagent.researcher"] != hash {
+		t.Fatalf("entry class %q (want small), hash kept: %v", got, e.gw.entries["kagent.researcher"] == hash)
+	}
+	if got := budgetClass(t, e, "researcher"); got != "small" {
+		t.Fatalf("status.budget.class = %q, want small", got)
+	}
+	e.pol.BudgetClass = ""
+	e.pass(t)
+	if e.gw.classes["kagent.researcher"] != "" || budgetClass(t, e, "researcher") != "default" {
+		t.Fatalf("class %q status %q", e.gw.classes["kagent.researcher"], budgetClass(t, e, "researcher"))
+	}
+}
+
+func TestARefusedEditWithTheStopSwitchCutsTheEntryAndTheClassIsUnknown(t *testing.T) {
+	e, _ := newEnv(t)
+	clk := e.useClock()
+	e.pol.BudgetClass = "large"
+	e.seed("researcher", nil)
+	e.pass(t)
+	e.srv.Modify("agentdefinitions", "kagent", "researcher", func(o kubetest.Object) { o["spec"].(map[string]any)["model"] = "not-in-the-catalog" })
+	e.pass(t)
+	clk.advance(10 * time.Minute)
+	e.pol.SuspendAll = true
+	e.pass(t)
+	if _, ok := e.gw.entries["kagent.researcher"]; ok {
+		t.Fatal("the entry is not cut")
+	}
+	if got := budgetClass(t, e, "researcher"); got != "unknown" {
+		t.Fatalf("status.budget.class = %q while the entry is cut, want unknown", got)
+	}
+	clk.advance(10 * time.Minute)
+	e.pol.SuspendAll, e.pol.BudgetClass = false, "small"
+	e.pass(t)
+	if e.gw.classes["kagent.researcher"] != "small" || budgetClass(t, e, "researcher") != "small" {
+		t.Fatalf("after the stop switch is off: entry %q status %q", e.gw.classes["kagent.researcher"], budgetClass(t, e, "researcher"))
+	}
+}
+
+func TestADefinitionRefusedBeforeItEverRanHasNoBudgetStatus(t *testing.T) {
+	e, _ := newEnv(t)
+	e.pol.BudgetClass = "large"
+	e.gw.failReg = errors.New("boom")
+	e.seed("researcher", nil)
+	_ = e.c.ReconcileAll(t.Context())
+	if got := budgetClass(t, e, "researcher"); got != "unknown" {
+		t.Fatalf("setup: %q", got)
+	}
+	e.gw.failReg = nil
+	e.srv.Modify("agentdefinitions", "kagent", "researcher", func(o kubetest.Object) { o["spec"].(map[string]any)["model"] = "not-in-the-catalog" })
+	e.pass(t)
+	if got := budgetClass(t, e, "researcher"); got != "<absent>" {
+		t.Fatalf("a definition that never ran and is refused shows status.budget.class = %q", got)
+	}
+}
+
 func TestARefusedDefinitionReportsNoClass(t *testing.T) {
 	e, _ := newEnv(t)
 	e.pol.BudgetClass = "bank-agents"

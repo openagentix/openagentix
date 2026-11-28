@@ -27,11 +27,12 @@ eq "full demo: explicit empty classes render byte-identical" "$(helm template op
 if [ -n "${OA_BASELINE_CHART:-}" ]; then   # the chart as it was before this feature (CI: a checkout of main)
   BL() { helm template openagentix "$OA_BASELINE_CHART" -n openagentix-system "$@" 2>&1 | shasum -a 256; }
   eq "the default render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$B0" "$(BL)"
-  # With the control plane on, the render holds the AgentDefinition CRD, which gained status.budget (ADR 0029, slice 4). That one document differs from the
-  # baseline of before that slice; every other document is byte-identical, which is what these two checks compare (the default render has no CRD).
-  NOCRD() { helm template openagentix "$1" -n openagentix-system "${@:2}" 2>&1 | yq -c 'select(.!=null and .kind!="CustomResourceDefinition")' | shasum -a 256; }
-  eq "the quick start render, but for the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOCRD "$CHART" -f "$RCQ")" "$(NOCRD "$OA_BASELINE_CHART" -f "$RCQ")"
-  eq "the full demo render, but for the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOCRD "$CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)" "$(NOCRD "$OA_BASELINE_CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)"
+  # With the control plane on, the render holds the AgentDefinition CRD, which gained status.budget (ADR 0029, slice 4). The CRD is compared with that one
+  # property removed, so any other change to it fails; every other document is compared as it is.
+  NOBUDGET() { helm template openagentix "$1" -n openagentix-system "${@:2}" 2>&1 | yq -c 'select(.!=null)' | jq -c 'if .kind=="CustomResourceDefinition" then del(.spec.versions[]?.schema.openAPIV3Schema.properties.status.properties.budget) else . end' | shasum -a 256; }
+  eq "the quick start render, with status.budget removed from the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOBUDGET "$CHART" -f "$RCQ")" "$(NOBUDGET "$OA_BASELINE_CHART" -f "$RCQ")"
+  eq "the full demo render, with status.budget removed from the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOBUDGET "$CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)" "$(NOBUDGET "$OA_BASELINE_CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)"
+  eq "the CRD of the quick start render holds the status.budget property" "$(helm template openagentix "$CHART" -n openagentix-system -f "$RCQ" | yq -c 'select(.kind=="CustomResourceDefinition")' | jq -c '.spec.versions[].schema.openAPIV3Schema.properties.status.properties.budget|keys|join(",")')" '"description,properties,type"'
 fi
 GUARD_CM='.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name=="openagentix-control-plane-guard-configmaps")'
 DG0=$(docs "${CP9[@]}")
