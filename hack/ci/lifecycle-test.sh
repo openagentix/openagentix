@@ -23,6 +23,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 K=${KUBECTL:-kubectl}; HELM=${HELM:-helm}
+# This script installs, upgrades and UNINSTALLS the release on the cluster of the current kube context. It is a CI script (.github/workflows/lifecycle.yml).
+# The one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the context named by LIFECYCLE_CI_CONTEXT, never kind-openagentix by hand; it reads the
+# kubeconfig and nothing else before it decides.
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
+require_ci_context lifecycle-test LIFECYCLE_CI_CONTEXT allow-none   # on GitHub Actions only, and only with no context yet: the test makes its own cluster with the installer
 RELEASE=${RELEASE:-openagentix}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
 NS_RE=${LIFECYCLE_NS_RE:-'^(openagentix-.*|agentgateway-system|kagent|toolhive-system|ate-system)$'}
 SECRET_NS_RE=${LIFECYCLE_SECRET_NS_RE:-'^(openagentix-.*|agentgateway-system)$'}

@@ -336,6 +336,12 @@ mcp:
     name: tools                   # the operator serves it as Service vmcp-<name>:4483
     port: 4483
     prefixFormat: "{workload}_"   # tool names become fetch_fetch, osv_query_vulnerability, ...
+    # ADR 0031. true: the chart writes a ServiceAccount, a Role with no right on Secrets and a RoleBinding for every tool server in
+    # mcp.namespace, and names the account in its spec, so the tool group operator makes none. The tool server accounts can then not
+    # read a Secret through the API (the header credentials still reach the pods as environment values from Secret references).
+    # false (default): the tool group operator makes them, and every tool server can read every Secret in mcp.namespace.
+    # Turn it on between runs: every tool server restarts once. install.sh refuses to turn it from true to false (ALLOW_TOOL_SECRET_READ=1).
+    ownServiceAccounts: false
     codeMode:
       enabled: true               # adds execute_tool_script (Starlark) on top of the backend tools
       stepLimit: 100000

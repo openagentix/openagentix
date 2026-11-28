@@ -165,12 +165,12 @@ eq "diagnostics on: the group is a caller with an empty list (nothing to read), 
 
 echo "# kb access: the warning for installs with Helm alone (NOTES.txt)"
 # NOTES.txt is not part of the render and `helm install --dry-run` needs a cluster, so the test renders it as a template of a copy of the chart
-notes() { local T; T=$(mktemp -d); cp -R "$CHART" "$T/c"; mv "$T/c/templates/NOTES.txt" "$T/c/templates/notes-test.yaml"; helm template openagentix "$T/c" -n openagentix-system -s templates/notes-test.yaml "$@" 2>&1; rm -rf "$T"; }
+notes() { local T; T=$(mktemp -d); cp -R "$CHART" "$T/c"; { echo '{{- define "oa.notesCopy" -}}'; cat "$T/c/templates/NOTES.txt"; echo '{{- end -}}'; echo 'notes: {{ include "oa.notesCopy" . | toJson }}'; } > "$T/c/templates/notes-test.yaml"; rm "$T/c/templates/NOTES.txt"; helm template openagentix "$T/c" -n openagentix-system -s templates/notes-test.yaml "$@" 2>&1; rm -rf "$T"; }   # as the ADR 0031 test does: NOTES.txt holds more than one warning, so it is rendered as one JSON string
 kv '.knowledge.access.mode=""'
 eq "mode empty and profiles on three tool groups list the knowledge tools: the warning names the groups" "$(notes -f "$KX2" | /usr/bin/grep -c 'WARNING: no isolation in the knowledge base.*3 tool groups (dealer, disputes, tools)')" 1
-eq "mode report: no warning" "$(notes -f "$KX" --set knowledge.access.mode=report | /usr/bin/grep -c WARNING)" 0
-eq "mode enforce: no warning" "$(notes -f "$KX" | /usr/bin/grep -c WARNING)" 0
-eq "the defaults (one group at most): no warning" "$(notes | /usr/bin/grep -c WARNING)" 0
+eq "mode report: no warning" "$(notes -f "$KX" --set knowledge.access.mode=report | /usr/bin/grep -c "WARNING: no isolation")" 0
+eq "mode enforce: no warning" "$(notes -f "$KX" | /usr/bin/grep -c "WARNING: no isolation")" 0
+eq "the defaults (one group at most): no warning" "$(notes | /usr/bin/grep -c "WARNING: no isolation")" 0
 eq "helm template does not print the notes, so the render is the one compared above" "$(helm template openagentix "$CHART" -n openagentix-system -f "$KX2" 2>&1 | /usr/bin/grep -c 'no isolation')" 0
 
 echo "# kb access: the values of the live job render (hack/ci/kb-access-ci-values.yaml)"

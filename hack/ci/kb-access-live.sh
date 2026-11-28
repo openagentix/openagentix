@@ -216,9 +216,15 @@ for ns in "$KBNS" "$MCPNS" toolhive-system; do
 done
 check "no document text is in any log line" "$DOCLEAK" 0
 
-echo "# what the isolation does not stop (ADR 0030 section 7), recorded"
+echo "# what the isolation does not stop (ADR 0030 section 7), and what ADR 0031 closes"
 SA=$($K get pods -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-alpha" -o jsonpath='{.items[0].spec.serviceAccountName}' 2>/dev/null)
-obs "kubectl auth can-i get secret/kb-caller-beta -n $MCPNS, as the ServiceAccount of the alpha tool server ($SA): '$($K auth can-i get secret/kb-caller-beta -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)' (ADR 0030 expects yes until ADR 0031 is built: isolation against a compromised tool server is not claimed)"
+CANI=$($K auth can-i get secret/kb-caller-beta -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
+if [ "$PHASE" = enforce ]; then
+  # The install of this job turns mcp.virtual.ownServiceAccounts on (ADR 0031): the tool server of one group has no right on the Secret of another group.
+  check "the account of the alpha tool server ($SA) cannot get secret/kb-caller-beta in $MCPNS (kubectl auth can-i)" "$CANI" no
+else
+  obs "kubectl auth can-i get secret/kb-caller-beta -n $MCPNS, as the ServiceAccount of the alpha tool server ($SA): '$CANI' (not a check in phase $PHASE)"
+fi
 
 echo
 echo "kb-access-live phase $PHASE: passed=$PASS failed=$FAIL"

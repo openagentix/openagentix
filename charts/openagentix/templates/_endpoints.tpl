@@ -270,7 +270,7 @@ control plane's lists (oa.epDefsCheck does), so oa.profilesCheck can include it.
 {{- /* credential */ -}}
 {{- if not $e.auth }}{{ fail (printf "%s.auth is required: an endpoint needs a header credential from a Secret (auth.header.name and auth.header.secret). The chart renders only the reference" $at) }}{{ end -}}
 {{- if not (kindIs "map" $e.auth) }}{{ fail (printf "%s.auth must be a map with the key header" $at) }}{{ end -}}
-{{- range $k, $_ := $e.auth }}{{ if ne $k "header" }}{{ fail (printf "%s.auth: only the key header is accepted, got %q (a bearer token type is never rendered: ToolHive 0.67.1 drops such a backend)" $at $k) }}{{ end }}{{ end -}}
+{{- range $k, $_ := $e.auth }}{{ if and $.Values.mcp.virtual.ownServiceAccounts (has (toString $k) (list "tokenExchange" "headerInjection" "xaa")) }}{{ fail (printf "%s.auth.%s: this auth type reads a Secret at run time, and mcp.virtual.ownServiceAccounts is true: the tool server accounts have no right on Secrets (ADR 0031). It needs a Role that names exactly its Secrets, which a later amendment adds. Use auth.header, or turn the switch off" $at $k) }}{{ end }}{{ if ne $k "header" }}{{ fail (printf "%s.auth: only the key header is accepted, got %q (a bearer token type is never rendered: ToolHive 0.67.1 drops such a backend)" $at $k) }}{{ end }}{{ end -}}
 {{- $hd := $e.auth.header -}}
 {{- if not (kindIs "map" $hd) }}{{ fail (printf "%s.auth.header must be a map with name and secret" $at) }}{{ end -}}
 {{- range $k, $_ := $hd }}{{ if not (has $k (list "name" "secret")) }}{{ fail (printf "%s.auth.header: only name and secret are accepted, got %q (a header value is never taken from the values, only from a Secret)" $at $k) }}{{ end }}{{ end -}}

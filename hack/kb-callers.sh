@@ -21,7 +21,7 @@ kb_callers_read() {   # <kubectl> <namespace> <secret> <key>: the decoded value,
   err=$(mktemp)
   v=$($1 get secret -n "$2" "$3" -o jsonpath="{.data.${key}}" 2>"$err"); rc=$?
   if [ "$rc" != 0 ]; then
-    if /usr/bin/grep -q 'NotFound' "$err"; then rm -f "$err"; return 0; fi
+    if [ "$(head -n 1 "$err")" = "Error from server (NotFound): secrets \"$3\" not found" ]; then rm -f "$err"; return 0; fi
     rm -f "$err"; return 2
   fi
   rm -f "$err"
@@ -128,7 +128,7 @@ kb_caller_header() {
 
 # kb_live_mode <helm command> <release> <release namespace> <kube context> <kubectl command>: prints the knowledge.access.mode of the LIVE release ("" when it has none).
 # The namespace of the knowledge base is read from the live release (helm get values -a), not from this run's values, so a run that moves it is still compared with what is
-# running. Only helm's own line "Error: release: not found" (a first install) and a NotFound ConfigMap mean "no mode". Any other failure (Forbidden, a timeout, a wrong
+# running. Only helm's own line "Error: release: not found" (a first install) and the exact NotFound sentences for the ConfigMap kb-access or its namespace mean "no mode". Any other failure (Forbidden, a timeout, a wrong
 # context, values that are not JSON) returns 2 with a sentence on standard error: the caller must stop, because a guess of "no mode" would let a run turn enforce off.
 kb_live_mode() {
   local helm=$1 rel=$2 rns=$3 ctx=$4 k=$5 vals kns cm err rc mode
@@ -142,7 +142,9 @@ kb_live_mode() {
   if [ -z "$kns" ]; then echo "cannot read the values of the release $rel: no knowledge.namespace in them" >&2; rm -f "$err"; return 2; fi
   cm=$($k --context "$ctx" get configmap kb-access -n "$kns" -o jsonpath='{.data.access\.json}' 2>"$err"); rc=$?
   if [ "$rc" != 0 ]; then
-    if /usr/bin/grep -q 'NotFound' "$err"; then rm -f "$err"; return 0; fi
+    case "$(head -n 1 "$err")" in
+      "Error from server (NotFound): configmaps \"kb-access\" not found"|"Error from server (NotFound): namespaces \"$kns\" not found") rm -f "$err"; return 0;;
+    esac
     echo "cannot read the ConfigMap kb-access in namespace $kns: $(head -n 1 "$err" | cut -c1-300)" >&2; rm -f "$err"; return 2
   fi
   rm -f "$err"

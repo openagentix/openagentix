@@ -97,7 +97,12 @@
 # pinned Kourier release (components/channels/kourier.sh, cosign-verified when cosign exists) BEFORE the chart, generates the
 # Secret of each webhook connection when absent (random, never printed), and the chart admits Kourier's pod to the kagent controller.
 #   RELEASE_NS=openagentix-system  AGENT_WAIT=900s
-#   ALLOW_VALUE_REMOVAL=1  Helm replaces the user-supplied values of the release on every run, so a shorter VALUES_FILE list than the one you installed
+#   mcp.virtual.ownServiceAccounts (ADR 0031): with it true (components/tools/own-service-accounts-values.yaml) the chart gives every tool server an account with no
+#                        right on Secrets, and this script checks as each account that it cannot read a Secret or create a pod, StatefulSet or Deployment (a yes
+#                        fails the install, naming the account), that every backend of each tool server is ready, and then deletes the operator's <name>-vmcp
+#                        objects. Turning it from true to false on a live release is refused unless ALLOW_TOOL_SECRET_READ=1. With it false, and header
+#                        credentials in the install, a warning names their Secrets (not their values).
+#   ALLOW_VALUE_REMOVAL=1 Helm replaces the user-supplied values of the release on every run, so a shorter VALUES_FILE list than the one you installed
 #                        with would drop whole features and agents without a word. Before anything is changed, hack/release-values-diff.sh compares the
 #                        key paths and named list entries of the existing release with the values of this run and, when the release has some that this
 #                        run lacks, lists them and stops (exit 1). ALLOW_VALUE_REMOVAL=1 prints the list and goes on. A first install and an unchanged
@@ -285,8 +290,22 @@ fi
 # Helm replaces the user-supplied values of the release on every run (issue #212). When the release holds a key path or a named list entry that this run's
 # values (VALS: the -f files and the --set-file scenarios) lack, a run with a shorter VALUES_FILE list would remove whole features and agents without a word.
 # Read only; it stops here, before anything is changed, unless ALLOW_VALUE_REMOVAL=1. A first install (no release) and an unchanged list pass silently.
+# Tool server accounts (ADR 0031): with mcp.virtual.ownServiceAccounts off, say which header credentials every tool server can read; and refuse to turn it from
+# true to false on a live release (a values file left out of the list would give the reach back) unless ALLOW_TOOL_SECRET_READ=1. This comes before the check of
+# the release values below, so that the refusal names this switch; with ALLOW_TOOL_SECRET_READ=1 that check does not report this one key as lost (one override
+# for the one decision). hack/tool-accounts-check.sh, tested without a cluster. Read only; before anything is changed.
+# shellcheck source=hack/tool-accounts-check.sh
+. hack/tool-accounts-check.sh
+ta_warn_off <<<"$RENDERED"
+# shellcheck disable=SC2086   # $K is a command, as everywhere in this script
+if [ "$CLUSTER_UP" = 1 ]; then ta_refuse_off $K <<<"$RENDERED" || exit 1; fi
+RVD_IGNORE=()
+if [ "${ALLOW_TOOL_SECRET_READ:-0}" = 1 ]; then
+  { grep -vE '^[[:space:]]*(#|$)' hack/release-values-ignore.txt; echo mcp.virtual.ownServiceAccounts; } > "$QS_TMP/release-values-ignore.txt"
+  RVD_IGNORE=(--ignore-file "$QS_TMP/release-values-ignore.txt")
+fi
 if [ "$CLUSTER_UP" = 1 ]; then
-  bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${VALS[@]+"${VALS[@]}"} || exit 1
+  bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${RVD_IGNORE[@]+"${RVD_IGNORE[@]}"} ${VALS[@]+"${VALS[@]}"} || exit 1
 fi
 # Knowledge base isolation (ADR 0030). The mode of this run is read from what the chart renders (the ConfigMap kb-access exists only with a mode). A live release
 # that enforces is not turned off by a run that lacks the values file (Helm replaces the release values on every run) unless ALLOW_KB_ACCESS_OFF=1.
@@ -1119,6 +1138,37 @@ if [ -n "$KB_CALLER_GROUPS" ]; then
   log "knowledge base isolation: the vMCPs of the groups that hold a knowledge base entry"
   # shellcheck disable=SC2086   # one word per group
   kb_callers_verify "$K" "$RENDERED" "$KB_NS" "${KB_CALLERS_TOUCHED:-}" "${KB_VMCPS_BEFORE:-}" $KB_CALLER_GROUPS || die "a vMCP of a knowledge base caller group dropped the knowledge base (see above)."
+fi
+
+# Tool server accounts (ADR 0031, mcp.virtual.ownServiceAccounts): every tool server the chart renders now runs under an account of the chart. The tool server is
+# not asked for its word: as each account, can-i get and list secrets, create pods, statefulsets and deployments must all answer no, and the install fails on a yes,
+# naming the account. A right the Role lacks shows up as a dropped backend, not as a tool server that is not Ready, so every backend of each tool server's group
+# must be ready (the check of ADR 0026 A4). Only then are the operator's old <name>-vmcp objects deleted (nothing runs as them). hack/tool-accounts-check.sh.
+TA_ROWS=$(ta_vmcp_rows <<<"$RENDERED")
+if [ -n "$TA_ROWS" ]; then
+  log "tool server accounts: the tool servers cannot read Secrets"
+  # shellcheck source=hack/endpoints-check.sh
+  source hack/endpoints-check.sh   # ep_check_backends (also sourced above when mcp.endpoints is on)
+  while IFS=$'\t' read -r ta_ns ta_name ta_sa; do
+    ta_wait_running "$K" "$ta_ns" "$ta_name" "$ta_sa" "${TA_SETTLE:-240}" || die "the tool server $ta_name does not run under $ta_sa (see above)."
+    $K wait "virtualmcpserver/$ta_name" -n "$ta_ns" --for=condition=Ready --timeout=300s || die "the tool server $ta_name is not Ready under the account $ta_sa: $K get virtualmcpserver $ta_name -n $ta_ns -o yaml"
+    ta_check_account "$K" "$ta_ns" "$ta_sa" || die "the tool server account $ta_sa has a right it must not have (see above). The operator's old objects were not deleted."
+    ta_grp=$(jq -r --arg n "$ta_name" 'select(.kind=="VirtualMCPServer" and .metadata.name==$n)|.spec.groupRef.name' <<<"$RENDERED")
+    ta_backends=$(jq -rs --arg g "$ta_grp" '[.[]|select((.kind=="MCPServer" or .kind=="MCPServerEntry") and .spec.groupRef.name==$g)|.metadata.name]|sort|join(" ")' <<<"$RENDERED")
+    if [ -n "$ta_backends" ]; then
+      if ! DIAG_CHECK_WHAT="the group $ta_grp, under the account $ta_sa" diag_check_vmcps "$K" "${TA_SETTLE_CONDITIONS:-30}" 0 "$ta_ns/$ta_name"; then
+        die "the tool server $ta_name dropped a backend under the account $ta_sa (see above): a right is missing in its Role."
+      fi
+      # shellcheck disable=SC2086   # one word per backend
+      if ! ep_check_backends "$K" "${TA_SETTLE_BACKENDS:-90}" "$ta_ns/$ta_name" $ta_backends; then
+        die "the tool server $ta_name does not list every backend as ready under the account $ta_sa (see above): a right is missing in its Role."
+      fi
+    fi
+  done <<<"$TA_ROWS"
+  while IFS=$'\t' read -r ta_ns ta_name ta_sa; do
+    ta_cleanup "$K" "$ta_ns" "$ta_name" "$ta_sa" || die "could not remove the operator's objects of the tool server $ta_name (see above). They stay until deleted; nothing runs as them."
+  done <<<"$TA_ROWS"
+  echo "tool server accounts: $(wc -l <<<"$TA_ROWS" | tr -d ' ') tool server(s) run under accounts of the chart, none can read a Secret or create a pod, the operator's <name>-vmcp objects are removed"
 fi
 
 log "waiting for agents (first start builds a golden snapshot, ~1-2 min each)"

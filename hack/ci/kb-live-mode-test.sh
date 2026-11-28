@@ -22,6 +22,8 @@ cat > "$D/bin/kubectl" <<'EOS'
 echo "kubectl $*" >> "$CALLS"
 case "${KUBECTL_MODE:-ok}" in
   forbidden) echo 'Error from server (Forbidden): configmaps "kb-access" is forbidden: User "x" cannot get resource "configmaps" in API group "" in the namespace "live-knowledge"' >&2; exit 1;;
+  noresource) echo 'Error from server (NotFound): the server could not find the requested resource' >&2; exit 1;;
+  nons) echo "Error from server (NotFound): namespaces \"${LIVE_KNS:-live-knowledge}\" not found" >&2; exit 1;;
   timeout) echo 'Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded while awaiting headers)' >&2; exit 1;;
 esac
 ns=""; prev=""; for a in "$@"; do [ "$prev" = -n ] && ns=$a; prev=$a; done
@@ -44,6 +46,8 @@ echo "# anything else is 'cannot tell', and the caller must stop"
 OUT=$(KUBECTL_MODE=forbidden LIVE_MODE=enforce live)
 t "Forbidden on the ConfigMap: rc 2, no mode printed" "$(tail -1 <<<"$OUT")" "mode=[] rc=2"
 t "and it says why, with the sentence of the cluster and no value" "$(/usr/bin/grep -c 'cannot read the ConfigMap kb-access' <<<"$OUT")" 1
+t "NotFound of the resource type, not of the ConfigMap: rc 2" "$(KUBECTL_MODE=noresource LIVE_MODE=enforce live | tail -1)" "mode=[] rc=2"
+t "the namespace of the knowledge base is gone: no mode, rc 0" "$(KUBECTL_MODE=nons LIVE_MODE=enforce live | tail -1)" "mode=[] rc=0"
 t "a timeout on the ConfigMap: rc 2" "$(KUBECTL_MODE=timeout LIVE_MODE=enforce live | tail -1)" "mode=[] rc=2"
 t "helm cannot reach the cluster: rc 2" "$(HELM_MODE=fail live | tail -1)" "mode=[] rc=2"
 printf '#!/usr/bin/env bash\necho "Error: release: not found extra" >&2; exit 1\n' > "$D/bin/helm"

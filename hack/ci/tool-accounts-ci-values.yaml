@@ -1,0 +1,64 @@
+# CI ONLY. These values make a cluster unfit for agents: the tool gateways trust the API server's own tokens. hack/ci/tool-accounts-live.sh refuses to run anywhere
+# but on GitHub Actions (or a context named by TOOL_ACCOUNTS_CI_CONTEXT).
+# Values of the live proof of tool server accounts (ADR 0031, slice 3), on top of the quick start with the sample container agent (QUICKSTART_BYO=1, which gives the
+# -workload variant of the profile lookup). One install that renders every kind of tool server the chart has: the shared one, a profile on the shared group, a profile on
+# a group of its own (the endpoint echo with a header Secret, and the knowledge base and notify mirrors), a profile on the diagnostics group (cluster-read with its bearer
+# value, and the two mirrors), and the -workload variant. The switch itself is NOT in this file: the job turns it on, off and on again with
+# components/tools/own-service-accounts-values.yaml in the VALUES_FILE list (or not), as a user would.
+#   kind create cluster --name openagentix --config hack/kind-config.yaml
+#   ENDPOINTS=1 hack/ci/endpoints-ci-setup.sh
+#   QUICKSTART_BYO=1 PROFILE=quickstart VALUES_FILE="hack/ci/tool-accounts-ci-values.yaml components/tools/own-service-accounts-values.yaml" ./install.sh
+#   TOOL_ACCOUNTS_LIVE=1 hack/ci/tool-accounts-live.sh on
+knowledge:
+  enabled: true
+  kb:
+    graph:
+      enabled: true
+      extractModel: quickstart-model
+
+notify:
+  enabled: true
+
+diagnostics:
+  enabled: true
+  cluster:
+    enabled: true
+    logNamespaces: [diag-ci]                    # an empty namespace that install.sh creates (a RoleBinding lives in it)
+    statusNamespaces: [kagent, kube-system]     # pods, events and workloads only; never logs
+
+mcp:
+  endpoints:
+    - name: echo
+      url: http://echo.endpoint-ci.svc.cluster.local:8080/mcp
+      group: disputes
+      auth:
+        header: {name: Authorization, secret: {name: echo-mcp-auth, key: value}}
+      ingress:
+        podSelector: {app: echo}
+        port: 8080
+  # a list replaces the quick start's list, so `lookup` is stated again exactly as components/quickstart/values.yaml has it
+  profiles:
+    - name: lookup
+      codeMode: false
+      tools:
+        osv: [query_vulnerability]
+    - name: disputes
+      codeMode: false
+      tools:
+        echo: [echo, list_notes]
+        knowledge: [kb_list_collections]
+        delivery: [notify_list_destinations]
+    - name: rca
+      codeMode: false
+      tools:
+        cluster-read: [pods_list_in_namespace, pods_get, pods_log, events_list, workloads_list, workloads_get, nodes_list, nodes_get]
+        knowledge: [kb_list_collections]
+        delivery: [notify_list_destinations]
+  virtual:
+    incomingAuth:
+      # Only for this job: the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/tool-accounts-live.sh can make a token and make real calls
+      # through them. The script puts the cluster CA into the ConfigMap below before the install. Agents' tool calls do not work in a cluster installed with these values.
+      oidc:
+        issuer: https://kubernetes.default.svc.cluster.local
+        jwksUrl: https://kubernetes.default.svc/openid/v1/jwks
+        caBundle: {configMap: ci-apiserver-ca, key: ca.crt}

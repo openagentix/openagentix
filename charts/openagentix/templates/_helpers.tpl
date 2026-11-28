@@ -866,3 +866,60 @@ control-plane-guard.yaml (the class of definitions). */}}
 {{- end -}}
 {{- $out | toJson -}}
 {{- end -}}
+
+{{/* ADR 0031: the switch mcp.virtual.ownServiceAccounts must be a boolean. Empty output; fails the render otherwise. A null or a string never turns the reach back on silently. */}}
+{{- define "oa.toolAccountsCheck" -}}
+{{- if not (kindIs "bool" .Values.mcp.virtual.ownServiceAccounts) }}{{ fail (printf "mcp.virtual.ownServiceAccounts must be true or false, got %v (%s)" .Values.mcp.virtual.ownServiceAccounts (kindOf .Values.mcp.virtual.ownServiceAccounts)) }}{{ end -}}
+{{- end -}}
+
+{{/* ADR 0031: the ServiceAccount, the Role and the RoleBinding of one tool server (a VirtualMCPServer). Call with (dict "root" $ "name" <tool server name>).
+     The Role is the rules the tool server reads at run time in discovered mode (ToolHive 0.67.1, ADR 0031 "What ToolHive 0.67.1 does") and no more:
+     no rule on secrets; the get of the VirtualMCPServer and the update of its status are limited to its own object. */}}
+{{- define "oa.toolServerAccount" -}}
+{{- $m := .root.Values.mcp -}}
+{{- $n := printf "openagentix-%s" .name }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $n }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" .root | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $n }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" .root | nindent 4 }}
+rules:
+  - apiGroups: [toolhive.stacklok.dev]
+    resources: [mcpgroups, mcpservers, mcpremoteproxies, mcpserverentries, mcpexternalauthconfigs, mcptoolconfigs]
+    verbs: [get, list, watch]
+  - apiGroups: [toolhive.stacklok.dev]
+    resources: [virtualmcpservers]
+    verbs: [get]
+    resourceNames: [{{ .name | quote }}]
+  - apiGroups: [toolhive.stacklok.dev]
+    resources: [virtualmcpservers/status]
+    verbs: [update, patch]
+    resourceNames: [{{ .name | quote }}]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $n }}
+  namespace: {{ $m.namespace }}
+  labels: {{- include "oa.labels" .root | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $n }}
+    namespace: {{ $m.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $n }}
+{{- end -}}

@@ -5,3 +5,26 @@
 WARNING: no isolation in the knowledge base. knowledge.access.mode is empty, so every tool group reads every collection, and profiles on {{ len $groups }} tool groups ({{ join ", " $groups }}) list the knowledge tools. Set knowledge.access.mode to "report" and then "enforce", and list the collections of each group (knowledge.access.sharedGroupCollections, mcp.profiles[].knowledgeCollections). See docs/decisions/0030-knowledge-base-isolation-and-graph-schema.md.
 {{- end }}
 {{- end }}
+{{- /* ADR 0030: a warning for installs that use Helm alone. helm template does not render this file, so the render stays byte-identical. install.sh prints the same line. */ -}}
+{{- if and .Values.knowledge.enabled (eq (include "oa.kbMode" .) "") }}
+{{- $groups := include "oa.kbListingGroups" . | fromJsonArray }}
+{{- if gt (len $groups) 1 }}
+WARNING: no isolation in the knowledge base. knowledge.access.mode is empty, so every tool group reads every collection, and profiles on {{ len $groups }} tool groups ({{ join ", " $groups }}) list the knowledge tools. Set knowledge.access.mode to "report" and then "enforce", and list the collections of each group (knowledge.access.sharedGroupCollections, mcp.profiles[].knowledgeCollections). See docs/decisions/0030-knowledge-base-isolation-and-graph-schema.md.
+{{- end }}
+{{- end }}
+
+{{- /* ADR 0031: a warning while tool servers can read every Secret of the tools namespace and the install holds credentials there. Printed by helm install and helm upgrade, never by helm template. */ -}}
+{{- if and .Values.mcp.enabled (kindIs "bool" .Values.mcp.virtual.ownServiceAccounts) (not .Values.mcp.virtual.ownServiceAccounts) }}
+{{- $creds := list }}
+{{- if kindIs "slice" .Values.mcp.endpoints }}{{ range $e := .Values.mcp.endpoints }}{{ if and (kindIs "map" $e) (kindIs "map" $e.auth) (kindIs "map" $e.auth.header) (kindIs "map" $e.auth.header.secret) }}{{ $creds = append $creds (printf "%s (header of the endpoint %s)" $e.auth.header.secret.name $e.name) }}{{ end }}{{ end }}{{ end }}
+{{- if include "oa.diagOn" . }}{{ $creds = append $creds "diagnostics-bearer-cluster-read (bearer value of the diagnostics tool server)" }}{{ end }}
+{{- if $creds }}
+WARNING: mcp.virtual.ownServiceAccounts is false. Every tool server in the namespace {{ .Values.mcp.namespace }} can read every Secret there,
+so a tool server of one tool group can read the credential of another. Secrets of credentials in this install:
+{{- range $c := $creds }}
+  - {{ $c }}
+{{- end }}
+Set mcp.virtual.ownServiceAccounts=true (components/tools/own-service-accounts-values.yaml) to take that right away from the tool server
+accounts. Every tool server restarts once; do it between runs. See docs/decisions/0031-tool-server-secret-reach.md.
+{{- end }}
+{{- end }}

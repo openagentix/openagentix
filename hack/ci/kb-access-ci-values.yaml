@@ -58,6 +58,7 @@ mcp:
       tools:
         knowledge: [kb_search, kb_get_document, kb_list_collections]
   virtual:
+    ownServiceAccounts: true   # ADR 0031, in every phase of the job: install.sh refuses to turn it from true to false, and the enforce phase checks can-i
     incomingAuth:
       # Only for this job: the tool gateways trust the API server's own ServiceAccount tokens, so that hack/ci/kb-access-live.sh can make a token and make real
       # calls through them. hack/ci/kb-access-ci-setup.sh puts the cluster CA into the ConfigMap below. Agents' tool calls do not work in a cluster installed

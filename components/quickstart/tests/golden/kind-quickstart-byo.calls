@@ -237,6 +237,9 @@ kubectl get serviceaccount openagentix-control-plane -n openagentix-system
 kubectl get serviceaccount openagentix-control-plane -n openagentix-system -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
 kubectl get serviceaccount victoria-metrics -n openagentix-observability
 kubectl get serviceaccount victoria-metrics -n openagentix-observability -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
+kubectl get virtualmcpserver -n mcp-tools -o json
+kubectl get virtualmcpserver -n mcp-tools -o json
+kubectl get virtualmcpserver -n mcp-tools -o json
 kubectl get virtualmcpserver.toolhive.stacklok.dev tools -n mcp-tools
 kubectl get virtualmcpserver.toolhive.stacklok.dev tools -n mcp-tools -o jsonpath={.metadata.annotations.meta\.helm\.sh/release-name}
 kubectl get virtualmcpserver.toolhive.stacklok.dev tools-lookup -n mcp-tools
