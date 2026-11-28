@@ -22,9 +22,9 @@ With the value off, the render is byte for byte the render before this change. T
 
 The job `e2e (tool server accounts)` (`tool_accounts` input of the `e2e` workflow, `hack/ci/tool-accounts-live.sh`) installs the quick start with the sample container agent, one endpoint with a header Secret, the knowledge base and its graph, notify and diagnostics. It renders five tool servers: `tools`, `tools-lookup`, `tools-lookup-workload` on the shared group, `tools-disputes` on a group of its own with the endpoint and the knowledge base and notify mirrors, and `tools-rca` on the diagnostics group with `cluster-read` and the two mirrors. It runs the installer five times as a user would.
 
-| Phase | What it did | Result of run [46145968433](https://github.com/openagentix/openagentix/actions/runs/46145968433) |
+| Phase | What it did | Result of run [46154624865](https://github.com/openagentix/openagentix/actions/runs/46154624865) |
 |---|---|---|
-| off | The old behaviour: the operator's accounts can read Secrets, every backend ready | 24 checks, 0 failed |
+| off | The old behaviour: the operator's accounts can read Secrets, every backend ready | 29 checks, 0 failed |
 | on | Turned on over the existing install (the upgrade path) | 116 checks, 0 failed |
 | refused | The values list without the switch: refused by `install.sh`, nothing changed | 8 checks, 0 failed |
 | back-off | `ALLOW_TOOL_SECRET_READ=1`: the switch is off again, the operator's accounts are back and can read Secrets | 27 checks, 0 failed |
@@ -53,3 +53,5 @@ In the on phases: every tool server runs as its `openagentix-<name>` account; it
 - A tool server can write its own status. The install check reads `status.discoveredBackends`, so it trusts the tool server's own report of ready backends.
 - The tool server accounts lose Secret reach. The namespace is not closed. The ConfigMaps that the operator creates in the tools namespace at run time are readable by every tool server account, and their content was not audited.
 - After the independent review of this slice the guard rails were tightened: the compose rule is checked on the composed result (a later file that replaces a parent of the key cannot turn the switch off), the turn-off refusal fails closed when the tool servers cannot be read, only operator objects with an owner reference to the tool server are deleted, and `lifecycle-test.sh` uses the shared guard whatever `KUBECTL` is.
+
+The use case live jobs ran with the switch on: bank [46146865670](https://github.com/openagentix/openagentix/actions/runs/46146865670) (72 checks, on an earlier head), equipment [46148877278](https://github.com/openagentix/openagentix/actions/runs/46148877278) (94 checks), root cause [46150639621](https://github.com/openagentix/openagentix/actions/runs/46150639621) (32 checks). Each checks that the shared tool server's account cannot get the header Secret and cannot list Secrets (the root cause job also checks pods, StatefulSets and Deployments).
