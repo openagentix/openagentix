@@ -224,46 +224,29 @@ SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P3 "$TD/l"); [ "$SID" != - ] && 
 LIST=$(mcp_call $P3 "$TD/l" "$SID" 2 tools/list '{}' | jq -r '[.result.tools[]?.name]|sort|join(" ")' 2>/dev/null)
 check "shared group: tools/list on the profile lookup lists its one tool" "$LIST" "osv_query_vulnerability"
 echo "# the -workload variant (ADR 0019): a pod-bound token with its audience is accepted, another audience is refused, a token that is not pod-bound lists no tool"
-# A throwaway pod in the workload namespace with two projected tokens of its own ServiceAccount: one with the audience of tools-lookup-workload, one with another audience.
-# The tokens are read from the pod and used through a port-forward, so no network policy of the namespace is in the way. They are never printed.
+# In the workload namespace only the control plane may give a pod a projected token, and only the kubelet may request one (admission policies of the chart), so a probe pod
+# cannot be made there. The sample container agent (QUICKSTART_BYO) is such a pod: its kubelet-written token with the audience of tools-lookup-workload is read from the
+# kind node (docker exec), used through a port-forward and never printed. The wrong-audience and the foreign-subject tokens are made for the default account of the tools namespace.
 WLNS=${WORKLOAD_NAMESPACE:-openagentix-workloads}
 WLAUD=openagentix-vmcp-lookup-workload
-$K delete pod ta-wl-probe -n "$WLNS" --ignore-not-found --wait=true >/dev/null 2>&1
-$K apply -f - >/dev/null 2>"$TD/wl.err" <<YAML
-apiVersion: v1
-kind: Pod
-metadata: {name: ta-wl-probe, namespace: $WLNS, labels: {ta-live: probe}}
-spec:
-  automountServiceAccountToken: false
-  containers:
-    - name: p
-      image: curlimages/curl:8.10.1
-      command: [sleep, "900"]
-      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
-      volumeMounts: [{name: t, mountPath: /tokens, readOnly: true}]
-  volumes:
-    - name: t
-      projected:
-        sources:
-          - serviceAccountToken: {audience: $WLAUD, expirationSeconds: 600, path: ok}
-          - serviceAccountToken: {audience: openagentix-not-this-one, expirationSeconds: 600, path: other}
-YAML
-if $K wait pod/ta-wl-probe -n "$WLNS" --for=condition=Ready --timeout=120s >/dev/null 2>&1; then
-  $K exec -n "$WLNS" ta-wl-probe -- cat /tokens/ok > "$TD/wl-ok" 2>/dev/null; $K exec -n "$WLNS" ta-wl-probe -- cat /tokens/other > "$TD/wl-other" 2>/dev/null
+WLPOD=$($K get pods -n "$WLNS" -o json 2>/dev/null | jq -r '[.items[]|select(.status.phase=="Running" and ([.spec.volumes[]?.name]|index("mcp-token")!=null))][0]|[.metadata.uid,.spec.nodeName]|join(" ")' 2>/dev/null)
+WLUID=${WLPOD% *}; WLNODE=${WLPOD#* }
+if [ -n "$WLUID" ] && [ "$WLUID" != null ] && command -v docker >/dev/null 2>&1 \
+   && docker exec "$WLNODE" cat "/var/lib/kubelet/pods/$WLUID/volumes/kubernetes.io~projected/mcp-token/token" > "$TD/wl-ok" 2>"$TD/wl.err" && [ -s "$TD/wl-ok" ]; then
+  $K create token default -n "$MCPNS" --audience openagentix-not-this-one --duration 10m > "$TD/wl-other" 2>/dev/null
   P4=$((P1 + 3)); $K port-forward -n "$MCPNS" svc/vmcp-tools-lookup-workload "$P4:4483" >/dev/null 2>&1 & PF4=$!
   sleep 4
   SIDW=-; for _ in $(seq 1 12); do SIDW=$(mcp_open $P4 "$TD/wl-ok"); [ "$SIDW" != - ] && break; sleep 5; done
-  check "tools-lookup-workload: a pod-bound token with its audience opens a session" "$([ "$SIDW" != - ] && echo yes || echo no)" yes
+  check "tools-lookup-workload: the pod-bound token of the sample container agent, with the audience of the variant, opens a session" "$([ "$SIDW" != - ] && echo yes || echo no)" yes
   check "tools-lookup-workload: ... and tools/list lists the tool of the profile" "$(mcp_call $P4 "$TD/wl-ok" "$SIDW" 2 tools/list '{}' | jq -r '[.result.tools[]?.name]|sort|join(" ")' 2>/dev/null)" "osv_query_vulnerability"
   check "tools-lookup-workload: a token of another audience is refused (HTTP 401)" "$(curl -s -m 20 -o /dev/null -w '%{http_code}' -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TD/wl-other")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ta-live","version":"0"}}}' "http://127.0.0.1:$P4/mcp")" 401
   $K create token default -n "$MCPNS" --audience "$WLAUD" --duration 10m > "$TD/wl-nobound" 2>/dev/null
   SIDN=-; for _ in $(seq 1 6); do SIDN=$(mcp_open $P4 "$TD/wl-nobound"); [ "$SIDN" != - ] && break; sleep 3; done
-  check "tools-lookup-workload: a token with the right audience that is not bound to a pod lists no tool (the policy needs a pod)" "$([ "$SIDN" = - ] && echo none || mcp_call $P4 "$TD/wl-nobound" "$SIDN" 2 tools/list '{}' | jq -r '[.result.tools[]?]|length' 2>/dev/null)" "$([ "$SIDN" = - ] && echo none || echo 0)"
+  check "tools-lookup-workload: a token with the right audience from outside the workload namespace (not pod-bound) lists no tool" "$([ "$SIDN" = - ] && echo none || mcp_call $P4 "$TD/wl-nobound" "$SIDN" 2 tools/list '{}' | jq -r '[.result.tools[]?]|length' 2>/dev/null)" "$([ "$SIDN" = - ] && echo none || echo 0)"
   kill $PF4 2>/dev/null; PF4=""
 else
-  bad "the probe pod in $WLNS did not become Ready" "$(cat "$TD/wl.err" | cut -c1-400)"
+  bad "no token of a container agent pod could be read in $WLNS (the sample agent must run there; the kind node must be reachable with docker)" "$(cut -c1-300 "$TD/wl.err" 2>/dev/null) pod='${WLPOD}'"
 fi
-$K delete pod ta-wl-probe -n "$WLNS" --ignore-not-found --wait=false >/dev/null 2>&1
 rm -f "$TD/wl-ok" "$TD/wl-other" "$TD/wl-nobound"
 
 echo "# after the calls: every backend still ready, still no forbidden line"
