@@ -235,28 +235,25 @@ def q3():
         "alpha: %d calls admitted then 429; call before the edit: %s; first 200 after the edit: %s s; after that %d more calls admitted before 429 (a fresh beta bucket from kb1 admitted the number in A1)" % (
             adm_a, base, t_first, admitted_beta - 1 if t_first is not None else 0),
         "yes: the key got a new bucket after %s s" % t_first if t_first is not None else "no: still refused after 150 s")
-    # and back to alpha
+    # and back to alpha: the key's earlier alpha bucket is still there
     sw = chat(pf.port, "kc1", "kc1 pre-back")["status"]
     KEYS["kc1"][1] = "alpha"
     publish_keys()
-    t0 = time.time()
-    first, back = None, []
-    while time.time() - t0 < 150:
-        r = chat(pf.port, "kc1", "kc1 back")
-        back.append(r["status"])
-        if r["status"] == 200:
-            first = round(time.time() - t0, 1)
-            break
-        time.sleep(2)
-    after = 0
-    if first is not None:
-        _, a, _, _ = drain(pf.port, "kc1", label="kc1 back")
-        after = 1 + a
-    rec(Q[3], "beta-to-alpha", "YES" if first is not None else "NO",
-        "the same key kc1 after its beta bucket was used up: edit the entry back to budget_class=alpha, then one call every 2 s",
-        "call before the edit: %s; first 200 after the edit: %s s; calls admitted in all: %d (the first alpha bucket of this key admitted %d)" % (sw, first, after, adm_a),
-        "yes: moving back also gave a full bucket (%d calls vs %d)" % (after, adm_a) if first is not None and after >= max(1, adm_a - 1)
-        else "the old alpha bucket was not full again" if first is not None else "no: still refused after 150 s")
+    time.sleep(6)
+    back = [chat(pf.port, "kc1", "kc1 back %d" % i)["status"] for i in range(3)]
+    rec(Q[3], "beta-to-alpha", "NO" if all(x == 429 for x in back) else "YES",
+        "the same key kc1 after its beta bucket was used up: edit the entry back to budget_class=alpha, wait 6 s, then 3 calls",
+        "call before the edit: %s; after the edit: %s (the first alpha bucket of this key admitted %d calls and was refused at the end)" % (sw, compress(back), adm_a),
+        "no fresh bucket: the key went back to its earlier alpha bucket, which was still empty (the buckets are kept for each class and key)" if all(x == 429 for x in back)
+        else "the key got admission again after the move back")
+    # and to beta again: the beta bucket of this key was used up, too
+    KEYS["kc1"][1] = "beta"
+    publish_keys()
+    time.sleep(6)
+    again = [chat(pf.port, "kc1", "kc1 beta again %d" % i)["status"] for i in range(3)]
+    rec(Q[3], "alpha-to-beta-again", "NO" if all(x == 429 for x in again) else "YES",
+        "kc1 edited to beta a second time, wait 6 s, then 3 calls", "statuses %s" % compress(again),
+        "no fresh bucket the second time: only the first move into a class gave a full bucket" if all(x == 429 for x in again) else "a second move into beta gave admission again")
 
 
 def gw_log_lines(user):

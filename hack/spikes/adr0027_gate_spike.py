@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adr_spike_lib as L  # noqa: E402
@@ -191,44 +192,28 @@ def q1():
         else "no: both forms waited for the run")
 
 
-def find_tasks(ctx):
-    """Tasks of one conversation: ListTasks, then the runtime's database."""
-    info = []
-    for method in ("ListTasks", "tasks/list"):
-        r = call(json.dumps({"jsonrpc": "2.0", "id": 3, "method": method, "params": {"contextId": ctx}}), "direct", 30)
-        j = r.get("j") or {}
-        if j.get("result"):
-            info.append("%s: %s" % (method, short(json.dumps(j["result"]), 500)))
-            return info
-        info.append("%s: HTTP %s %s" % (method, r["status"], short(json.dumps(j.get("error")) if j.get("error") else r["body"], 150)))
-    rc, out, err = k("exec", "-n", "kagent", "kagent-pg-0", "--", "psql", "--no-psqlrc", "-U", "postgres", "-d", "kagent", "-tAc",
-                     "select table_name||'.'||column_name from information_schema.columns where table_name ilike '%task%' order by 1")
-    info.append("task tables and columns: " + short((out + err).replace("\n", ", "), 300))
-    for tbl in ("task", "tasks"):
-        rc, out, err = k("exec", "-n", "kagent", "kagent-pg-0", "--", "psql", "--no-psqlrc", "-U", "postgres", "-d", "kagent", "-tAc",
-                         "select left(data::text, 400) from %s where data::text like '%%%s%%' limit 3" % (tbl, ctx))
-        if rc == 0 and out.strip():
-            info.append("database %s: %s" % (tbl, short(out, 800)))
-            break
-        info.append("database %s: %s" % (tbl, short((out + err), 150)))
-    return info
+def find_tasks(marker):
+    """Tasks that hold the marker text: the runtime's own database (session_task)."""
+    q = "select id, state, status_timestamp, left(data::text, 160) from session_task where data::text like '%%%s%%' order by created_at limit 5" % marker
+    rc, out, err = k("exec", "-n", "kagent", "kagent-pg-0", "--", "psql", "--no-psqlrc", "-U", "postgres", "-d", "kagent", "-tAc", q)
+    return ["session_task rows holding the marker: " + (short(out, 700) or "none") + ((" [stderr] " + short(err, 200)) if err.strip() else "")]
 
 
 def q2():
-    ctx = "spike-disc-" + os.urandom(4).hex()
     marker = "MARK-B2-" + os.urandom(3).hex()
-    body = msg("%s %s" % (SLOW, marker), mid("b2"), None, ctx)
+    body = msg("%s %s" % (SLOW, marker), mid("b2"))
     t0 = time.time()
     r = call(body, timeout=4)
     time.sleep(2)
     mid_ev = events(marker)
+    mid_tasks = find_tasks(marker)
     time.sleep(45)
     ev = events(marker)
-    tasks = find_tasks(ctx)
+    tasks = find_tasks(marker)
     rec(Q[2], "disconnect-blocking", "INFO",
-        "blocking SendMessage (no configuration) with text '%s %s' and contextId %s; the client gives up after 4 s (the run takes about 25 s); then wait 45 s" % (SLOW, marker, ctx),
-        "client side: %s. At +6s the stand-in had %d request(s) for the marker; at +51s: %s. Tasks of the conversation: %s" % (
-            summ(r), len(mid_ev), "; ".join("started +%.1fs, finished %s status %s" % (e["t0"] - t0, ("+%.1fs" % (e["t1"] - t0)) if e["t1"] else "never", e["status"]) for e in ev) or "none", " | ".join(tasks)),
+        "blocking SendMessage (no configuration) with text '%s %s'; the client gives up after 4 s (the run takes about 25 s); then wait 45 s" % (SLOW, marker),
+        "client side: %s. At +6s the stand-in had %d request(s) for the marker and %s; at +51s: %s and %s" % (
+            summ(r), len(mid_ev), " ".join(mid_tasks), "; ".join("started +%.1fs, finished %s status %s" % (e["t0"] - t0, ("+%.1fs" % (e["t1"] - t0)) if e["t1"] else "never", e["status"]) for e in ev) or "no model request", " ".join(tasks)),
         "the run continued after the client left (the model request finished)" if ev and ev[0]["t1"] else "the model request did not finish after the client left")
 
 
@@ -310,10 +295,12 @@ def q4():
     variant("duplicate-key-parts", lambda m: raw_body(parts='"parts":[{"text":"hello ' + m[0] + '"}],"parts":[{"text":"hello ' + m[1] + '"}]'), a)
     a = [mk("Config")]
     r = variant("case-variant-Configuration-blocking-false", lambda m: raw_body(t=SLOW + " " + m[0], extra_params=',"Configuration":{"blocking":false}'), a)
+    a = [mk("Config-ri")]
+    variant("case-variant-Configuration-returnImmediately", lambda m: raw_body(t=SLOW + " " + m[0], extra_params=',"Configuration":{"returnImmediately":true}'), a)
     a = [mk("cfgunk")]
     variant("unknown-key-in-configuration", lambda m: raw_body(t="hello " + m[0], extra_params=',"configuration":{"blocking":true,"unknownKey":1}'), a)
     a = [mk("ctx")]
-    variant("contextId-and-taskId-present", lambda m: raw_body(t="hello " + m[0], extra_msg=',"contextId":"spike-ctx-%s","taskId":"not-a-task"' % os.urandom(3).hex()), a)
+    variant("contextId-and-taskId-present", lambda m: raw_body(t="hello " + m[0], extra_msg=',"contextId":"%s","taskId":"not-a-task"' % str(uuid.uuid4())), a)
 
 
 # ---------------------------------------------------------------- B5
@@ -323,7 +310,7 @@ def node_container():
     return names[0] if names else None
 
 
-SH = ('for p in /proc/[0-9]*; do c=$(tr "\\0" " " < $p/cmdline 2>/dev/null); case "$c" in *a2a-gate*) '
+SH = ('for p in /proc/[0-9]*; do c=$(tr "\\0" "\\n" < $p/cmdline 2>/dev/null | head -1); case "$c" in *a2a-gate) '
       'pid=${p#/proc/}; echo pid=$pid; grep -E "^(VmRSS|VmHWM):" $p/status; cg=$(cut -d: -f3 $p/cgroup); '
       'for f in memory.current memory.peak memory.max; do echo "$f=$(cat /sys/fs/cgroup$cg/$f 2>/dev/null)"; done; break;; esac; done')
 
@@ -338,7 +325,7 @@ def gate_mem():
         m = re.match(r"(VmRSS|VmHWM):\s+(\d+) kB", line)
         if m:
             d[m.group(1)] = int(m.group(2)) // 1024
-        m = re.match(r"(memory\.\w+)=(\d+)", line)
+        m = re.match(r"(memory\.\w+)=(\d+)$", line)
         if m:
             d[m.group(1)] = int(m.group(2)) // (1024 * 1024)
     return d or None
@@ -346,6 +333,8 @@ def gate_mem():
 
 def q5():
     S["node"] = node_container()
+    pfs = [L.PF("openagentix-gateway", "svc/a2a-gate", "8080") for _ in range(6)]   # several port-forwards: one carries few connections at a time
+    S["pfs"] = pfs
     pods = k("get", "pods", "-n", "openagentix-gateway", "-o", "wide")[1]
     lim = k("get", "deploy", "a2a-gate", "-n", "openagentix-gateway", "-o", "jsonpath={.spec.template.spec.containers[0].resources}")[1]
     top = k("top", "pod", "-n", "openagentix-gateway")
@@ -379,9 +368,9 @@ def q5():
 
     def hit(i):
         h = {"Content-Type": "application/json", "A2A-Version": "1.0", "X-User-Id": "quickstart:ask", "Authorization": "Bearer " + toks[i]}
-        r = L.http("POST", "http://127.0.0.1:%d/agents/kagent/not-this-agent" % S["gate"].port, h, msg("hello", mid("b5")), 30)
+        r = L.http("POST", "http://127.0.0.1:%d/agents/kagent/not-this-agent" % pfs[i % len(pfs)].port, h, msg("hello", mid("b5")), 30)
         res.append(r["status"])
-    sem = threading.Semaphore(16)
+    sem = threading.Semaphore(6)
 
     def worker(i):
         with sem:
@@ -396,7 +385,7 @@ def q5():
     for s in res:
         cnt[s] = cnt.get(s, 0) + 1
     rec(Q[5], "burst-tokens", "INFO",
-        "%d requests, each with a different projected ServiceAccount token (kubectl create token quickstart-ask) and a different messageId, 16 at a time, to /agents/kagent/not-this-agent (refused after authentication)" % len(toks),
+        "%d requests, each with a different projected ServiceAccount token (kubectl create token quickstart-ask) and a different messageId, 6 at a time, to /agents/kagent/not-this-agent (refused after authentication)" % len(toks),
         "statuses %s; memory after: %s (MiB; limit 64)" % (cnt, json.dumps(after1)))
     # burst 2: many open calls at the same time (each held by the stand-in for about 25 s)
     n_open = 48
@@ -412,7 +401,7 @@ def q5():
     sp = threading.Thread(target=sampler)
     sp.start()
     tk = [token() for _ in range(n_open)]
-    out = L.parallel([(lambda i=i: L.http("POST", url("gate"), {"Content-Type": "application/json", "A2A-Version": "1.0", "X-User-Id": "quickstart:ask", "Authorization": "Bearer " + tk[i]},
+    out = L.parallel([(lambda i=i: L.http("POST", "http://127.0.0.1:%d/agents/kagent/quickstart" % pfs[i % len(pfs)].port, {"Content-Type": "application/json", "A2A-Version": "1.0", "X-User-Id": "quickstart:ask", "Authorization": "Bearer " + tk[i]},
                                          msg("%s MARK-B5-%d" % (SLOW, i), mid("b5o")), 150)) for i in range(n_open)])
     stop.set()
     sp.join(30)
@@ -425,7 +414,7 @@ def q5():
     rec(Q[5], "burst-open-calls", "INFO",
         "%d blocking SendMessage calls at the same moment through the gate, each with its own token and messageId; each run is held about 25 s by the stand-in (the gate keeps each call open)" % n_open,
         "statuses %s; highest VmRSS sampled every 2 s: %d MiB; final: %s (MiB; limit 64; %d samples)" % (sc, peak, json.dumps(after2), len(samples)))
-    limit = (after2 or {}).get("memory.max")
+    limit = (after2 or {}).get("memory.max") or 64
     hwm = max([(after2 or {}).get("VmHWM", 0), (after1 or {}).get("VmHWM", 0)])
     rec(Q[5], "answer", "PARTLY",
         "", "baseline %s; peak resident set during the bursts %s MiB (VmHWM); cgroup limit %s MiB" % (json.dumps(base), hwm, limit),
@@ -446,6 +435,8 @@ def main():
 
 
 def finish():
+    for pf in S.get("pfs", []):
+        pf.stop()
     for t in ("direct", "gate"):
         if S.get(t):
             S[t].stop()
