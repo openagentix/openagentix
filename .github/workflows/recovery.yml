@@ -72,6 +72,9 @@ jobs:
         if: always()
         run: |
           kubectl get pods -A -o wide || true
+          echo "--- init containers of ate-api-server (issue #203: wait-for-postgres must be there)"
+          kubectl get deployment ate-api-server -n ate-system -o jsonpath='{.spec.template.spec.initContainers[*].name}{"\n"}' || true
+          kubectl logs -n ate-system deploy/ate-api-server -c wait-for-postgres --tail=5 || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -80 || true
           for d in kagent/kagent-controller toolhive-system/toolhive-operator agentgateway-system/agentgateway; do
             echo "--- previous log of $d"

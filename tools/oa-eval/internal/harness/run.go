@@ -82,6 +82,9 @@ func Run(ctx context.Context, cs *CaseSet, cfg Config) (*Report, error) {
 			rep.Passed++
 		default:
 			rep.Failed++
+			if r.NoCause {
+				rep.NoCause++
+			}
 		}
 	}
 	rep.Agreement = agreement(rep.Cases)
@@ -138,7 +141,16 @@ func runCase(ctx context.Context, hc *http.Client, cfg Config, cs *CaseSet, c Ca
 		return res
 	}
 	res.TaskState = ans.State
-	if why := refusalReason(ans.Text); why != "" && ans.State == "TASK_STATE_FAILED" {
+	if ans.State != "TASK_STATE_COMPLETED" {
+		res.TaskError = ans.Failure
+	}
+	// A refusal of the model call (a spent budget, a provider error) is read from the failure message of the status, and from the answer text when the
+	// message is not there (a gate that puts the error in the answer). It counts whether it came before the first tool call or after some.
+	why := refusalReason(ans.Failure)
+	if why == "" {
+		why = refusalReason(ans.Text)
+	}
+	if why != "" && ans.State == "TASK_STATE_FAILED" {
 		// A model-call error is not the agent's doing, whether it came before the first tool call or in the middle of the case (a budget that runs
 		// out during a run). The case is cut off: it is not a pass and not a failure, and the state it left is partial, so it says how many calls it made.
 		if cfg.AuditSrc != "" && beforeErr == nil {
@@ -152,6 +164,7 @@ func runCase(ctx context.Context, hc *http.Client, cfg Config, cs *CaseSet, c Ca
 		res.NotRun, res.NotRunReason = true, why
 		return res
 	}
+	res.NoCause = ans.State != "TASK_STATE_COMPLETED" && ans.Failure == ""
 	sum := sha256.Sum256([]byte(ans.Text))
 	res.AnswerSHA = hex.EncodeToString(sum[:])
 	if cfg.IncludeAnswers {

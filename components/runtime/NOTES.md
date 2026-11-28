@@ -107,6 +107,7 @@ Because of the 402, `manifests/mock-llm.yaml` adds a ~40-line OpenAI-compatible 
 
 - Any successful Gemini completion (key out of credits).
 - kagent-controller start-up race: fixed by the wait in `kagent-postrender.sh` (issue #178); proven by 6 recovery runs in CI, not on a laptop VM.
+- ate-api-server second restart after a node restart: root cause and fix in issue #203 (`substrate-postrender.sh`, the release is installed by `substrate-helm.sh`). The API server gives its PostgreSQL 30 attempts at 2 s and exits; the Service `postgres` is headless, so the name does not resolve until `postgres-0` is Ready, and after a node restart both pods wait for pod certificates (the kubelet retries the projected volume mount with a growing delay), so `postgres-0` can be Ready more than a minute after the API server started. A cluster that is installed already gets the wait with `bash components/runtime/substrate-helm.sh`.
 - Behaviour under several concurrent agents, memory per sandbox, and resource limits.
 - `up.sh` on a fresh machine: I re-ran it on the existing cluster: exit 0 in 51 s, every step a no-op or unchanged, agent still Ready (idempotency verified). I did not recreate the cluster from zero, so the cold path is only verified as the manual sequence it was derived from.
 - kagent UI and other harnesses (claude/codex) not exercised.

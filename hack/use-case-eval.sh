@@ -402,7 +402,7 @@ refused_message() { # the message when a model call was refused
   echo "the agent's gateway budget is exhausted: $used tokens used in the last hour by this script's runs (budget $BUDGET per key), and a model call was refused (HTTP 429 or another model-call error). Wait or lower --runs."
 }
 append_results() { # append_results <run> <report> <tokens json or null>
-  jq -c --argjson run "$1" --argjson tok "$3" '.cases[] | {run: $run, id: .id, pass: .pass, not_run: (.not_run // false), reason: (.not_run_reason // null), ms: .ms, tool_calls: ((.tools_seen // []) | length), failed: [(.checks // [])[] | select(.pass | not) | {name: .name, detail: (.detail // "")}], tokens: $tok}' "$2" >>"$OUT/results.jsonl"
+  jq -c --argjson run "$1" --argjson tok "$3" '.cases[] | {run: $run, id: .id, pass: .pass, not_run: (.not_run // false), reason: (.not_run_reason // null), no_cause: (.failed_cause_not_recorded // false), task_error: (.task_error // null), ms: .ms, tool_calls: ((.tools_seen // []) | length), failed: [(.checks // [])[] | select(.pass | not) | {name: .name, detail: (.detail // "")}], tokens: $tok}' "$2" >>"$OUT/results.jsonl"
 }
 
 run_once() { # run_once <n>
@@ -574,17 +574,18 @@ write_summary() { # write_summary <runs completed>
      tokens: {scope: $scope, available: $tokok, user_id: $tuid, reason: (if $tokok then null else $reason end), unit: "tokens, never a price"},
      cases: (group_by(.id) | map(. as $g | ([$g[] | select(.not_run | not)]) as $c | {id: $g[0].id, runs: ($c | length), not_run: ([$g[] | select(.not_run)] | length), passed: ([$c[] | select(.pass)] | length),
         pass_rate: (if ($c | length) == 0 then null else (([$c[] | select(.pass)] | length) / ($c | length)) end),
-        failed_checks: ([$c[] | .failed[]] | group_by(.name) | map({check: .[0].name, count: length, example: .[0].detail}) | sort_by(-.count)),
+        failed_no_cause: ([$c[] | select(.no_cause)] | length),
+        failed_checks: ([$c[] | select(.no_cause | not) | .failed[]] | group_by(.name) | map({check: .[0].name, count: length, example: .[0].detail}) | sort_by(-.count)),
         duration_ms: {median: ([$c[].ms] | median), max: ([$c[].ms] | maxv)},
         tool_calls: {median: ([$c[].tool_calls] | median), max: ([$c[].tool_calls] | maxv)},
         tokens: (if ([$c[] | select(.tokens != null)] | length) == 0 then null else {measured_runs: ([$c[] | select(.tokens != null)] | length), input_median: ($c | tokmed("input")), output_median: ($c | tokmed("output")), budget_tokens_median: ($c | budgetmed)} end)})),
      tokens_per_run: ($runs | map(select(.tokens != null) | {run: .run, tokens: .tokens, budget_tokens: ((.tokens.input // 0) + (.tokens.output // 0)), audit_tool_calls: .audit_tool_calls})),
-     budget: {tokens_per_hour_per_key: $budget, source: $bsrc, stopped_by_budget: ($stop != ""), message: (if $stop == "" then null else $stop end), counts: "input plus output tokens of a run count against the key; a case that was refused is not run and is not in the pass rate"},
+     budget: {tokens_per_hour_per_key: $budget, source: $bsrc, stopped_by_budget: ($stop != ""), message: (if $stop == "" then null else $stop end), counts: "input plus output tokens of a run count against the key; a case that was refused is not run and is not in the pass rate. A case whose task ended FAILED with no message is failed_no_cause: it is in the pass rate as a failure, it is not a check failure, and its cause is not known"},
      sweep: $sweep}' "$OUT/results.jsonl" >"$OUT/summary.json"
   log; log "=== summary ($UC, $completed of $RUNS run(s) completed; $OUT/summary.json)"
   jq -r '.cases[] | [.id, "\(.passed)/\(.runs)" + (if .not_run > 0 then " (+\(.not_run) not run)" else "" end), (.duration_ms.median | tostring) + "ms", (.duration_ms.max | tostring) + "ms", (.tool_calls.median | tostring), (.tool_calls.max | tostring),
       (if .tokens == null then "-" else "\(.tokens.input_median // "-")/\(.tokens.output_median // "-")" end),
-      ([.failed_checks[] | "\(.check) x\(.count)"] | join("; "))] | @tsv' "$OUT/summary.json" |
+      (([.failed_checks[] | "\(.check) x\(.count)"] + (if .failed_no_cause > 0 then ["failed task, cause not recorded x\(.failed_no_cause)"] else [] end)) | join("; "))] | @tsv' "$OUT/summary.json" |
     { printf 'CASE\tPASSED\tMS-MEDIAN\tMS-MAX\tCALLS-MED\tCALLS-MAX\tTOKENS-IN/OUT-MEDIAN\tFAILED-CHECKS\n'; cat; } | column -t -s "$(printf '\t')" 2>/dev/null || cat
   if [ "$TOK_OK" = 1 ]; then
     log "tokens ($(jq -r .tokens.scope "$OUT/summary.json")): per run $(jq -c '[.tokens_per_run[] | {run, input: .tokens.input, output: .tokens.output}]' "$OUT/summary.json")"
