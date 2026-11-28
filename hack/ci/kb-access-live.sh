@@ -12,18 +12,12 @@
 # not appear in any log. It never prints a caller's value. Exit 1 when a check fails.
 set -u
 [ "${KB_ACCESS:-0}" = 1 ] || { echo "kb-access-live: set KB_ACCESS=1 to run this against the current cluster (it is opt-in)"; exit 0; }
+K=${KUBECTL:-kubectl}
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+require_ci_context kb-access-live KB_ACCESS_CI_CONTEXT
 PHASE=${KB_ACCESS_PHASE:-}
 case "$PHASE" in off|report|enforce) ;; *) echo "kb-access-live: set KB_ACCESS_PHASE to off, report or enforce" >&2; exit 2;; esac
-K=${KUBECTL:-kubectl}
-CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "kb-access-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${KB_ACCESS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "kb-access-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and KB_ACCESS_CI_CONTEXT does not name this context. Nothing was changed." >&2
-  exit 2
-fi
 cd "$(dirname "$0")/../.." || exit 1
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; KBNS=openagentix-knowledge
 PIDS=(); TD=$(mktemp -d)

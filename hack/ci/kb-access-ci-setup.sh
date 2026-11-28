@@ -7,15 +7,9 @@
 set -u
 [ "${KB_ACCESS:-0}" = 1 ] || { echo "kb-access-ci-setup: set KB_ACCESS=1 to run this against the current cluster (it is opt-in)"; exit 0; }
 K=${KUBECTL:-kubectl}
-CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "kb-access-ci-setup: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${KB_ACCESS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "kb-access-ci-setup: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and KB_ACCESS_CI_CONTEXT does not name this context. Nothing was changed." >&2
-  exit 2
-fi
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+require_ci_context kb-access-ci-setup KB_ACCESS_CI_CONTEXT
 cd "$(dirname "$0")/../.." || exit 1
 ENDPOINTS=1 ENDPOINTS_CI_CONTEXT=${KB_ACCESS_CI_CONTEXT:-} hack/ci/endpoints-ci-setup.sh || exit 1
 $K get namespace kb-ci >/dev/null 2>&1 || $K create namespace kb-ci >/dev/null || exit 1

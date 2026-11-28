@@ -35,6 +35,7 @@ cat > "$D/bin/kubectl" <<EOS
 #!/usr/bin/env bash
 a="\$*"
 case "\$a" in
+  "config current-context") echo kind-oa-upgrade;;
   "get agents.api.kagent.dev -n kagent -o json") cat "$D/w/agents.json";;
   "get cronjobs -A -o json") cat "$D/w/cronjobs.json";;
   "get pvc -A -o json") cat "$D/w/pvc.json";;
@@ -96,7 +97,7 @@ EOS
 chmod +x "$D/bin/"* "$D/kb" "$D/old" "$D/new-a" "$D/new-b"
 
 U(){ rm -rf "$D/w"; cp -R "$G" "$D/w"
-  FAKE=$1 PATH="$D/bin:$PATH" KUBECTL="$D/bin/kubectl" HELM="$D/bin/helm" KB_CALL="$D/kb" HEALTH_WAIT=1 \
+  FAKE=$1 GITHUB_ACTIONS=true PATH="$D/bin:$PATH" KUBECTL="$D/bin/kubectl" HELM="$D/bin/helm" KB_CALL="$D/kb" HEALTH_WAIT=1 \
     APPLY_TRIES=${TRIES:-5} APPLY_SLEEP=0 UPGRADE_OLD_INSTALL="$D/old" UPGRADE_NEW_INSTALL="$D/new-a" UPGRADE_NEW_INSTALL_B="$D/new-b" \
     bash hack/ci/upgrade-test.sh 2>&1; echo "exit=$?"; }
 n(){ grep -c -- "$1" <<<"$OUT"; }

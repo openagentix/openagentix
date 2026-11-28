@@ -99,6 +99,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/events-live-test.sh
 	hack/ci/use-case-classes-test.sh
 	hack/ci/also-compose-cross-test.sh
+	hack/ci/live-sweep-test.sh
 	hack/ci/use-case-class-live-test.sh
 	python3 -m unittest discover -s components/bench -p 'test_*.py'
 	python3 -m unittest discover -s components/bench/compare -p 'test_*.py'

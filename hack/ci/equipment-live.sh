@@ -39,19 +39,11 @@ KBASE=${KUBECTL:-kubectl}
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 UC=$ROOT/examples/use-cases/equipment
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
+require_ci_context equipment-live EQUIPMENT_CI_CONTEXT
 CTX_NOW=$($KBASE config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*) ;;
-  *) echo "equipment-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "$CTX_NOW" = kind-openagentix ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
-  echo "equipment-live: refusing to run on 'kind-openagentix': that is the name of a full demo cluster, and no variable allows it outside GitHub Actions. This script changes the cluster. Nothing was changed." >&2
-  exit 2
-fi
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${EQUIPMENT_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "equipment-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and EQUIPMENT_CI_CONTEXT does not name this context. This script changes the cluster; do not run it on a cluster you use. Nothing was changed." >&2
-  exit 2
-fi
 # Every call below names the context that was checked, so a change of the current context during the run (another shell, another install) cannot send an
 # order approval, a patch of the identity settings or a ClusterRoleBinding to another cluster.
 K="$KBASE --context=$CTX_NOW"

@@ -173,6 +173,7 @@ jobs:
           hack/ci/events-live-test.sh
           hack/ci/use-case-classes-test.sh
           hack/ci/also-compose-cross-test.sh
+          hack/ci/live-sweep-test.sh
           hack/ci/use-case-class-live-test.sh
       - name: reference docs tests
         run: |
