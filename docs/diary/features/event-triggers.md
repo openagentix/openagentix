@@ -68,7 +68,7 @@ Off by default. `EVENTS=1 examples/use-cases/<use case>/install.sh` turns on the
 | Only an intake route writes an event, in the case's transaction | Tests in the equipment and bank modules: a new fault, a request and a dispute queue one row; a repeat, a refused case and every MCP tool queue none; a failed enqueue leaves no case; with the sender off there is no `events` table |
 | The records service is off unless configured, and half a configuration stops it | `cmd/records` tests |
 | The install is idempotent and the manifest is the same as before when `EVENTS` is unset | the install tests with fakes (first run, second run, back to unset, beside the other use case and the full demo) and the manifest tests of both use cases |
-| Live: a real intake event starts the agent with no person; a repeat starts no second run; a burst is held to the rate and all are sent once; an agent tool causes no event; nothing is sent with the sender off | `hack/ci/events-live.sh`, opt-in jobs of the `e2e` workflow (run ids in the pull request and the what-works row) |
+| Live: a real intake event starts the agent with no person; a repeat starts no second run; a burst is held to the rate and all are sent once; an agent tool causes no event; nothing is sent with the sender off | `hack/ci/events-live.sh`, opt-in jobs of the `e2e` workflow (equipment run 46123796056, bank run 46122654035, both on head 94b8326, all checks passed; the what-works row has the counts) |
 
 The channels path for senders that cannot speak A2A (slice 7), with what is weaker on it, is in [channels](./channels.md), "Events from a sender that cannot speak A2A". It is documentation only: no use case wires it.
 
