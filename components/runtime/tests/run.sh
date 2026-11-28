@@ -170,6 +170,66 @@ grep -v 'kagent-controller' "$D/rendered.yaml" | sed '/^# Source: kagent\/templa
 bash "$PR" < "$D/no-ctl.yaml" >/dev/null 2>&1; eq "without the controller Deployment it fails (a renamed object must not drop the wait silently)" "$?" 1
 eq "kagent-helm.sh always passes the post-renderer" "$(grep -c -- '--post-renderer ./kagent-postrender.sh' "$HERE/kagent-helm.sh")" 1
 
+echo "# the Substrate API waits for its PostgreSQL (issue #203, substrate-postrender.sh)"
+cat > "$D/sub-rendered.yaml" <<'EOF'
+# Source: substrate/templates/ate-api-server.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: ate-api-server}}
+  template:
+    metadata: {labels: {app: ate-api-server}}
+    spec:
+      initContainers:
+        - name: objectstore-plugin
+          image: ghcr.io/example/objectstore-plugin:1.0.1
+          restartPolicy: Always
+      containers:
+        - name: ate-api-server
+          image: ghcr.io/example/ateapi:1.0.1
+---
+# Source: substrate/templates/ate-idp-server.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-idp-server
+  namespace: ate-system
+spec:
+  selector: {matchLabels: {app: ate-idp-server}}
+  template:
+    metadata: {labels: {app: ate-idp-server}}
+    spec:
+      containers:
+        - name: idp
+          image: ghcr.io/example/idp:1.0.1
+EOF
+SPR="$HERE/substrate-postrender.sh"
+SOUT=$(bash "$SPR" < "$D/sub-rendered.yaml" 2>"$D/spr-err"); RC=$?
+eq "the substrate post-renderer succeeds" "$RC" 0
+SDOCS=$(yq -c 'select(.!=null)' <<<"$SOUT" 2>/dev/null)
+api() { jq -c 'select(.kind=="Deployment" and .metadata.name=="ate-api-server")' <<<"$SDOCS"; }
+SINIT=$(api | jq -c '.spec.template.spec.initContainers[] | select(.name=="wait-for-postgres")')
+eq "every object is still there" "$(jq -r '.kind+"/"+.metadata.name' <<<"$SDOCS" | sort | tr '\n' ' ')" "Deployment/ate-api-server Deployment/ate-idp-server "
+eq "the API server keeps its own init container (the object store plugin) and gets wait-for-postgres" "$(api | jq -r '[.spec.template.spec.initContainers[].name]|sort|join(",")')" "objectstore-plugin,wait-for-postgres"
+eq "the object store plugin is unchanged (still a sidecar that restarts always)" "$(api | jq -c '.spec.template.spec.initContainers[]|select(.name=="objectstore-plugin")')" '{"image":"ghcr.io/example/objectstore-plugin:1.0.1","name":"objectstore-plugin","restartPolicy":"Always"}'
+eq "it waits for the address the API server dials (the headless Service has no DNS record until postgres-0 is Ready)" "$(jq -r '.command|join(" ")' <<<"$SINIT" | grep -c 'nc -z -w 2 postgres.ate-system.svc 5432')" 1
+eq "it gives up after a bounded time (the pod then shows Init:Error, not a silent hang)" "$(jq -r '.command|join(" ")' <<<"$SINIT" | grep -cE 'exit 1')" 1
+eq "the deadline is longer than the 60 s that the API server itself gives the database" "$(jq -r '.command|join(" ")' <<<"$SINIT" | sed -n 's/.*+ \([0-9][0-9]*\)).*/\1/p')" 660
+eq "it uses the image the install already pulls (substrate postgres), pinned by digest" "$(jq -r '.image' <<<"$SINIT")" "$(grep -m1 -oE 'postgres:18-alpine@sha256:[0-9a-f]{64}' "$HERE/manifests/substrate-postgres/postgres.yaml")"
+eq "it is not root, cannot escalate, has a read-only root and no capabilities" "$(jq -c '.securityContext|[.runAsNonRoot,.runAsUser,.allowPrivilegeEscalation,.readOnlyRootFilesystem,.capabilities.drop]' <<<"$SINIT")" '[true,65532,false,true,["ALL"]]'
+eq "it has small resource requests and limits" "$(jq -c '[.resources.requests.cpu,.resources.limits.memory]' <<<"$SINIT")" '["5m","32Mi"]'
+eq "the API server container and the replica count are unchanged" "$(api | jq -c '[.spec.replicas, .spec.template.spec.containers]')" '[2,[{"image":"ghcr.io/example/ateapi:1.0.1","name":"ate-api-server"}]]'
+eq "no other Deployment is changed" "$(jq -c 'select(.metadata.name=="ate-idp-server")|.spec.template.spec|has("initContainers")' <<<"$SDOCS")" false
+sed '/^# Source: substrate\/templates\/ate-api-server.yaml/,/^---$/d' "$D/sub-rendered.yaml" > "$D/sub-no-api.yaml"
+bash "$SPR" < "$D/sub-no-api.yaml" >/dev/null 2>&1; eq "without the ate-api-server Deployment it fails (a renamed object must not drop the wait silently)" "$?" 1
+eq "substrate-helm.sh always passes the post-renderer and the values file" "$(grep -c -- '--post-renderer ./substrate-postrender.sh' "$HERE/substrate-helm.sh")/$(grep -c -- '-f values/substrate.yaml' "$HERE/substrate-helm.sh")" "1/1"
+eq "up.sh installs the substrate release through substrate-helm.sh and no longer by a helm command of its own" "$(grep -c 'substrate-helm.sh' "$HERE/up.sh")/$(grep -cE '^helm upgrade --install substrate \$SUB_OCI/substrate ' "$HERE/up.sh")" "1/0"
+eq "the PostgreSQL of the Substrate is installed and Ready before the substrate release in up.sh" "$([ "$(grep -n 'rollout status statefulset/postgres' "$HERE/up.sh" | head -1 | cut -d: -f1)" -lt "$(grep -n 'substrate-helm.sh' "$HERE/up.sh" | head -1 | cut -d: -f1)" ] && echo yes)" yes
+
 echo
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

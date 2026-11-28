@@ -99,7 +99,8 @@ $K -n ate-system create secret generic kagent-rustfs-credentials \
   --from-literal=AWS_ACCESS_KEY_ID=rustfsadmin --from-literal=AWS_SECRET_ACCESS_KEY=rustfsadmin --dry-run=client -o yaml | $K apply -f -
 helm upgrade --install substrate-atelet $SUB_OCI/substrate-atelet --version $VER -n ate-system --wait --timeout 10m -f values/substrate-atelet.yaml
 $K -n ate-system rollout status daemonset/atelet --timeout=5m
-helm upgrade --install substrate $SUB_OCI/substrate --version $VER -n ate-system --wait --timeout 10m -f values/substrate.yaml
+# the post-renderer makes the API server wait for its PostgreSQL before it starts (issue #203, see substrate-postrender.sh)
+SUBSTRATE_VERSION=$VER bash substrate-helm.sh
 
 # --- 8. kagent's own PostgreSQL (pgvector image, password auth; spike-only) -------------------
 log "kagent postgres"
