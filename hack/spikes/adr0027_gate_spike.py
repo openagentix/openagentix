@@ -137,7 +137,6 @@ def warmup():
 
 
 def setup():
-    L.require_ci()
     L.ensure_slow_proxy(os.path.dirname(os.path.abspath(__file__)))
     S["direct"] = L.PF("kagent", "svc/kagent-controller", "8083")
     S["gate"] = L.PF("openagentix-gateway", "svc/a2a-gate", "8080")
@@ -434,6 +433,8 @@ def q5():
 
 
 def main():
+    L.require_ci()
+    L.CFG = (OUT, "Spike B, ADR 0027: the runtime behind the A2A gate", [Q[i] for i in sorted(Q)], "results-adr0027")
     try:
         setup()
     except Exception as e:  # noqa: BLE001
@@ -448,8 +449,7 @@ def finish():
     for t in ("direct", "gate"):
         if S.get(t):
             S[t].stop()
-    os.environ["SPIKE_STEM"] = "results-adr0027"
-    return L.write_results(OUT, "Spike B, ADR 0027: the runtime behind the A2A gate", [Q[i] for i in sorted(Q)])
+    return L.write_results(*L.CFG)
 
 
 if __name__ == "__main__":

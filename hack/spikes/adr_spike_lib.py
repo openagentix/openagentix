@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 
 SPIKE_NS = "spike-adr"
+CFG = None  # (out_dir, title, qnames, stem): set by a spike so that every record is written to disk at once
 R = []  # every record: {q, id, verdict, request, seen, answer}
 _T0 = time.time()
 
@@ -35,6 +36,11 @@ def say(msg):
 def rec(q, cid, verdict, request, seen, answer=""):
     """verdict: YES, NO, PARTLY, INFO or ERROR. `request` is the exact request or manifest, `seen` what came back."""
     R.append({"q": q, "id": cid, "verdict": verdict, "request": request, "seen": seen, "answer": answer})
+    if CFG:
+        try:
+            write_results(*CFG)
+        except Exception:  # noqa: BLE001
+            pass
     say("%s %s -> %s %s" % (q, cid, verdict, (answer or seen)[:160].replace("\n", " ")))
 
 
@@ -180,9 +186,8 @@ def proxy_events():
         pf.stop()
 
 
-def write_results(out_dir, title, qnames):
+def write_results(out_dir, title, qnames, stem="results"):
     os.makedirs(out_dir, exist_ok=True)
-    stem = os.environ.get("SPIKE_STEM", "results")
     json.dump(R, open(os.path.join(out_dir, stem + ".json"), "w"), indent=1)
     md = ["## " + title, ""]
     for q in qnames:

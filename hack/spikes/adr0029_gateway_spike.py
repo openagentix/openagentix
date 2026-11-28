@@ -80,6 +80,8 @@ def drain(port, name, limit=80, label=None):
         st.append(r["status"])
         if r["status"] == 429:
             break
+        if len(st) >= 4 and all(x not in (200, 429) for x in st[-4:]):
+            break   # the gateway is not answering: do not spend 30 s on every call
         if r["status"] == 200:
             tok += r["tokens"]
     adm = sum(1 for s in st if s == 200)
@@ -391,6 +393,7 @@ def q6():
 
 def main():
     L.require_ci()
+    L.CFG = (OUT, "Spike A, ADR 0029: budget classes in the model gateway policy", [Q[i] for i in sorted(Q)], "results-adr0029")
     try:
         setup()
     except Exception as e:  # noqa: BLE001
@@ -412,8 +415,7 @@ def finish():
                   json.dumps([{"op": "replace", "path": "/spec/traffic/rateLimit", "value": rl}]))
         k("delete", "configmap", CM, "-n", GW_NS, "--ignore-not-found")
     finally:
-        os.environ["SPIKE_STEM"] = "results-adr0029"
-        return L.write_results(OUT, "Spike A, ADR 0029: budget classes in the model gateway policy", [Q[i] for i in sorted(Q)])
+        return L.write_results(*L.CFG)
 
 
 if __name__ == "__main__":

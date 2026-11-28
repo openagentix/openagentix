@@ -18,12 +18,12 @@ say() { printf '\n==> %s\n' "$*"; }
 
 if [ "$which" = a ] || [ "$which" = both ]; then
   say "spike A (ADR 0029): the model gateway"
-  python3 -I "$here/adr0029_gateway_spike.py" || rc=$?
+  timeout 1500 python3 -I "$here/adr0029_gateway_spike.py" || rc=$?
   kubectl logs -n agentgateway-system -l gateway.networking.k8s.io/gateway-name=model-gateway --tail=3000 --all-containers > "$OUT/log-gateway-proxy.txt" 2>&1 || true
 fi
 if [ "$which" = b ] || [ "$which" = both ]; then
   say "spike B (ADR 0027): the runtime behind the gate"
-  python3 -I "$here/adr0027_gate_spike.py" || rc=$?
+  timeout 1800 python3 -I "$here/adr0027_gate_spike.py" || rc=$?
   kubectl logs -n openagentix-gateway deploy/a2a-gate --tail=3000 > "$OUT/log-a2a-gate.txt" 2>&1 || true
   kubectl logs -n kagent deploy/kagent-controller --tail=2000 > "$OUT/log-kagent-controller.txt" 2>&1 || true
   kubectl logs -n spike-adr deploy/slow-model --tail=500 > "$OUT/log-stand-in.txt" 2>&1 || true
