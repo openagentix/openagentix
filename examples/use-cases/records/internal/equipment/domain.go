@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/openagentix/openagentix/examples/use-cases/records/internal/core"
 )
@@ -68,4 +69,26 @@ func (d *Domain) Ready(ctx context.Context) error {
 		return errors.New("the store is not seeded")
 	}
 	return nil
+}
+
+// SetEvents turns the event sender's outbox on: a case that an intake route opens (a new fault, a service request) queues one event in the same
+// transaction. Without it nothing is queued and the store has no events table.
+func (d *Domain) SetEvents(ev *core.Events) { d.svc.events = ev }
+
+// Unworked lists the cases that are still open (the agent has not moved them on) and were opened at least olderThan ago, oldest first.
+func (d *Domain) Unworked(ctx context.Context, olderThan time.Duration) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT id FROM service_cases WHERE status='open' AND opened_at<=? ORDER BY id LIMIT 200`, core.FormatTime(d.clock().Add(-olderThan)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }

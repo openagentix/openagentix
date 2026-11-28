@@ -22,7 +22,9 @@
 #      argument: `records-approvers` (the SHA-256 of the desk lead's token) and `records-approver-token` (the token itself, read by ctl.sh) in fernvale-records;
 #      `records-mcp-expected` (fernvale-records, read by the records service as a file) and `records-mcp-auth` (the tool namespace, read by the tool gateway)
 #      with the SAME header value `Bearer <token>`. When only some exist (an earlier run stopped half way) all are made again with new values;
-#   4. applies manifests/records.yaml (the service, a base policy that admits nothing) and waits for it;
+#   4. applies manifests/records.yaml (the service, a base policy that admits nothing) and waits for it. With EVENTS=1 (default 0) the event sender is on: a fault, a service
+#      request or a dispute that an intake route accepts starts the agent through the A2A gate with no person (ADR 0027, README "Event triggers"). The manifest then also has the
+#      sender's two settings, a projected token for the gate (audience of the gate, 10 minutes) and an egress rule to DNS and the gate; with EVENTS unset the service is as before;
 #   5. removes the objects the first version of this use case made by hand (an MCPServerEntry and an auth config named records, by label), because Helm
 #      refuses to take over an object it did not create;
 #   6. runs the platform installer (./install.sh) with the composed values. Offline it sets PROFILE=quickstart and STUB_SCENARIOS=eval/scenario.json (ADR 0026)
@@ -34,6 +36,7 @@
 #      you report it.
 #
 # Env: CLUSTER (kind cluster name, REQUIRED unless KUBE_CONTEXT is set)  KUBE_CONTEXT (default kind-$CLUSTER)  KUBECTL  HELM  DOCKER  KIND
+#      EVENTS=1 (the event sender of the records service, off by default; pass the same value on every run: a run without it turns the sender off again)
 #      ALSO_COMPOSE="<file> <file>" (--beside-full-demo only: the values-full-demo.yaml of other use cases installed beside the same full demo, composed after your list and before
 #      this use case's own file; without it a release that holds such a use case is refused, naming what would be lost)
 #      VALUES_FILE (--beside-full-demo only: the files of the install you have, space separated, relative to the repository root or absolute)
@@ -88,6 +91,9 @@ for arg in "$@"; do
     *) die "unknown argument: $arg (--beside-full-demo, --skip-platform, --uninstall, -h; the stub model scenarios are shipped by the platform install, STUB_SCENARIOS)" ;;
   esac
 done
+
+EVENTS=${EVENTS:-0}
+case "$EVENTS" in 0|1) ;; *) die "EVENTS must be 0 or 1 (it is '$EVENTS'). Nothing was changed." ;; esac
 
 # The name of the full demo cluster: a default run must never reach it. Only --beside-full-demo says "yes, this is my full demo cluster".
 if [ "$KUBE_CONTEXT" = "kind-openagentix" ] && [ "$BESIDE" != 1 ]; then
@@ -292,7 +298,18 @@ fi
 
 # ---- 4. the service ------------------------------------------------------------------------------------------------------------
 say "applying the records service"
-sed "s#IMAGE_PLACEHOLDER#$IMAGE#" "$HERE/manifests/records.yaml" | "${KC[@]}" apply -f - >/dev/null
+# The manifest holds the event sender's parts between #EVENTS-ON-BEGIN and #EVENTS-ON-END, and what stays without it between #EVENTS-OFF-BEGIN and #EVENTS-OFF-END.
+# Only the lines of the chosen form are applied, so EVENTS unset applies exactly what was applied before the sender existed.
+render_records() {
+  awk -v on="$EVENTS" '
+    /#EVENTS-ON-BEGIN/  { skip = (on != 1); next }
+    /#EVENTS-ON-END/    { skip = 0; next }
+    /#EVENTS-OFF-BEGIN/ { skip = (on == 1); next }
+    /#EVENTS-OFF-END/   { skip = 0; next }
+    !skip { print }' "$HERE/manifests/records.yaml" | sed "s#IMAGE_PLACEHOLDER#$IMAGE#"
+}
+[ "$EVENTS" = 0 ] || say "the event sender is ON: an intake route of the records service starts the agent through the A2A gate (the gate's caller rule and the namespace are in values.yaml)"
+render_records | "${KC[@]}" apply -f - >/dev/null
 # The service reads its files when it starts (the approvers) and per request (the MCP credential): a new token needs a new pod.
 if [ "$REGENERATED" = 1 ]; then "${KC[@]}" rollout restart deployment/records -n "$NS" >/dev/null; fi
 "${KC[@]}" rollout status deployment/records -n "$NS" --timeout=180s >/dev/null || die "the records pod did not become ready: kubectl --context $KUBE_CONTEXT describe pod -n $NS -l app=records"

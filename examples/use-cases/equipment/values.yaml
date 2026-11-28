@@ -163,3 +163,24 @@ governance:
         serviceAccount: {namespace: openagentix-system, name: service-desk}
         agents: [service-agent]
         userId: {prefix: "service:"}
+
+      # The records service as an EVENT CALLER (ADR 0027): a fault or a service request that its intake route accepts opens a case and starts the service agent
+      # with one short text, "Work case SVC-2026-0007", and nothing else. The ServiceAccount records-events is the pod's own (manifests/records.yaml) and is not
+      # a person: the gate sets the user id event:kestrel-fault-events itself. The text names the case, never the dealer's words; those stay in the record, where
+      # the agent reads them as untrusted fields. Chart agents only: service-agent has no long-term memory, as an event caller requires.
+      # The numbers come from the measured runs (README, "Event triggers"): a case costs about 70,000 tokens, the gateway lets one key use 1,000,000 an hour. A burst of
+      # 3 starts at most 3 runs at once (about 210,000 tokens), then one more every 15 seconds. The rate cannot be lower than 1 a minute and cannot fund the budget on
+      # its own: past about 14 cases an hour the gateway budget refuses runs, and those end TASK_STATE_FAILED. The sender then asks again only up to 3 attempts.
+      # maxInFlight 2: a call is over in under a second (the gate returns at once), so two open calls at the gate are plenty and bound what a stuck sender can hold.
+      - name: kestrel-fault-events
+        serviceAccount: {namespace: kestrel-records, name: records-events}
+        agents: [service-agent]
+        event:
+          text: 'Work case SVC-[0-9]{4}-[0-9]{4}'
+          rate: {perMinute: 4, burst: 3}
+          maxInFlight: 2
+
+# The records pod may reach the gate: its pods are admitted to the gate's ingress on 8080 (the gate then asks for the token and the rule above).
+networkPolicy:
+  extraA2ACallers:
+    - {namespace: kestrel-records, podLabels: {app: records}}

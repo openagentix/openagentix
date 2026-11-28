@@ -2,8 +2,11 @@ package replay
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +18,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/openagentix/openagentix/examples/use-cases/records/internal/bank"
+	"github.com/openagentix/openagentix/examples/use-cases/records/internal/core"
 )
 
 const ctlScript = "../../bank/ctl.sh"
@@ -50,6 +56,7 @@ echo "$*" >> "` + callsFile + `"
 case "$*" in
   *port-forward*) echo $$ >> "` + pidFile + `"; echo "Forwarding from 127.0.0.1:` + u.Port() + ` -> 8081"; exec sleep 120 ;;
   *"get secret records-approver-token"*) printf %s "` + base64.StdEncoding.EncodeToString([]byte(leadToken)) + `" ;;
+  *"get deployment records"*) printf %s "$FAKE_EVENT_URL" ;;
   *) echo "unexpected kubectl call: $*" >&2; exit 9 ;;
 esac
 `
@@ -210,5 +217,51 @@ func TestCtlRefusesAnApprovalWhoseHashDoesNotCoverThePayload(t *testing.T) {
 	}
 	if n := e.count("/ledger", "ledger"); n != 0 {
 		t.Fatalf("ledger: %d", n)
+	}
+}
+
+func TestCtlDisputeFilesACaseAndSaysWhetherTheSenderStartsTheAgent(t *testing.T) {
+	db, err := core.Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	p := filepath.Join(t.TempDir(), "approvers.json")
+	if err := os.WriteFile(p, []byte(`[{"id":"desk:lead-1","role":"desk-lead","token_sha256":"`+hash(leadToken)+`"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ap, err := core.LoadApprovers(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := bank.New(db, slog.New(slog.NewJSONHandler(io.Discard, nil)), func() time.Time { return fixedNow }, ap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	free := func() (string, string) {
+		var acc, txn string
+		if err := db.QueryRow(`SELECT t.account_id, t.id FROM transactions t WHERE t.amount_cents>0 AND NOT EXISTS (SELECT 1 FROM cases c WHERE c.transaction_id=t.id) LIMIT 1`).Scan(&acc, &txn); err != nil {
+			t.Fatal(err)
+		}
+		return acc, txn
+	}
+	acc, txn := free()
+	on := []string{"FAKE_EVENT_URL=http://a2a-gate.openagentix-gateway.svc.cluster.local:8080/agents/kagent/dispute-agent"}
+	out, code := ctlWith(t, d.Handler(), on, "dispute", acc, txn, "not_recognised", "I did not make this")
+	if code != 0 || !strings.Contains(out, "case DSP-") || !strings.Contains(out, "the event sender is on") || strings.Contains(out, "next:") {
+		t.Fatalf("dispute with the sender on (%d): %s", code, out)
+	}
+	acc2, txn2 := free()
+	out, code = ctlWith(t, d.Handler(), nil, "dispute", acc2, txn2, "duplicate")
+	if code != 0 || !strings.Contains(out, "next:") || strings.Contains(out, "the event sender is on") {
+		t.Fatalf("dispute with the sender off (%d): %s", code, out)
+	}
+	for _, bad := range [][]string{{"dispute", "a b", txn, "duplicate"}, {"dispute", acc, "x'; drop", "duplicate"}, {"dispute", acc, txn, "Not-A-Type"}, {"dispute", acc, txn}} {
+		if _, code := ctlWith(t, d.Handler(), nil, bad...); code == 0 {
+			t.Errorf("%v was accepted", bad)
+		}
 	}
 }

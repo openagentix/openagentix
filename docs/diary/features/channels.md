@@ -87,6 +87,29 @@ Expect 200. Then `kubectl logs -n agent-kourier deploy/agent-kourier` shows `ses
 
 - Telegram bridge, cold start (issue #139): an agent answer of A2A -32004 is retried once and then shown as a "waking up" message, with the log outcome `agent_waking`. Unit-tested with a fake agent (answers -32004 then succeeds; keeps answering -32004; other errors; retry off; delay inside the turn deadline). Not run on a cluster. Settings: `RETRY_ON_WAKEUP`, `WAKEUP_RETRY_DELAY` (see `bridges/telegram/README.md`).
 
+## Events from a sender that cannot speak A2A (ADR 0027, slice 7)
+
+There are two doors for a system that starts an agent run without a person. Pick by what the sender can do.
+
+| The sender can | Use | Why |
+|---|---|---|
+| Call the A2A gate with a Kubernetes identity and form an A2A message (a case system, a fleet service that you run in the cluster) | An **event caller** on the gate ([event callers](./event-triggers.md)) | The caller has its own ServiceAccount and no shared secret. The message is one short identifier, checked by the gate against a pattern, so free text stays in the system of record. The gate limits the rate and the open calls, and the audit line carries the event id |
+| Only send its own JSON to a URL and sign it (Alertmanager, a code host, a monitoring product) | The **channels webhook** (this page) | It cannot form an A2A message. Agent Kourier checks the signature or token, takes named fields out of the JSON and puts them into a prompt template |
+
+For an alert, for example Alertmanager telling the pod root-cause agent that a workload is down, the setup is a webhook connection with a token (or an HMAC), a binding that matches the alert, and a template that names the workload. Use the shape in "How to enable and configure" above: `platform: webhook`, a `verify` block, a binding with `agent` set to a chart agent, and a `webhookEvent` trigger whose `match` pins the alert name and status. Put only the fields you need into the template, and put them in the untrusted data block of the template, never in its instruction part. Set the binding's limits (`rateLimit.maxRuns` and `per`, `maxConcurrent`, `maxRunsPerDay`): they are the only limits this path has.
+
+What is weaker than an event caller, and what to do about it:
+
+- **Free text reaches the prompt.** An alert summary or annotation is text from a system you do not control, and the template puts it in front of the model, in the untrusted data block. That is weaker than an identifier checked by a pattern. Send the name of the workload and the alert, not the summary, and let the agent read the details through its tools.
+- **One user id for the whole binding.** Every event of a binding runs as the binding's one fixed user id, so they share one memory scope. Give the agent no long-term memory.
+- **Excess events are dropped, and the sender gets 200.** The binding's limits drop an event over the rate and do not queue it, and the sender cannot back off. An event caller answers 429 with `Retry-After`, and its sender retries.
+- **The duplicate check is in memory.** A repeat of an alert after a restart of Kourier can start a second run. The work an event starts must be safe to repeat.
+- **A chart agent only.** A binding names an agent of `agents[]`.
+- **Kourier is 0.x with one maintainer**, and it sits on the path of every event.
+- **No Ingress by default.** The chat listener is a ClusterIP Service. A sender outside the cluster needs an Ingress that you add, with TLS, and its pods listed in Kourier's `networkPolicy.chatFrom`.
+
+This path was proven live once for a signed test webhook (see "What was proven"). It was not run for an alert from Alertmanager, and no use case in this repository wires it: the software organisation use case still has no alert trigger and no incident record (its README says so).
+
 ## Known limits
 
 - Slack is UNTESTED: no Slack tokens were available. The values follow Kourier's docs and CRD schema only.

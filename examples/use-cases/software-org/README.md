@@ -234,7 +234,7 @@ How long a case takes: about one second per question through the gate with the s
 - NetworkPolicy enforcement of the diagnostics namespace on the network plugin of kind: the live checklist asks for it. On kind, `kindnet` is not known to enforce egress to the internet.
 - `--beside-full-demo` was not run on a real full demo cluster. The offline tests render the full demo list with the agent added; the memory the second tool server and `cluster-read` need on a 6 CPU / 8 GB node is not measured (see "Memory").
 - The `ctl.sh ask` command takes free text. The prompt tells the agent to refuse anything that is not a root-cause analysis of a workload in `rca-demo`, and the agent can read only that namespace. How a real model follows that refusal is not tested.
-- No alert trigger (a signed webhook) and no incident record: the agent is started by a person through the gate. The use-case plan has both for the connected version.
+- No alert trigger (a signed webhook) and no incident record: the agent is started by a person through the gate. An alert sender such as Alertmanager cannot form an A2A message, so it would use the channels webhook, not an event caller on the gate. How, and what is weaker on that path (free text in the template, one user id for the binding, excess events dropped with a 200, a duplicate check in memory), is in docs/diary/features/channels.md, "Events from a sender that cannot speak A2A". Nothing here wires it. The use-case plan has both for the connected version.
 - One server for all agents of the install: every agent that may use the profile has the same read access (ADR 0025, decision 5).
 - The agent has no memory and no knowledge base in this version, so it does not use runbooks.
 

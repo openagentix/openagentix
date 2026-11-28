@@ -124,6 +124,37 @@ check "exits 0" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
 check "the Secrets are not made again, and nothing is restarted" "! grep -q 'create secret' '$LOG/calls' && ! grep -q 'delete secret' '$LOG/calls' && ! grep -q 'rollout restart' '$LOG/calls'"
 check "the output says they exist" "grep -q 'Secrets exist' '$LOG/out'"
 
+echo "# the event sender (EVENTS, ADR 0027): off by default, on with EVENTS=1, the same on a second run"
+reset
+FAKE_STUB=1 run; rc=$?
+check "EVENTS unset: exits 0 and the manifest has no event setting, no gate token and no marker line" "[ $rc = 0 ] && ! grep -q -e RECORDS_EVENT -e gate-token -e openagentix-a2a -e 'EVENTS-' '$LOG/applied.yaml'" "exit $rc"
+check "EVENTS unset: the pod still makes no connection (egress is the empty list) and runs as its own ServiceAccount records-events" "grep -q '^  egress: \[\]' '$LOG/applied.yaml' && grep -q 'serviceAccountName: records-events' '$LOG/applied.yaml' && grep -q 'automountServiceAccountToken: false' '$LOG/applied.yaml'"
+check "EVENTS unset: the platform values still carry the event caller rule and the namespace for the gate (they are inert until a sender uses them)" "yq -e '([.governance.a2a.callers[].name] | index(\"kestrel-fault-events\")) != null and .networkPolicy.extraA2ACallers[0].namespace == \"kestrel-records\"' '$LOG/platform-values.yaml' >/dev/null"
+check "EVENTS unset: the output does not say the sender is on" "! grep -q 'event sender is ON' '$LOG/out'"
+cp "$LOG/applied.yaml" "$TMP/applied-off.yaml"
+reset
+EVENTS=1 FAKE_STUB=1 run; rc=$?
+check "EVENTS=1: exits 0 and says the sender is on" "[ $rc = 0 ] && grep -q 'event sender is ON' '$LOG/out'" "exit $rc: $(tail -4 "$LOG/out")"
+check "EVENTS=1: the manifest is valid YAML and has no marker line" "yq -e . '$LOG/applied.yaml' >/dev/null && ! grep -q 'EVENTS-' '$LOG/applied.yaml'"
+check "EVENTS=1: the service gets the gate URL of its agent and the token file, and nothing else about events" "grep -q 'RECORDS_EVENT_GATE_URL, value: \"http://a2a-gate.openagentix-gateway.svc.cluster.local:8080/agents/kagent/service-agent\"' '$LOG/applied.yaml' && grep -q 'RECORDS_EVENT_TOKEN_FILE, value: /var/run/records-events/token' '$LOG/applied.yaml' && [ \"\$(grep -c RECORDS_EVENT '$LOG/applied.yaml')\" = 2 ]"
+check "EVENTS=1: the token is projected for the gate's audience, lives 600 seconds, and is mounted read only" "grep -q 'serviceAccountToken: {audience: openagentix-a2a, expirationSeconds: 600, path: token}' '$LOG/applied.yaml' && grep -q 'name: gate-token, mountPath: /var/run/records-events, readOnly: true' '$LOG/applied.yaml'"
+check "EVENTS=1: the pod may reach DNS and the gate on 8080 and nothing else" "yq -c 'select(.spec.policyTypes != null) | ((.spec.egress | length) == 2 and (.spec.egress[0].to[0].podSelector.matchLabels[\"k8s-app\"] == \"kube-dns\") and (.spec.egress[1].to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"] == \"openagentix-gateway\") and (.spec.egress[1].to[0].podSelector.matchLabels.app == \"a2a-gate\") and (.spec.egress[1].ports | length == 1) and (.spec.egress[1].ports[0].port == 8080) and (.spec.ingress | length == 0))' '$LOG/applied.yaml' | grep -qx true"
+check "EVENTS=1: no Kubernetes API token is mounted, and the manifest has no Role, ClusterRole or binding" "grep -q 'automountServiceAccountToken: false' '$LOG/applied.yaml' && [ \"\$(yq -r '.kind' '$LOG/applied.yaml' | grep -c -e Role -e Binding)\" = 0 ]"
+check "EVENTS=1: no secret value is in the output or the manifest" "! grep -qi -e 'bearer ' '$LOG/out'"
+cp "$LOG/applied.yaml" "$TMP/applied-on.yaml"
+: > "$LOG/calls"; : > "$LOG/applied.yaml"
+EVENTS=1 FAKE_STUB=1 run; rc=$?
+check "EVENTS=1 again: exits 0, the same manifest, no Secret made again and nothing restarted" "[ $rc = 0 ] && cmp -s '$LOG/applied.yaml' '$TMP/applied-on.yaml' && ! grep -q 'create secret' '$LOG/calls' && ! grep -q 'rollout restart' '$LOG/calls'"
+: > "$LOG/calls"; : > "$LOG/applied.yaml"
+FAKE_STUB=1 run; rc=$?
+check "EVENTS back to unset: the manifest is the one without the sender (a run turns it off again)" "[ $rc = 0 ] && cmp -s '$LOG/applied.yaml' '$TMP/applied-off.yaml'"
+for bad in 2 yes true ''; do
+  [ -n "$bad" ] || continue
+  reset
+  EVENTS=$bad run; rc=$?
+  check "EVENTS=$bad is refused before anything is changed" "[ $rc = 1 ] && grep -q 'EVENTS must be 0 or 1' '$LOG/out' && ! grep -q 'apply' '$LOG/calls' && ! grep -q 'create' '$LOG/calls'" "exit $rc: $(tail -3 "$LOG/out")"
+done
+
 echo "# only some of the Secrets exist (an earlier run stopped half way)"
 for have in a t e m; do
   reset; : > "$LOG/ns"; : > "$LOG/ns_mcp"; : > "$LOG/secret_$have"
@@ -279,7 +310,7 @@ check "a full demo release that also holds the other use case is refused without
 reset; cp "$TMP/af/release.json" "$LOG/release.json"
 ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" ANTHROPIC_API_KEY=keep-me run --beside-full-demo; rc=$?
 check "with ALSO_COMPOSE the install passes" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
-check "the composed values keep every entry of the full demo list and of the other use case, and add this one: agents, schedules, endpoints, profiles, callers, code mode" "yq -e '([.agents[].name] | sort == [\"assistant\",\"dispute-agent\",\"service-agent\"]) and ([.schedules[].name] | sort == [\"deadline-sweep\",\"fleet-sweep\",\"nightly\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"]) and ([.mcp.profiles[].name] | sort == [\"dealer\",\"disputes\"]) and ([.governance.a2a.callers[].name] | sort == [\"disputes-desk\",\"service-desk\"]) and .mcp.virtual.codeMode.enabled == true' '$LOG/platform-values.yaml' >/dev/null" "$(yq -c '[.agents[].name, .schedules[].name, .mcp.endpoints[].name]' "$LOG/platform-values.yaml" 2>&1)"
+check "the composed values keep every entry of the full demo list and of the other use case, and add this one: agents, schedules, endpoints, profiles, callers, code mode" "yq -e '([.agents[].name] | sort == [\"assistant\",\"dispute-agent\",\"service-agent\"]) and ([.schedules[].name] | sort == [\"deadline-sweep\",\"fleet-sweep\",\"nightly\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"]) and ([.mcp.profiles[].name] | sort == [\"dealer\",\"disputes\"]) and ([.governance.a2a.callers[].name] | sort == [\"disputes-desk\",\"fernvale-case-events\",\"kestrel-fault-events\",\"service-desk\"]) and .mcp.virtual.codeMode.enabled == true' '$LOG/platform-values.yaml' >/dev/null" "$(yq -c '[.agents[].name, .schedules[].name, .mcp.endpoints[].name]' "$LOG/platform-values.yaml" 2>&1)"
 check "the other use case's entry is composed before this one's: the other agent comes first in the agents list, then this one" "[ \"\$(yq -r '[.agents[].name] | index(\"dispute-agent\") < index(\"service-agent\")' '$LOG/platform-values.yaml')\" = true ]"
 check "your provider key stays and no scenario file is set" "grep -q 'platform-install .*PROFILE= STUB_SCENARIOS= ANTHROPIC=set' '$LOG/calls'"
 yq . "$LOG/platform-values.yaml" > "$TMP/af/release2.json"

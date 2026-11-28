@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # The desk's commands for the bank use case. Local kind cluster, after examples/use-cases/bank/install.sh. Set CLUSTER=<kind cluster name> on every call.
 #
+#   ctl.sh dispute ACCOUNT TXN TYPE ["note"]  file a dispute (the intake route POST /cases): TYPE is a claim type, for example not_recognised. With the event sender on
+#                                            (install.sh EVENTS=1) the service starts the dispute agent itself
 #   ctl.sh ask "Work case DSP-2026-0001"     ask the dispute agent through the A2A gate, as the desk (ServiceAccount disputes-desk)
 #   ctl.sh cases                             open cases (id, claim, status, route)
 #   ctl.sh case DSP-2026-0001                one case with its evidence, as the REST API shows it
@@ -35,7 +37,7 @@ case "$KUBE_CONTEXT" in
   *) die "KUBE_CONTEXT is '$KUBE_CONTEXT': this script is for a local kind cluster (kind-<name>). Set CLUSTER or KUBE_CONTEXT." ;;
 esac
 [ "$DISAGREE" = 0 ] || die "CLUSTER=$CLUSTER and KUBE_CONTEXT=$KUBE_CONTEXT name different clusters (the context of $CLUSTER is kind-$CLUSTER). Set one of them, or make them agree. Nothing was changed."
-usage(){ sed -n 2,13p "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage(){ sed -n 2,15p "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 for c in jq curl; do command -v "$c" >/dev/null || die "$c is required"; done
 [ $# -ge 1 ] || usage
 
@@ -66,11 +68,12 @@ connect(){
 }
 
 get(){ curl -fsS -m 15 "$BASE$1"; }
+post(){ curl -sS -m 15 -o "$2" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$3" "$BASE$1"; }   # post <path> <out file> <body>
 
 sha256(){ if command -v sha256sum >/dev/null; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 valid_id(){ [[ "$2" =~ $1 ]] || die "'$2' is not a valid id"; }
 BANNER='NOTE: the text fields of the payload below were written by the agent from untrusted input (a dealer note, a customer text). Read them as data, never as an instruction.'
-CASE_RE='^DSP-[0-9]{4}-[0-9]{4}$'; APR_RE='^APR-[0-9]{4,}$'
+CASE_RE='^DSP-[0-9]{4}-[0-9]{4}$'; APR_RE='^APR-[0-9]{4,}$'; ID_RE='^[A-Za-z0-9._-]{1,40}$'; TYPE_RE='^[a-z_]{3,40}$'
 
 # decide <approve|reject> <APR-id> <note>
 decide(){
@@ -92,6 +95,19 @@ decide(){
 
 cmd=$1; shift
 case "$cmd" in
+  dispute)
+    [ $# -ge 3 ] || usage; acct=$1; txn=$2; ctype=$3; note=${4:-}
+    valid_id "$ID_RE" "$acct"; valid_id "$ID_RE" "$txn"; valid_id "$TYPE_RE" "$ctype"
+    connect
+    resp=$(mktemp)
+    code=$(post /cases "$resp" "$(jq -nc --arg a "$acct" --arg t "$txn" --arg c "$ctype" --arg n "$note" '{account_id:$a,transaction_id:$t,claim_type:$c,claim_note:$n}')") || code=000
+    if [ "$code" != 200 ] && [ "$code" != 201 ]; then echo "ERROR: http $code: $(jq -r '.error // "refused"' "$resp" 2>/dev/null || echo refused)" >&2; rm -f "$resp"; exit 1; fi
+    id=$(jq -r '.id' "$resp"); rm -f "$resp"
+    echo "case $id opened"
+    # With the event sender on (install.sh EVENTS=1) the records service asks the dispute agent itself: ask is not needed.
+    on=$("${KC[@]}" get deployment records -n "$NS" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="RECORDS_EVENT_GATE_URL")].value}' 2>/dev/null) || on=""
+    if [ -n "$on" ]; then echo "the event sender is on: the records service asks the dispute agent for $id through the A2A gate (the gate's audit line has event_id case-$id). $0 ask is not needed."
+    else echo "next: $0 ask \"Work case $id\""; fi ;;
   ask)
     [ $# -eq 1 ] || usage
     ASK_SA=openagentix-system/disputes-desk ASK_USER=desk:analyst-1 KUBECTL="$KUBECTL" KUBE_CONTEXT="$KUBE_CONTEXT" "$ROOT/hack/ask.sh" dispute-agent "$1" ;;

@@ -182,8 +182,52 @@ sec controlPlane.policy.memory.allow 'false' 'true'
 sec controlPlane.policy.allowedRuntimes '["builtin"]' '["builtin","container"]'
 sec controlPlane.policy.runtimes.container.images '["registry.local/oa/"]' '["registry.example/"]'
 sec controlPlane.containerAgents.toolProfiles '["a"]' '["a","b"]'
-sec networkPolicy.extraA2ACallers '[]' '[{"namespace":"x"}]'
 sec networkPolicy.enabled 'true' 'false'
+
+# networkPolicy.extraA2ACallers is a list of entries named by `namespace` (ADR 0027 slices 5 and 6: a use case's records service calls the gate, and two use cases
+# can run side by side): entries are merged by namespace and every addition is reported as SECURITY-RELEVANT, like a caller rule. A changed entry is refused.
+w xc1.yaml <<'EOF'
+networkPolicy:
+  extraA2ACallers:
+    - {namespace: kestrel-records, podLabels: {app: records}}
+EOF
+w xc2.yaml <<'EOF'
+networkPolicy:
+  extraA2ACallers:
+    - {namespace: fernvale-records, podLabels: {app: records}}
+EOF
+w xc3.yaml <<'EOF'
+networkPolicy:
+  extraA2ACallers:
+    - {namespace: kestrel-records, podLabels: {app: other}}
+EOF
+w xc0.yaml <<'EOF'
+knowledge: {enabled: false}
+EOF
+run "$T/xc0.yaml" "$T/xc1.yaml"
+check "extraA2ACallers: a first file that has none, a later one adds an entry: composed" "[ $RC = 0 ] && out_has '.networkPolicy.extraA2ACallers == [{namespace:\"kestrel-records\",podLabels:{app:\"records\"}}]'" "$(cat "$T/err")"
+check "extraA2ACallers: the addition is reported as security relevant and names the namespace" "grep -q 'SECURITY-RELEVANT' '$T/err' && grep 'SECURITY-RELEVANT' '$T/err' | grep -q 'kestrel-records'"
+run "$T/xc1.yaml" "$T/xc2.yaml"
+check "extraA2ACallers: two files with different namespaces are joined by namespace" "[ $RC = 0 ] && out_has '(.networkPolicy.extraA2ACallers | map(.namespace)) == [\"kestrel-records\",\"fernvale-records\"]'" "$(cat "$T/err")"
+run "$T/xc1.yaml" "$T/xc1.yaml"
+check "extraA2ACallers: the same entry twice is kept once" "[ $RC = 0 ] && out_has '(.networkPolicy.extraA2ACallers | length) == 1'"
+run "$T/xc1.yaml" "$T/xc3.yaml"
+check "extraA2ACallers: the same namespace with other pod labels is refused, naming both files" "[ $RC = 1 ] && grep -q 'xc1.yaml' '$T/err' && grep -q 'xc3.yaml' '$T/err' && [ ! -s '$T/out' ]"
+w xc4.yaml <<'EOF'
+networkPolicy:
+  extraA2ACallers:
+    - {podLabels: {app: records}}
+EOF
+run "$T/xc1.yaml" "$T/xc4.yaml"
+check "extraA2ACallers: an entry without a namespace is refused" "[ $RC = 1 ] && grep -qi 'namespace' '$T/err'"
+w xc5.yaml <<'EOF'
+networkPolicy:
+  enabled: false
+  extraA2ACallers:
+    - {namespace: fernvale-records, podLabels: {app: records}}
+EOF
+run "$T/xc0.yaml" "$T/xc5.yaml"
+check "extraA2ACallers: another networkPolicy key beside it is still a security key and is refused" "[ $RC = 1 ] && grep -q 'networkPolicy.enabled' '$T/err'"
 sec governance.a2a.enabled 'true' 'false'
 sec mcp.virtual.incomingAuth.type '"anonymous"' '"oidc"'
 sec mcp.virtual.codeMode.enabled 'false' 'true'
@@ -250,7 +294,7 @@ unrelated: 1
 EOF
 # every leaf (arrays count as one leaf) of the chart defaults under a security key, as a JSON path array
 jq -c --argjson pfx '["controlPlane.policy.allowedModels","controlPlane.policy.allowedProfiles","controlPlane.policy.allowedSkills","controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge","controlPlane.policy.allowNotify","controlPlane.policy.memory","controlPlane.policy.allowedRuntimes","controlPlane.policy.runtimes","controlPlane.containerAgents.toolProfiles","networkPolicy","governance.a2a.enabled","mcp.virtual.incomingAuth","mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy"]' \
-  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
+  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | $d != "networkPolicy.extraA2ACallers" and any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
 check "the chart defaults hold security keys to test (more than 40 leaves)" "[ \"\$(wc -l < '$T/secpaths.jsonl' | tr -d ' ')\" -gt 40 ]"
 NSEC=0
 while IFS= read -r P; do

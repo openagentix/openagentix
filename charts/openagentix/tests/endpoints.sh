@@ -182,6 +182,13 @@ for NSX in $NSV default kube-system kube-public kube-node-lease openagentix-anyt
   er "an endpoint in the namespace $NSX is refused as a platform namespace" "is in the namespace \"$NSX\", a platform or system namespace" -f "$EX2"
 done
 er "a namespace value that is new in the values (zzz.extraNamespace) is refused at once: the refusal list is built from the values" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX" --set zzz.extraNamespace=records-ns
+# A workload that calls the A2A gate (a caller rule, networkPolicy.extraA2ACallers) is not a platform service: an endpoint may sit in its namespace. This is the records
+# service of a use case, which is both a tool endpoint and an event caller (ADR 0027, slices 5 and 6). Every other namespace value still counts.
+ev '.governance={a2a: {enabled: true, callers: [{name: "rec-events", serviceAccount: {namespace: "records-ns", name: "records-events"}, agents: ["assistant"], userId: {exact: "rec:events"}}]}} | .networkPolicy={extraA2ACallers: [{namespace: "records-ns", podLabels: {app: "records"}}]}'
+okr "an endpoint in the namespace of a gate caller and of an extraA2ACallers entry renders" -f "$EX2"
+er "a namespace value that is new in the values is still refused when a caller sits in the same namespace" 'is in the namespace "records-ns", a platform or system namespace' -f "$EX2" --set zzz.extraNamespace=records-ns
+ev '.governance={a2a: {enabled: true, callers: [{name: "rec-events", serviceAccount: {namespace: "openagentix-system", name: "records-events"}, agents: ["assistant"], userId: {exact: "rec:events"}}]}} | .mcp.endpoints[0].url="http://records.openagentix-system.svc.cluster.local:8080/mcp"'
+er "an endpoint in a platform namespace is refused although a caller sits there too" 'a platform or system namespace' -f "$EX2"
 ev '.mcp.endpoints[0].url="http://kubernetes.default.svc.cluster.local:443/mcp"'
 er "the Kubernetes API service is refused by name" '.url is the Kubernetes API service' -f "$EX2"
 ev '.mcp.endpoints[0].ingress.podSelector={}'

@@ -111,7 +111,11 @@ helm template t "$CHART" -f "$QS" -f "$VALS" > /dev/null 2> "$T/noapi.err"; NARC
 check "without the API server addresses the render is refused (install.sh finds them)" "[ $NARC != 0 ] && grep -q 'apiServerCIDRs' '$T/noapi.err'"
 
 echo "# the records manifests"
-M="$HERE/manifests/records.yaml"
+MSRC="$HERE/manifests/records.yaml"
+# the manifest as install.sh applies it: EVENTS unset (M) and EVENTS=1 (M1). The lines between the #EVENTS markers belong to one form or the other.
+render_manifest() { awk -v on="$1" '/#EVENTS-ON-BEGIN/{skip=(on!=1);next} /#EVENTS-ON-END/{skip=0;next} /#EVENTS-OFF-BEGIN/{skip=(on==1);next} /#EVENTS-OFF-END/{skip=0;next} !skip{print}' "$MSRC"; }
+M="$T/records-off.yaml"; render_manifest 0 > "$M"
+M1="$T/records-on.yaml"; render_manifest 1 > "$M1"
 DEP=$(yq -c 'select(.kind=="Deployment")' "$M")
 check "one Deployment, one Service, one NetworkPolicy, one ServiceAccount, one Namespace and no Secret (the Secrets are made by install.sh)" "[ \"\$(yq -r .kind '$M' | sort | tr '\n' ' ')\" = 'Deployment Namespace NetworkPolicy Service ServiceAccount ' ]"
 check "everything is in the namespace kestrel-records" "[ \"\$(yq -r 'select(.kind!=\"Namespace\") | .metadata.namespace' '$M' | sort -u)\" = kestrel-records ]"
@@ -127,11 +131,28 @@ check "the approvers come from a Secret volume, mounted read only; the data is a
 check "one replica with the Recreate strategy (one SQLite file)" "printf %s '$DEP' | jq -e '.spec.replicas == 1 and .spec.strategy.type == \"Recreate\"' >/dev/null"
 NP=$(yq -c 'select(.kind=="NetworkPolicy")' "$M")
 check "the base NetworkPolicy denies all ingress and all egress for the pod (the chart's policy openagentix-endpoint-dealer-records adds the one allowed path, so there is none before the platform is installed)" "printf %s '$NP' | jq -e '(.spec.policyTypes | sort) == [\"Egress\",\"Ingress\"] and .spec.egress == [] and .spec.ingress == [] and .spec.podSelector.matchLabels == {\"app\":\"records\"}' >/dev/null"
+DEP1=$(yq -c 'select(.kind=="Deployment")' "$M1")
+NP1=$(yq -c 'select(.kind=="NetworkPolicy")' "$M1")
+check "the manifest without the sender (EVENTS unset) has no event setting, no gate token, no marker and an empty egress" "! grep -q -e RECORDS_EVENT -e gate-token -e EVENTS- -e openagentix-a2a '$M' && printf %s '$NP' | jq -e '.spec.egress == []' >/dev/null"
+check "the pod runs as the ServiceAccount records-events in both forms, with no API token mounted" "printf %s '$DEP' | jq -e '.spec.template.spec.serviceAccountName == \"records-events\" and .spec.template.spec.automountServiceAccountToken == false' >/dev/null && printf %s '$DEP1' | jq -e '.spec.template.spec.serviceAccountName == \"records-events\" and .spec.template.spec.automountServiceAccountToken == false' >/dev/null && [ \"\$(yq -r 'select(.kind==\"ServiceAccount\") | .metadata.name' '$M1')\" = records-events ]"
+check "with the sender on: the gate URL names the agent service-agent, the token file is the projected one, and nothing else about events is set" "printf %s '$DEP1' | jq -e '[.spec.template.spec.containers[0].env[] | select(.name|startswith(\"RECORDS_EVENT\")) | [.name,.value]] == [[\"RECORDS_EVENT_GATE_URL\",\"http://a2a-gate.openagentix-gateway.svc.cluster.local:8080/agents/kagent/service-agent\"],[\"RECORDS_EVENT_TOKEN_FILE\",\"/var/run/records-events/token\"]]' >/dev/null"
+check "with the sender on: the token is projected for the gate (audience openagentix-a2a), 600 seconds, mounted read only, and it is the only projected source" "printf %s '$DEP1' | jq -e '(.spec.template.spec.volumes | map(select(.projected)) | length == 1) and (.spec.template.spec.volumes[] | select(.name==\"gate-token\") | .projected.sources == [{\"serviceAccountToken\":{\"audience\":\"openagentix-a2a\",\"expirationSeconds\":600,\"path\":\"token\"}}]) and (.spec.template.spec.containers[0].volumeMounts[] | select(.name==\"gate-token\") | .readOnly == true and .mountPath == \"/var/run/records-events\")' >/dev/null"
+check "with the sender on: egress is DNS and the gate on 8080 and nothing else; ingress stays empty" "printf %s '$NP1' | jq -e '.spec.ingress == [] and (.spec.egress | length == 2) and (.spec.egress[0].ports | map(.port) == [53,53]) and (.spec.egress[1].ports == [{\"protocol\":\"TCP\",\"port\":8080}]) and (.spec.egress[1].to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"] == \"openagentix-gateway\") and (.spec.egress[1].to[0].podSelector.matchLabels.app == \"a2a-gate\") and ([.spec.egress[].to[] | has(\"ipBlock\")] | any | not)' >/dev/null"
+check "with the sender on: the container is the same as without it apart from its env and mounts (image, probes, limits, security context)" "[ \"\$(printf %s '$DEP' | jq -S -c '.spec.template.spec.containers[0]|del(.env,.volumeMounts)')\" = \"\$(printf %s '$DEP1' | jq -S -c '.spec.template.spec.containers[0]|del(.env,.volumeMounts)')\" ]"
 check "the MCP credential is read from a mounted file: RECORDS_MCP_TOKEN_FILE, a read-only Secret volume records-mcp-expected, no insecure flag" "printf %s '$DEP' | jq -e '(.spec.template.spec.containers[0].env | map(select(.name==\"RECORDS_MCP_TOKEN_FILE\")) | length == 1) and (.spec.template.spec.volumes | map(select(.secret.secretName==\"records-mcp-expected\")) | length == 1) and ([.spec.template.spec.containers[0].volumeMounts[] | select(.name==\"mcp-credential\") | .readOnly] == [true])' >/dev/null && ! grep -q 'RECORDS_MCP_INSECURE_NO_AUTH' '$M'"
 check "the env value for the credential does not hold a value (only a path)" "printf %s '$DEP' | jq -r '.spec.template.spec.containers[0].env[] | select(.name==\"RECORDS_MCP_TOKEN_FILE\") | .value' | grep -q '^/etc/records-mcp/'"
 check "the image is a placeholder that install.sh replaces" "grep -q 'image: IMAGE_PLACEHOLDER' '$M'"
 check "the manifests hold no token, password or hash" "! grep -Eqi 'token_sha256|password|[0-9a-f]{64}' '$M'"
 check "the namespace and the part-of label say equipment, and differ from the bank's (two use cases never share a namespace)" "grep -q 'openagentix-use-case-equipment' '$M' && ! grep -q 'fernvale\|use-case-bank' '$M'"
+
+echo "# the event caller (ADR 0027, slices 5 and 6)"
+FD="$HERE/values-full-demo.yaml"
+for f in "$VALS" "$FD"; do
+  fb=$(basename "$f")
+  check "$fb: the event caller kestrel-fault-events is the pod's own ServiceAccount records-events, names the chart agent service-agent, has no methods, memory, key or user id, and pins the text to a case id" "yq -e '(.governance.a2a.callers[] | select(.name==\"kestrel-fault-events\")) | .serviceAccount == {\"namespace\":\"kestrel-records\",\"name\":\"records-events\"} and .agents == [\"service-agent\"] and .event.text == \"Work case SVC-[0-9]{4}-[0-9]{4}\" and (has(\"methods\") or has(\"memory\") or has(\"key\") or has(\"userId\") | not) and .event.rate.perMinute == 4 and .event.rate.burst == 3 and .event.maxInFlight == 2' '$f' >/dev/null"
+  check "$fb: only the records namespace is admitted to the gate, and only its records pods" "[ \"\$(yq -c '.networkPolicy.extraA2ACallers' '$f')\" = '[{\"namespace\":\"kestrel-records\",\"podLabels\":{\"app\":\"records\"}}]' ]"
+done
+check "the event caller's agent is a chart agent without long-term memory" "yq -e '(.agents[] | select(.name==\"service-agent\")) | has(\"memory\") | not' '$VALS' >/dev/null"
 
 echo "# the knowledge base seed"
 KB_DRY=$(KB_INGEST_DRY_RUN=1 "$ROOT/hack/kb-ingest.sh" "$HERE/seed/kb" kestrel-service 2>&1); KB_RC=$?
@@ -250,7 +271,7 @@ done
 check "beside the full demo the agent uses the full demo's model name claude-haiku" "doc '$T/beside-r.yaml' ModelConfig gateway-service-agent | jq -e '.spec.model == \"claude-haiku\"' >/dev/null"
 check "values-full-demo.yaml holds the same agent prompt as values.yaml (a test compares them)" "[ \"\$(yq -r '.agents[] | select(.name==\"service-agent\") | .systemPrompt' '$FD')\" = \"\$(yq -r '.agents[] | select(.name==\"service-agent\") | .systemPrompt' '$VALS')\" ]"
 check "values-full-demo.yaml holds the same endpoint, profile and caller as values.yaml" "[ \"\$(yq -c '[.mcp.endpoints, (.mcp.profiles[]|select(.name==\"dealer\")), (.governance.a2a.callers[]|select(.name==\"service-desk\"))]' '$FD')\" = \"\$(yq -c '[.mcp.endpoints, (.mcp.profiles[]|select(.name==\"dealer\")), (.governance.a2a.callers[]|select(.name==\"service-desk\"))]' '$VALS')\" ]"
-check "values-full-demo.yaml sets no security key: no allow list, no network policy switch, no code mode, no capture" "! yq -e '.controlPlane or .networkPolicy or .mcp.virtual or .observability or .gateway' '$FD' >/dev/null 2>&1"
+check "values-full-demo.yaml sets no security key: no allow list, no network policy switch (only the namespace that may call the gate), no code mode, no capture" "! yq -e '.controlPlane or .mcp.virtual or .observability or .gateway or (.networkPolicy and ((.networkPolicy | keys) != ["extraA2ACallers"]))' '$FD' >/dev/null 2>&1"
 check "beside the full demo the shared tool server (with its code mode) never names the records service" "! doc '$T/beside-r.yaml' VirtualMCPServer tools | jq -r 'del(.spec.incomingAuth.authzConfig) | tojson' | grep -Eq 'dealer-records|tools-dealer|knowledge-dealer|\"dealer\"'"
 
 echo "# the full demo with both use cases beside it (ALSO_COMPOSE order: your list, the other use case, this one)"

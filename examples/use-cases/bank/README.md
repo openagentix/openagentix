@@ -209,6 +209,38 @@ Live, on a kind cluster in CI (the opt-in job `e2e (bank, mcp.endpoints)`: `gh w
 
 A real-model run found two defects after this (see "The first real-model run"): a write after the approval request superseded the request while the answer still said it was pending, and the graph seed named cases and merchants that did not match the records. Both are fixed offline and not re-run on the model. First live findings: the runtime hands a structured tool result to the model as `{"output":<the result>}` (the scenarios read it so); the live knowledge base ranked the dispute policy above the scheme rules for the time limit query, so the scenario now cites the rules when they are the first or second result and says "needs human review" when they are not found. See `docs/diary/features/bank-on-endpoints.md`.
 
+## Event triggers (ADR 0027, slices 5 and 6)
+
+Off by default. With it on, a real system event starts the agent with no person: the records service is the system of record, and it is the caller of the A2A gate.
+
+```sh
+CLUSTER=oa-bank-demo EVENTS=1 examples/use-cases/bank/install.sh
+```
+
+What happens, step by step:
+
+1. a new dispute that the case system files (`POST /cases`, `ctl.sh dispute`) is accepted by the intake route of the records service. The service validates it with its own rules and stores the case. A dispute that is refused (an open case already exists for the transaction, an unknown account) queues no event.
+2. In the same transaction it writes one row to the table `events`, naming the record id and nothing else. The row is written only by the intake route, never by an MCP tool: No bank tool opens a case, and none writes an event: only `CreateCase`, which the intake route calls, does. A test calls every tool and counts the rows.
+3. A sender loop in the service reads the row and calls the gate as the event caller `fernvale-case-events` (chart values `values.yaml`), with the text `Work case DSP-2026-0042` and the message id `case-<record id>`. The text and the id hold the record id alone. A person's words (the dealer's or the customer's note) stay in the record, where the agent reads them as `untrusted_` fields. The caller is the pod's own ServiceAccount `records-events`; its token is projected by the kubelet for the gate's audience, lives 600 seconds, and is read from a file for every request. It is in no log and no audit line.
+4. The gate checks the message, builds its own request and answers with the task id and state only. The sender marks the event done on a state of submitted, working or completed. A failed, cancelled or rejected task is asked again under a new attempt id (`case-<id>-r2`, then `-r3`), at most 3 attempts. A 429 waits for `Retry-After` and uses no try. A 5xx, a network error or an unreadable answer is retried with a backoff of 2 seconds doubling to 5 minutes, and given up after 8 tries.
+5. A sweep asks again for a case that is still `open` after 30 minutes (`RECORDS_EVENT_UNWORKED_AFTER`), under a new attempt id, up to the 3 attempts, and only for a case that has an event row.
+
+The numbers in `values.yaml`: `perMinute: 2`, `burst: 2`, `maxInFlight: 2`. about 100,000 to 180,000 tokens and 25 to 50 seconds a case (the first real-model run, README "The first real-model run"). A burst of 2 starts at most 2 runs at once (at most 360,000 tokens), then one more every 30 seconds, so a ring of five filings is submitted in about 90 seconds. About 5 to 10 cases an hour use the budget of 1,000,000 tokens an hour that the gateway gives the key of `dispute-agent`. The rate cannot be lower than one a minute and cannot fund the budget on its own: the model gateway's budget is the hard stop, and a run past it ends `TASK_STATE_FAILED`, which the sender asks again up to the 3 attempts and no more. To spend less, lower the numbers or use a budget class (ADR 0029).
+
+`ctl.sh dispute ACCOUNT TXN TYPE ["note"]` files a dispute through the intake route; with the sender on, ctl.sh says that the service asks the agent itself, so `ctl.sh ask` is not needed.
+
+What it opens on the network: the namespace `fernvale-records` is listed in `networkPolicy.extraA2ACallers` (only its `app: records` pods), so the gate admits it. The records pod's own policy, which allowed nothing, now allows egress to DNS (kube-dns on 53) and to the gate pods (`app: a2a-gate` in `openagentix-gateway`, port 8080), and nothing else: no other pod, no Kubernetes API, no internet. Ingress is unchanged. The pod still mounts no API token and has no Role. With `EVENTS` unset the manifest is the one without these lines (a test compares them).
+
+Settings of the service (all optional but the first two, which come together): `RECORDS_EVENT_GATE_URL` (the agent on the gate), `RECORDS_EVENT_TOKEN_FILE`, `RECORDS_EVENT_UNWORKED_AFTER` (1 minute to 24 hours, default 30 minutes), `RECORDS_EVENT_MAX_ATTEMPTS` (1 to 10, default 3), `RECORDS_EVENT_TICK` (default 2 seconds). One without the other, or a value out of range, stops the service. With none set there is no sender, no `events` table and nothing leaves the pod.
+
+Limits, as the ADR states them:
+
+- Delivery to the gate is at least once, not exactly once. A retry that reaches the runtime after the first call got through is expected to return the same task (the runtime keeps one run per message id and user id), and a repeat that the runtime does not catch is harmless in the record: a second run reads the case as it is, a second approval request for a case that has one pending is refused, and a write after a request supersedes it.
+- A 2xx means that the task was accepted, not that the run happened. A run that was accepted can be lost when the runtime restarts, and the sweep asks again after the set time.
+- The gate keeps its rate and its open-call count in the memory of one process: with N replicas the limits are N times the values, and a restart (every `helm upgrade` that changes the rules) refills the bucket.
+- The store is an emptyDir: when the pod restarts, the cases and the event rows are gone together (this is a demo seed). A real system of record keeps both in its database.
+- A case that was opened while the sender was off has no event row and is never asked by the sweep.
+
 ## What is not proven
 
 - Not run live in CI: `install.sh --beside-full-demo` (it was run once by hand on a full demo cluster, see "The first real-model run"); the memory and CPU of the added pods (only a node total after the install is known); the suspended `deadline-sweep` run by hand; a second `ctl.sh reject`; the cases 0006 to 0010.

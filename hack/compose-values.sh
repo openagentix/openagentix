@@ -16,7 +16,8 @@
 #     new value. The value under a key that names a Secret or a key (secret, token, password, credential, apiKey, ... *Key), or under
 #     a parent with such a name, is never shown: only the path is. Numbers and labels such as tokenBudget.tokens and apiKeyLabel are shown.
 #   - These lists are merged by the `name` of their entries: agents, schedules, governance.a2a.callers, gateway.models, mcp.servers,
-#     mcp.endpoints, mcp.profiles. Entries keep the order of first appearance. Every entry that a later file adds is reported. The same
+#     mcp.endpoints, mcp.profiles; and networkPolicy.extraA2ACallers, whose entries are named by `namespace` (the namespaces that may call the
+#     A2A gate: two use cases that send events each add their own). Entries keep the order of first appearance. Every entry that a later file adds is reported. The same
 #     name with the same content is kept once. The same name with different content is REFUSED, with both file names, unless
 #     --later-wins is given (then the later entry replaces it and each changed value is reported).
 #   - Security keys: a later file may not change these without --later-wins: the allow lists of controlPlane.policy (allowedModels,
@@ -28,7 +29,7 @@
 #     The first file is taken as it is. Allow lists are never joined: a union would widen access without anyone writing it down. With
 #     --later-wins the later value replaces the earlier one, and the change is reported.
 #   - Called out in the report as SECURITY-RELEVANT (not refused, because the key list above does not cover them): a caller rule
-#     (governance.a2a.callers) added by a later file, and a profile (mcp.profiles) with codeMode: true that a later file adds or turns on.
+#     (governance.a2a.callers) or a namespace for the A2A gate (networkPolicy.extraA2ACallers) added by a later file, and a profile (mcp.profiles) with codeMode: true that a later file adds or turns on.
 #   - Every other list is replaced by the later file, as Helm does, and reported. An explicit empty list (`agents: []`) is kept in the
 #     output, and a later `[]` replaces an earlier list.
 #   - The output starts with a comment that lists the input files. It needs jq and the Python yq (pip install yq==3.4.3), the same
@@ -92,7 +93,9 @@ for f in "${FILES[@]}"; do
 done
 
 read -r -d '' PROGRAM <<'JQ' || true
-def namelists: ["agents","schedules","governance.a2a.callers","gateway.models","mcp.servers","mcp.endpoints","mcp.profiles"];
+def namelists: ["agents","schedules","governance.a2a.callers","gateway.models","mcp.servers","mcp.endpoints","mcp.profiles","networkPolicy.extraA2ACallers"];
+# the key that names an entry of a list: `name`, except for the namespaces that may call the A2A gate
+def lkey($p): if $p == "networkPolicy.extraA2ACallers" then "namespace" else "name" end;
 def secpfx: [
   "controlPlane.policy.allowedModels","controlPlane.policy.allowedProfiles","controlPlane.policy.allowedSkills",
   "controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge",
@@ -156,11 +159,11 @@ def prep($doc; $f):
       elif ($l | isarr | not) then .err += [$f + ": " + $lp + " must be a list of entries that have a name"]
       else
         (reduce $l[] as $e ({l: [], err: []};
-          if ($e | isobj | not) or (($e.name?) | type) != "string" or $e.name == "" then
-            .err += [$f + ": an entry of " + $lp + " has no name (every entry of " + $lp + " needs a name, because the entries are merged by name)"]
+          if ($e | isobj | not) or (($e[lkey($lp)]?) | type) != "string" or $e[lkey($lp)] == "" then
+            .err += [$f + ": an entry of " + $lp + " has no " + lkey($lp) + " (every entry of " + $lp + " needs a " + lkey($lp) + ", because the entries are merged by " + lkey($lp) + ")"]
           else
-            $e.name as $n
-            | (.l | map(.name) | index($n)) as $i
+            $e[lkey($lp)] as $n
+            | (.l | map(.[lkey($lp)]) | index($n)) as $i
             | if $i == null then .l += [$e]
               elif .l[$i] == $e then .
               else .err += [$f + ": refused: " + $lp + "[" + $n + "] appears twice in this file with different content. Remove one."] end
@@ -171,14 +174,15 @@ def prep($doc; $f):
 # Additions that the key list does not refuse but that a reader must see.
 def addnotes($p; $e; $old; $fb):
   (if $p == "governance.a2a.callers" and $old == null then ["SECURITY-RELEVANT: " + $fb + " adds the caller rule " + $e.name + " (a caller rule decides who may ask which agent)"] else [] end)
+  + (if $p == "networkPolicy.extraA2ACallers" and $old == null then ["SECURITY-RELEVANT: " + $fb + " admits the namespace " + $e.namespace + " to the A2A gate (a caller rule for it decides what it may ask)"] else [] end)
   + (if $p == "mcp.profiles" and ($e.codeMode == true) and (($old | .codeMode?) != true) then ["SECURITY-RELEVANT: " + $fb + " gives the profile " + $e.name + " code mode (codeMode: true), so a script can call its tools"] else [] end);
 
 def mergelist($p; $a; $b; $fb; $lw; $st; $h):
   reduce $b[] as $e ({v: $a, st: $st};
-    $e.name as $n
+    $e[lkey($p)] as $n
     | ($p + "[" + $n + "]") as $ep
     | ($h or hidekey($n)) as $h2
-    | (.v | map(.name) | index($n)) as $i
+    | (.v | map(.[lkey($p)]) | index($n)) as $i
     | if $i == null then
         .v += [$e]
         | .st.src[$ep] = $fb
@@ -205,8 +209,10 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
         ($ps + [$k]) as $cps
         | pj($cps) as $c
         | ($h or hidekey($k)) as $h2
-        | if (.v | has($k)) then
-            merge($cps; .v[$k]; $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st
+        # networkPolicy is merged key by key even when no earlier file has it, so that extraA2ACallers (a list of namespaces, joined by namespace) is not
+        # compared with the chart default as a whole; every other networkPolicy key is still a security key
+        | if (.v | has($k)) or ($c == "networkPolicy" and ($b[$k] | isobj) and ($b[$k] | has("extraA2ACallers"))) then
+            merge($cps; (if (.v | has($k)) then .v[$k] else {} end); $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st
           elif namelist($c) and ($b[$k] | isarr) then
             mergelist($c; []; $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st
           else

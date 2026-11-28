@@ -87,7 +87,9 @@ namespace. Recursive. Argument: dict "v" <value> "acc" <dict with the list "l"> 
 {{- $acc := .acc -}}{{- $rel := .rel -}}
 {{- if kindIs "map" .v -}}
 {{- range $k, $x := .v -}}
-{{- if and (hasSuffix "namespace" (lower (toString $k))) (or (kindIs "string" $x) (kindIs "invalid" $x)) -}}
+{{- /* the callers of the A2A gate (their rules and the namespaces admitted to it) are workloads, not platform services: the records service of a use case is a tool endpoint and an event caller in one namespace (ADR 0027) */ -}}
+{{- if or (eq (toString $k) "callers") (eq (toString $k) "extraA2ACallers") -}}
+{{- else if and (hasSuffix "namespace" (lower (toString $k))) (or (kindIs "string" $x) (kindIs "invalid" $x)) -}}
 {{- $_ := set $acc "l" (append $acc.l (default $rel (toString (default "" $x)))) -}}
 {{- else -}}
 {{- include "oa.walkNs" (dict "v" $x "acc" $acc "rel" $rel) -}}

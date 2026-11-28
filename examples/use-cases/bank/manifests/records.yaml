@@ -17,10 +17,12 @@ metadata:
     app.kubernetes.io/part-of: openagentix-use-case-bank
     pod-security.kubernetes.io/enforce: restricted
 ---
+# The pod's own ServiceAccount. It has no right in the Kubernetes API (no token is mounted for the API). With the event sender on (install.sh with EVENTS=1) the kubelet
+# projects a short-lived token with the audience of the A2A gate for it, and the gate's caller rule names this ServiceAccount (values.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: records
+  name: records-events
   namespace: fernvale-records
   labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
 automountServiceAccountToken: false
@@ -40,7 +42,7 @@ spec:
     metadata:
       labels: {app: records, app.kubernetes.io/part-of: openagentix-use-case-bank}
     spec:
-      serviceAccountName: records
+      serviceAccountName: records-events
       automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext:
@@ -60,6 +62,12 @@ spec:
             - {name: RECORDS_DATA_DIR, value: /data}
             - {name: RECORDS_APPROVERS_FILE, value: /etc/records/approvers.json}
             - {name: RECORDS_MCP_TOKEN_FILE, value: /etc/records-mcp/value}
+            #EVENTS-ON-BEGIN
+            # The event sender (ADR 0027). It is on only when install.sh ran with EVENTS=1. An intake route (a fault, a service request, a dispute) queues an event
+            # in the same transaction as the case, and the sender asks the agent through the gate, as the ServiceAccount records-events, with the token below.
+            - {name: RECORDS_EVENT_GATE_URL, value: "http://a2a-gate.openagentix-gateway.svc.cluster.local:8080/agents/kagent/dispute-agent"}
+            - {name: RECORDS_EVENT_TOKEN_FILE, value: /var/run/records-events/token}
+            #EVENTS-ON-END
             # RECORDS_REST_ADDR is not set: REST stays on 127.0.0.1:8081 (the default).
           securityContext:
             allowPrivilegeEscalation: false
@@ -84,6 +92,9 @@ spec:
             - {name: data, mountPath: /data}
             - {name: approvers, mountPath: /etc/records, readOnly: true}
             - {name: mcp-credential, mountPath: /etc/records-mcp, readOnly: true}
+            #EVENTS-ON-BEGIN
+            - {name: gate-token, mountPath: /var/run/records-events, readOnly: true}
+            #EVENTS-ON-END
       volumes:
         - name: data
           emptyDir: {sizeLimit: 64Mi}
@@ -99,6 +110,15 @@ spec:
             defaultMode: 0440
             items:
               - {key: value, path: value}
+        #EVENTS-ON-BEGIN
+        # A token for the A2A gate and nothing else: the audience is the gate's, it lives 10 minutes (a captured request can be replayed only while it lives), and the
+        # kubelet renews the file; the sender reads it for every request.
+        - name: gate-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: {audience: openagentix-a2a, expirationSeconds: 600, path: token}
+        #EVENTS-ON-END
 ---
 apiVersion: v1
 kind: Service
@@ -129,4 +149,21 @@ spec:
     matchLabels: {app: records}
   policyTypes: [Ingress, Egress]
   ingress: []
+  #EVENTS-OFF-BEGIN
   egress: []
+  #EVENTS-OFF-END
+  #EVENTS-ON-BEGIN
+  # With the event sender on (ADR 0027) the pod may reach DNS and the A2A gate, and nothing else: no other pod, no Kubernetes API, no internet.
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openagentix-gateway}}
+          podSelector: {matchLabels: {app: a2a-gate}}
+      ports:
+        - {protocol: TCP, port: 8080}
+  #EVENTS-ON-END

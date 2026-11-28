@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The service desk's commands for the equipment use case. Local kind cluster, after examples/use-cases/equipment/install.sh. Set CLUSTER=<kind cluster name> on every call.
 #
-#   ctl.sh fault KH4120-00317 E-317 [--ask]    the machine event: a telematics fault becomes a case (the same fault on the same machine reuses the open case)
+#   ctl.sh fault KH4120-00317 E-317 [--ask]    the machine event: a telematics fault becomes a case (the same fault on the same machine reuses the open case).
+#                                              With the event sender on (install.sh EVENTS=1) the service starts the agent itself: no --ask
 #   ctl.sh request KT260-00102 [--safety] "text"   the dealer's service request becomes a case (--safety is the dealer's own flag)
 #   ctl.sh ask "Work case SVC-2026-0001"       ask the service agent through the A2A gate, as the service desk (ServiceAccount service-desk)
 #   ctl.sh cases                               open cases (id, machine, kind, fault code, status)
@@ -37,7 +38,7 @@ case "$KUBE_CONTEXT" in
   *) die "KUBE_CONTEXT is '$KUBE_CONTEXT': this script is for a local kind cluster (kind-<name>). Set CLUSTER or KUBE_CONTEXT." ;;
 esac
 [ "$DISAGREE" = 0 ] || die "CLUSTER=$CLUSTER and KUBE_CONTEXT=$KUBE_CONTEXT name different clusters (the context of $CLUSTER is kind-$CLUSTER). Set one of them, or make them agree. Nothing was changed."
-usage(){ sed -n 2,14p "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage(){ sed -n 2,15p "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 for c in jq curl; do command -v "$c" >/dev/null || die "$c is required"; done
 [ $# -ge 1 ] || usage
 
@@ -102,9 +103,16 @@ send_event(){
   code=$(post "$1" "$resp" "$2") || code=000
   if [ "$code" != 200 ] && [ "$code" != 201 ]; then echo "ERROR: http $code: $(jq -r '.error // "refused"' "$resp" 2>/dev/null || echo refused)" >&2; rm -f "$resp"; exit 1; fi
   EVENT_CASE=$(jq -r '.case.id // .id' "$resp")
+  EVENT_DEDUP=$(jq -r '.deduplicated // false' "$resp")
   jq -r 'if .case then "case \(.case.id) (\(.case.kind), \(.case.fault_code), status \(.case.status)) deduplicated: \(.deduplicated)" else "case \(.id) (\(.kind), status \(.status), safety flag \(.safety_flag))" end' "$resp"
   rm -f "$resp"
-  echo "next: $0 ask \"Work case $EVENT_CASE\""
+  # With the event sender on (install.sh EVENTS=1) the records service asks the agent itself for a case that is new: no --ask and no ask are needed.
+  local on; on=$("${KC[@]}" get deployment records -n "$NS" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="RECORDS_EVENT_GATE_URL")].value}' 2>/dev/null) || on=""
+  if [ -n "$on" ] && [ "$EVENT_DEDUP" != true ]; then
+    echo "the event sender is on: the records service asks the agent for $EVENT_CASE through the A2A gate (the gate's audit line has event_id case-$EVENT_CASE). $0 ask is not needed."
+  else
+    echo "next: $0 ask \"Work case $EVENT_CASE\""
+  fi
 }
 
 cmd=$1; shift
