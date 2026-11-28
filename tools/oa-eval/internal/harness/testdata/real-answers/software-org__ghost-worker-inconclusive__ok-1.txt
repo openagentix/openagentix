@@ -1,0 +1,20 @@
+No pods matched `app=ghost-worker`. I'll check the owning workload for its replica count and whether it exists.
+**Pod root-cause analysis for workload ghost-worker in namespace rca-demo: inconclusive**
+
+**Evidence**
+- Listing pods in rca-demo with label `app=ghost-worker` returned no pods (`"pods": []`, not truncated).
+- Reading the deployment `ghost-worker` in rca-demo returned "not found: check the namespace, the name and the container."
+
+**Likely cause**
+Inconclusive. The workload does not appear to exist in rca-demo under that name, or it does not use the label `app=ghost-worker`, so there is no pod, event, log or node to analyse.
+
+**Confidence**
+Low. Both the pod list and the deployment lookup came back empty, which fits a wrong name or label. It could also be a different workload kind (statefulset, daemonset) or a label that differs from the one I used. I did not check those.
+
+**What is missing and how to settle it**
+- The correct workload name and its pod label. Listing the workloads of rca-demo as deployments, statefulsets and daemonsets would show which one exists and which labels it uses.
+- Once the name or label is known, I can rerun the analysis.
+
+**Recommended actions (for a person; I changed nothing)**
+1. Confirm the workload name and label with whoever owns rca-demo, or list the deployments, statefulsets and daemonsets in rca-demo.
+2. Rerun the root-cause analysis with the confirmed name, or with the kind if it is not a deployment.
