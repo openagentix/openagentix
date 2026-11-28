@@ -59,6 +59,9 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	if err != nil {
 		return err
 	}
+	if err := az.RejectAdminToken(cfg.AdminToken); err != nil {
+		return err
+	}
 	var m *obs.Metrics // nil unless KB_METRICS_ADDR is set: every call on it is a no-op
 	if cfg.MetricsAddr != "" {
 		m = obs.New(version)

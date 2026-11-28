@@ -77,6 +77,9 @@ type Authorizer struct {
 
 	mu         sync.Mutex
 	lastWarned map[string]time.Time
+
+	// admin is the SHA-256 of the admin token, or nil. A value equal to it is never a caller (see RejectAdminToken).
+	admin *[sha256.Size]byte
 }
 
 // Mode reports the configured mode.
@@ -208,13 +211,43 @@ func validValue(v string) bool {
 	return strings.HasPrefix(v, bearerPrefix) && len(strings.TrimSpace(v[len(bearerPrefix):])) > 0
 }
 
+// RejectAdminToken records the admin token (as a digest) and checks that no caller's value is that token. Every tool server of a group holds the group's value, and the
+// admin token writes any collection through /v1, so a caller value equal to it is a start error that names the caller and never the value. From then on Identify never
+// accepts the admin token as a caller either, even if a value file is changed after the start. An empty token is ignored.
+func (a *Authorizer) RejectAdminToken(token string) error {
+	if a == nil || token == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(token))
+	a.admin = &sum
+	for _, c := range a.callers {
+		v, err := a.read(c.Name)
+		if err != nil {
+			continue
+		}
+		if a.isAdmin(v) {
+			return fmt.Errorf("access config: the value of caller %q is the admin token of the knowledge base; a group's value must be its own", c.Name)
+		}
+	}
+	return nil
+}
+
+// isAdmin reports whether a header value ("Bearer <token>") carries the admin token, comparing digests in constant time.
+func (a *Authorizer) isAdmin(header string) bool {
+	if a.admin == nil || !strings.HasPrefix(header, bearerPrefix) {
+		return false
+	}
+	got := sha256.Sum256([]byte(strings.TrimSpace(header[len(bearerPrefix):])))
+	return subtle.ConstantTimeCompare(got[:], a.admin[:]) == 1
+}
+
 // Identify maps the Authorization header of one request to a caller. It reads
 // every value file, compares digests in constant time with no early exit, and
 // answers Known only when exactly one caller matches. An unreadable or empty
 // file never matches.
 func (a *Authorizer) Identify(authorization string) Identity {
 	got := sha256.Sum256([]byte(authorization))
-	gotOK := validValue(authorization)
+	gotOK := validValue(authorization) && !a.isAdmin(authorization)
 	matches, idx := 0, -1
 	for i, c := range a.callers {
 		want, err := a.read(c.Name)

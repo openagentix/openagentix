@@ -240,8 +240,8 @@ func TestSessionReusedWithAnotherValueOrNoneIsRefused(t *testing.T) {
 	}
 }
 
-func TestToolCallDecidesTheCallerFromItsOwnHeader(t *testing.T) {
-	// Even if a request got past the guard, the scope of a tool call comes from that request's header.
+func TestEachConnectionSeesOnlyItsOwnCollections(t *testing.T) {
+	// Two clients with two values, side by side: each is limited to its own list.
 	e := newAccessEnv(t, "enforce", true)
 	s := e.connect(t, tokBank)
 	txt, _ := call(t, s, "kb_list_collections", nil)

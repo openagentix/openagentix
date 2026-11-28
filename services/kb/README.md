@@ -184,6 +184,9 @@ column migration) and re-ingest.
   caller and, in `enforce`, filters every read by the caller's collections inside the store query; a collection outside the
   list answers like a missing one. It tells tool groups apart, not profiles or agents, and it does not stop a tool server that
   can read another group's value. The admin API keeps its own token and writes any collection.
+* **pgvector before 0.8**: the HNSW index filters after its scan, so with a collection filter (a named collection, or an access list) the vector half of a search can return fewer
+  than `top_k` hits when other collections hold closer vectors. pgvector 0.8 added iterative scans, which the kb turns on; with an older version it only widens `ef_search`
+  (best effort). The claim that `top_k` is filled from allowed rows needs 0.8 or newer.
 * **HNSW graph connectivity**: filtered iterative scans cannot reach vectors that the index graph does not connect
   to the query's neighbourhood; this is a pgvector property.
 

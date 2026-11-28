@@ -284,7 +284,24 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
         | "refused: networkPolicy.extraA2ACallers[" + . + "] has no caller rule for a ServiceAccount of that namespace in the composed result (governance.a2a.callers): an admitted namespace that no rule names would only open the gate's ingress"]) as $e2
     | (platns($f.v)) as $pn
     | ([($f.st.xc // [])[] | xaerrs(.e; .fb; $pn)[]]) as $e3
-    | {result: $f.v, report: $f.st.rep, errors: ($e1 + $f.st.err + $e2 + $e3)}
+    # ADR 0030: a profile that a later file adds, with knowledgeCollections naming a collection that a profile or the shared group of an EARLIER file already reads, gives a new reader
+    # access to it. The collection is "owned" by the file in which it first appears; a later file that adds a reader of it is called out and, without --later-wins, refused.
+    | ($ps | map(.file)) as $order
+    | ((($f.v.mcp.profiles // []) | map(select(((.knowledgeCollections // []) | type) == "array" and ((.knowledgeCollections // []) | length) > 0))) as $kp
+       | def srcof($keys): ([$keys[] | $f.st.src[.] | select(. != null)] | first) // $order[0];
+         def pkeys($n): ["mcp.profiles[" + $n + "]", "mcp.profiles", "mcp"];
+         def skeys: ["knowledge.access.sharedGroupCollections", "knowledge.access", "knowledge"];
+         def fileidx($keys): ($order | index(srcof($keys))) // 0;
+         def sharedlist: (($f.v.knowledge.access.sharedGroupCollections // []) | if type == "array" then . else [] end);
+         [ $kp[] | . as $p | srcof(pkeys($p.name)) as $pf | fileidx(pkeys($p.name)) as $pi
+           | $p.knowledgeCollections[] as $c
+           | ( [ $kp[] | select(.name != $p.name) | select(fileidx(pkeys(.name)) < $pi and ((.knowledgeCollections | index($c)) != null)) | "the profile " + .name ]
+               + [ select(fileidx(skeys) < $pi and (sharedlist | index($c)) != null) | "the shared group" ] ) as $others
+           | select(($others | length) > 0)
+           | {file: $pf, msg: ($pf + " adds the profile " + $p.name + ", which may read the collection " + $c + ", and " + ($others | join(" and ")) + " of an earlier file already reads it. A new reader of a collection is a change of who may read it, so it is only accepted in the file where the collection first appears")} ]) as $rd
+    | ([$rd[] | "SECURITY-RELEVANT: " + .msg]) as $rdnote
+    | ($rdnote | map("refused: " + . + ". Give --later-wins to take it.")) as $e4
+    | {result: $f.v, report: ($f.st.rep + $rdnote), errors: ($e1 + $f.st.err + $e2 + $e3 + (if $lw then [] else $e4 end))}
   end
 JQ
 

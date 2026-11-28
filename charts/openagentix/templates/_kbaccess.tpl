@@ -42,6 +42,7 @@ entry; the refusals about the lists are made in every mode. */}}
 {{- $shared := include "oa.kbCollectionList" (dict "v" $acc.sharedGroupCollections "what" "knowledge.access.sharedGroupCollections") | fromJsonArray -}}
 {{- if and (ne $mode "") (not $k.enabled) }}{{ fail "knowledge.access.mode needs knowledge.enabled=true: the check is made by the knowledge base" }}{{ end -}}
 {{- if and (ne $mode "") (not $m.enabled) }}{{ fail "knowledge.access.mode needs mcp.enabled=true: a caller is a tool group, and the tool gateway holds the groups" }}{{ end -}}
+{{- if and (ne $mode "") (or (eq (toString $k.kb.adminSecret.name) "kb-callers") (hasPrefix "kb-caller-" (toString $k.kb.adminSecret.name))) }}{{ fail (printf "knowledge.kb.adminSecret.name %q is the name of a Secret of the knowledge base callers: the admin token writes any collection and must never be a tool group's value. Use another name (the default is kb-admin)" (toString $k.kb.adminSecret.name)) }}{{ end -}}
 {{- $entry := $k.mcp.entryName -}}
 {{- /* the list of each group that has profiles with one; a profile on the shared group may not carry one */ -}}
 {{- $lists := dict -}}

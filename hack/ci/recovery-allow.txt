@@ -7,3 +7,4 @@ restarts local-path-storage/local-path-provisioner-           max=2  # #227
 restarts mcp-tools/tools-                                     max=2  # #227
 restarts podcertificate-controller-system/podcertificate-     max=2  # #227
 # kagent-controller exited when the Substrate API was not up yet (#178). It now waits for it in an init container, so it has no entry: a restart of it fails the test.
+# ate-system/ate-api-server exited a second time when its PostgreSQL was not Ready within 60 s of the node restart (#203). It now waits for the database in an init container (components/runtime/substrate-postrender.sh), so it has no entry: a second restart of it fails the test.

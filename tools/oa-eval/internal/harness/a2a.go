@@ -18,9 +18,13 @@ const maxBody = 4 << 20
 
 // answer is what one SendMessage returned.
 type answer struct {
-	State string
-	Text  string
+	State   string
+	Text    string
+	Failure string // the message of the task status when the task did not end COMPLETED, truncated; never the user's message or an answer
 }
+
+// maxFailure is the longest failure message a report keeps.
+const maxFailure = 300
 
 // sendMessage posts one A2A 1.0 SendMessage and returns the task state and the answer text. It follows the same
 // wire format as tools/a2a-call (JSON-RPC, A2A-Version 1.0, X-User-Id, optional bearer token, no redirects). That
@@ -106,6 +110,13 @@ func sendMessage(ctx context.Context, hc *http.Client, url, userID, token, promp
 				}
 			}
 		}
+		if t.Status.State != "TASK_STATE_COMPLETED" && t.Status.Message != nil {
+			var f []string
+			for _, p := range t.Status.Message.Parts {
+				f = append(f, p.Text)
+			}
+			out.Failure = truncate(strings.TrimSpace(strings.Join(f, " ")), maxFailure)
+		}
 		if len(texts) == 0 && t.Status.Message != nil {
 			for _, p := range t.Status.Message.Parts {
 				texts = append(texts, p.Text)
@@ -133,4 +144,11 @@ func readToken(path string) (string, error) {
 		return "", errors.New("the token file is empty")
 	}
 	return t, nil
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
