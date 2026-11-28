@@ -1,5 +1,9 @@
+{{- /* ADR 0030: the refusals about knowledge.access and the profile lists are made here, whether or not the knowledge base is on */ -}}
+{{- $_ := include "oa.kbCallers" . }}
 {{- if .Values.knowledge.enabled }}
 {{- $k := .Values.knowledge }}
+{{- $kbAccess := include "oa.kbAccessOn" . }}
+{{- $kbCallers := include "oa.kbCallers" . | fromJsonArray }}
 {{- $ns := $k.namespace }}
 {{- $emb := $k.embeddings }}
 {{- $pg := $k.postgres }}
@@ -80,10 +84,16 @@ spec:
       labels:
         app: kb
         {{- include "oa.labels" . | nindent 8 }}
-      {{- if $kb.sourceHash }}
+      {{- if or $kb.sourceHash $kbAccess }}
       annotations:
+        {{- if $kb.sourceHash }}
         # set by install.sh from the content of services/kb: a code change rolls the pod although the image tag stays "dev"
         openagentix.io/source-hash: {{ $kb.sourceHash | quote }}
+        {{- end }}
+        {{- if $kbAccess }}
+        # ADR 0030: a change of the mode or of a list rolls the pod (the value files are read on every request and need no roll)
+        openagentix.io/kb-access-checksum: {{ include "oa.kbAccessJson" . | sha256sum | quote }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with include "oa.priorityClass" $ }}
@@ -141,6 +151,10 @@ spec:
             - name: KB_DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: {{ $kb.databaseSecret.name | quote }}, key: {{ $kb.databaseSecret.key | quote }}}
+            {{- if $kbAccess }}
+            - {name: KB_ACCESS_FILE, value: /etc/openagentix/kb-access/access.json}
+            - {name: KB_ACCESS_CALLERS_DIR, value: /var/run/secrets/openagentix/kb-callers}
+            {{- end }}
             {{- if $embURL }}
             - {name: KB_EMBEDDINGS_URL, value: {{ $embURL | quote }}}
             - {name: KB_EMBEDDINGS_MODEL, value: {{ $embModel | quote }}}
@@ -183,6 +197,41 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
           resources: {{- toYaml $kb.resources | nindent 12 }}
+          {{- if $kbAccess }}
+          volumeMounts:
+            - {name: kb-access, mountPath: /etc/openagentix/kb-access, readOnly: true}
+            - {name: kb-callers, mountPath: /var/run/secrets/openagentix/kb-callers, readOnly: true}
+          {{- end }}
+      {{- if $kbAccess }}
+      volumes:
+        # ADR 0030: the mode and the lists (names only), from the chart's values
+        - name: kb-access
+          configMap: {name: kb-access}
+        # one file per tool group, named by the group. The installer makes the Secret; the chart renders only this reference. 0444: the pod runs as a non-root user.
+        - name: kb-callers
+          secret:
+            secretName: kb-callers
+            defaultMode: 292   # 0444
+            items:
+              {{- range $c := $kbCallers }}
+              - {key: {{ $c.name | quote }}, path: {{ $c.name | quote }}}
+              {{- end }}
+      {{- end }}
+{{- if $kbAccess }}
+---
+# ADR 0030: which tool group may read which collections. Names only, never a value. Nobody edits it by hand: it is rendered from knowledge.access and
+# mcp.profiles[].knowledgeCollections, and the pod rolls when it changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kb-access
+  namespace: {{ $ns }}
+  labels:
+    app: kb
+    {{- include "oa.labels" . | nindent 4 }}
+data:
+  access.json: {{ include "oa.kbAccessJson" . | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -453,6 +502,10 @@ spec:
   transport: streamable-http
   allowPrivateEndpoint: true
   externalAuthConfigRef: {name: {{ $k.mcp.entryName }}-noauth}
+  {{- if $kbAccess }}
+  {{- /* ADR 0030: the shared group's value, from a Secret the installer makes. The chart renders only the reference. */}}
+  {{- include "oa.kbHeader" .Values.mcp.groupName | nindent 2 }}
+  {{- end }}
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 ---

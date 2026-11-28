@@ -23,7 +23,7 @@
 #   - Security keys: a later file may not change these without --later-wins: the allow lists of controlPlane.policy (allowedModels,
 #     allowedProfiles, allowedSkills, egress, requireToolProfile, allowKnowledge, allowNotify, memory, allowedRuntimes, runtimes),
 #     controlPlane.containerAgents.toolProfiles, networkPolicy.*, governance.a2a.enabled, mcp.virtual.incomingAuth.*,
-#     mcp.virtual.codeMode.enabled, mcp.egress.allow, observability.capture.content, gateway.policy.* and the egress of every agent.
+#     mcp.virtual.codeMode.enabled, mcp.egress.allow, observability.capture.content, gateway.policy.*, knowledge.access.* (ADR 0030: the mode and the shared group list of the knowledge base isolation) and the egress of every agent.
 #     "Change" is measured against what the files before it give. When no earlier file sets the key, the base is the chart default
 #     (charts/openagentix/values.yaml, read as an implicit first file): a later file that sets a security key to anything else is refused.
 #     The first file is taken as it is. Allow lists are never joined: a union would widen access without anyone writing it down. With
@@ -101,7 +101,7 @@ def secpfx: [
   "controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge",
   "controlPlane.policy.allowNotify","controlPlane.policy.memory","controlPlane.policy.allowedRuntimes","controlPlane.policy.runtimes",
   "controlPlane.containerAgents.toolProfiles","networkPolicy","governance.a2a.enabled","mcp.virtual.incomingAuth",
-  "mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy","agents[].egress"];
+  "mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy","agents[].egress","knowledge.access"];
 def isobj: type == "object";
 def isarr: type == "array";
 def pj($ps): $ps | join(".");
