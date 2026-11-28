@@ -64,6 +64,7 @@ test-shell: ## Offline shell and Python suites: channels, dashboard (jsdom part 
 	hack/ci/green-streak-test.sh
 	hack/demo-test.sh
 	hack/ci/release-notes-test.sh
+	hack/use-case-eval-test.sh
 	hack/ci/verify-release-test.sh
 	hack/ci/kind-image-digest-test.sh
 	hack/ci/cluster-test.sh

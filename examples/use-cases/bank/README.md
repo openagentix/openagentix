@@ -125,6 +125,8 @@ Any run with these scenarios is **scripted by the stub model**, and a demo, a di
 
 `eval/cases.yaml` is a set for `tools/oa-eval` (read `docs/diary/guide/write-an-evaluation-set.md`). Machine checks only, no model judge:
 
+This set follows the scripted stand-in. For a real model use `eval/cases-real.yaml` and `hack/use-case-eval.sh` (see "Measure a pass rate" below).
+
 | Case | What it checks |
 |---|---|
 | `duplicate-charge` | Tools called and their order, an approval requested only after the route and the letter, the policy cited, the answer says pending approval and that no credit was posted, the case is `pending_approval`, the ledger is empty |
@@ -142,6 +144,27 @@ What the set proves and what it does not:
 The tool names in the set are the names the model sees through the profile: `records_<tool>` for the endpoint and `knowledge-disputes_<tool>` for the knowledge base mirror (the mirror of the group is named `<entryName>-<group>`, ADR 0026 A3). Run it on a fresh install, before anyone approves (the ledger checks expect an empty ledger). The command is in the header of the file. The live job (`hack/ci/bank-live.sh`) runs it on a kind cluster with the `AUDIT` lines of the profile's tool server as the audit source and the records REST state as the state source.
 
 Replay of the 30 closed cases (the human decision is kept in the records REST view) is not built: with the stub it would only measure the stub.
+
+## Measure a pass rate
+
+`eval/cases.yaml` follows the stand-in, so it cannot measure a real model. `eval/cases-real.yaml` keeps only what must hold after any competent run: the final state of the record (status, route, the pending approval and its kind, no approved approval, an empty ledger), the tools that must never run, claims the answer must not make (`answer_claims_not`, which ignores "no credit has been posted"), and a ceiling on tool calls with headroom. It names no exact tool chain and no answer phrase. It also runs against the stub model in CI (`records/replay`), where it passes, and tests show that a retried write after the request, and an agent that obeys the injected text, fail it. Read `docs/diary/guide/write-an-evaluation-set.md`, "Checks that hold for a real model".
+
+Run it on a kind cluster that has this use case installed with a real model (a provider key, the stub off). Name the cluster; there is no default:
+
+```sh
+CLUSTER=<kind cluster name> hack/use-case-eval.sh bank --runs 10 --reset-records --out /tmp/bank-run
+CLUSTER=<kind cluster name> hack/use-case-eval.sh bank --runs 10 --reset-records --sweep --tokens per-case --out /tmp/bank-run-2   # slower: one metric scrape per case
+```
+
+`--reset-records` is required and says so loudly: before every run the pod of the records service in `fernvale-records` is deleted (its store is an emptyDir) and the script waits for Ready and for the seed, so every run starts from the seed. A request you made by hand is gone. The script uses a short-lived token of the caller `disputes-desk`, hands it to `oa-eval` through a named pipe in a private directory, and never writes it to a file, an argument or the output. It stops its port-forwards and readers on every exit.
+
+It writes `summary.json` and prints a table: per case the passes out of N, the checks that failed and how often, the median and maximum duration, the tool calls, and the tokens. The run is paid for by the model's provider. The tool-call ceilings in the set are starting values: read the measured maximum and move them on purpose.
+
+Where the tokens come from. The model gateway exports `agentgateway_gen_ai_client_token_usage_sum` (label `user_id`, the agent's gateway key name, here `dispute-agent`, and `gen_ai_token_type`) and the bundled VictoriaMetrics scrapes it every 30 seconds, when observability is on (`components/observability/demo-values.yaml`). The script reads the counter before and after. By default it reports tokens per run, as a total, because a run holds every case. `--tokens per-case` runs the cases one at a time and waits one scrape interval after each, so tokens are per case. Anything else that uses the same gateway key during the run is counted too. If the store, the series or the key is missing, the summary says "not available" and why. Only tokens are reported, never a price: prices change and do not belong in the repository.
+
+The sweep. `--sweep` starts the suspended schedule `deadline-sweep` once by hand (`kubectl create job --from=cronjob/deadline-sweep` in `openagentix-schedules`), waits for the job, and checks, from the audit lines of the tool server and from the records state before and after, that it only read: no write tool in the audit lines, no change in the lists of cases, approvals, the outbox and the ledger. It fails (exit 1) if the job did not finish, if no tool call was seen, if a write tool was called, or if a list changed. It proves a path into the agent that is not a person at a prompt. It is one job on one model, not a rate.
+
+Not done yet: this path was built and tested against fakes. It has not been run on a live cluster, so no pass rate and no cost per case are recorded here.
 
 ## Tests (all offline)
 

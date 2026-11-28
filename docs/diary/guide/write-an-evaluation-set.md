@@ -20,7 +20,10 @@ Status: the tool and its tests are in the repository (`tools/oa-eval`). It has b
 | `tools_called`, `tools_not_called` | Which tools the agent called, read from the audit trail. A profile prefix is allowed: `kb_search` matches `ops_kb_search`. |
 | `tool_order` | These tools appear in this order. Other calls may sit between. |
 | `requires` | `{tool: send_payment, after: request_approval}`: the first tool may be called only after the second. If the first is never called, the rule holds. This is "never executes without approval". |
-| `state_checks` | Reads from the system of record after the run: a count, an exact value, a pattern, or whether a path exists. This is how you prove "nothing in the outbox" or "a draft exists". |
+| `state_checks` | Reads from the system of record after the run: a count, an exact value, one of several values (`one_of`), a pattern, or whether a path exists. This is how you prove "nothing in the outbox" or "a draft exists". |
+| `tools_only` | Every tool call of the run is one of these. Any subset, any order, any number of repeats. Use it for "this agent only reads" and for a diagnostics agent that may use any of its read tools. A profile prefix is allowed. |
+| `min_tool_calls` | At least this many tool calls. It proves the agent used its tools when the list of tools it may use is long. A value below 1 is a mistake in the file. |
+| `answer_claims_not` | Like `answer_must_not`, but a match inside a denying or conditional clause is ignored: "no credit has been posted", "the refund is not approved", "it will be posted once the approver decides". See below. |
 | `max_tool_calls` | At most this many tool calls (audit events) in the run. It needs an audit source. Use it to catch an extra call that a planted instruction steered the agent into, even when the tool is allowed. A value below 1 is a mistake in the file and is refused (leave it out for no limit). |
 | `max_ms` | The run took no longer than this. |
 
@@ -81,6 +84,22 @@ A token is read from a file. There is no `--token` flag, so it cannot show in th
 
 The output is a table, then each failed check, then a summary. `report.json` has the same data. Exit codes: 0 every case passed, 1 a case failed, 2 a bad file or flag.
 
+## Checks that hold for a real model
+
+A set written for the scripted stand-in follows the stand-in: it lists the exact tool chain, it checks an order, and it looks for words that the scenario template writes. A real model reads more, in another order, retries a refused write, words things its own way, and sometimes stops early for a good reason. A set that fails a good run measures the set, not the agent. The sets named `cases-real.yaml` under `examples/use-cases/*/eval/` show the pattern. Write them this way:
+
+- **Check the outcome, not the path.** The final state of the record is the strongest check: the status the case must end in, the route, how many approval requests exist and of which kind. Read the list with a filter (`/approvals?case_id=X&status=pending`) so a superseded request from a retry does not count. When more than one end state is fine, use `one_of`.
+- **Required tools are a subset.** `tools_called` already means "at least these". List only the tools without which the outcome is not possible (the write that sets the route). Do not use `tool_order`. If a rule is about order, use `requires`, and only where a competent run must meet it ("an approval is requested only after the policy was searched").
+- **Allowed tools are a set.** For an agent that must only read, use `tools_only` with its read tools. A tool that is not on the list fails the case and is named.
+- **Forbidden tools stay.** `tools_not_called` for the tools that must never run in this case (an approval request in an injection case).
+- **Zero approval requests** for an injection or a safety case: `state_checks` on `/approvals?case_id=X` with `count: 0`, with no status filter.
+- **Claims, not words.** To forbid "the credit was posted", use `answer_claims_not`, not `answer_must_not`: a good answer says "no credit has been posted" and `answer_must_not` would fail it. Keep each pattern narrow (a first person verb and its object, or a subject and a past form) and do not list a word that a normal answer uses ("I sent the case to an analyst", "submitted for approval", "has restarted 12 times"). Planted values (a canary, a secret) stay in `answer_must_not`: they must not appear even in a denial.
+- **No wording of the template.** Do not require a phrase that only the stand-in writes ("needs human review", "pending approval", "confidence"). If the wording matters, require a fact: a pod name, the reason the kubelet reports, a port.
+- **A ceiling on tool calls with headroom.** Start with about three times what the stand-in makes, run the set on the model, read the measured calls, and move the number on purpose. A ceiling that is too tight measures the model's thoroughness.
+- **A case that only the stand-in can pass is not in the set.** An unscripted case ("skip the checks") has a real model working the case, so check what must hold for any run: the case is read, nothing is posted, nothing is approved.
+
+Run the set many times and read a rate. `hack/use-case-eval.sh <use case> --runs N` does that on a kind cluster: it resets the records store between runs, runs the set, and writes `summary.json` with the passes out of N per case, the checks that failed and how often, durations, tool calls and, when the platform exports them, tokens. A set for a real model also runs against the stand-in in CI (it must pass there, and a test shows each check can fail), which proves the wiring and nothing about the model.
+
 ## Replay
 
 A replay compares a new run with a recorded one.
@@ -119,4 +138,5 @@ With the stub model scenarios (see `services/stub-model/README.md`) a run is the
 ## Limits
 
 - Each check proves what it says and no more. `cites` finds a title in the text; it does not prove the title supports the claim.
-- Not built: running several times and requiring a pass rate, counterfactual pairs, token and cost limits, triggering an event or a schedule instead of sending a prompt, and a model judge. These are later work.
+- `oa-eval` runs the set once. Running it several times and reading a rate is done by `hack/use-case-eval.sh`, not by `oa-eval`, and it needs a cluster. A pass-rate threshold that fails a build is not built.
+- Not built: counterfactual pairs, token and cost limits, triggering an event instead of sending a prompt (`hack/use-case-eval.sh --sweep` starts a suspended schedule by hand for the bank and the equipment use case, and checks that it only read), and a model judge. These are later work.
