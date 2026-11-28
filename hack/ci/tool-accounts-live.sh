@@ -96,7 +96,7 @@ if [ "$PHASE" = refused ]; then
   echo "# refused: the run without the switch was stopped before it changed anything"
   if [ -n "${TA_INSTALL_LOG:-}" ] && [ -f "$TA_INSTALL_LOG" ]; then
     check "install.sh said it refuses to turn the switch off, and how to override it" "$(grep -c 'turn mcp.virtual.ownServiceAccounts off' "$TA_INSTALL_LOG")/$(grep -c 'ALLOW_TOOL_SECRET_READ=1' "$TA_INSTALL_LOG")" "1/1"
-    check "it said so before the chart was applied (no helm upgrade line)" "$(grep -c 'helm upgrade --install' "$TA_INSTALL_LOG")" 0
+    check "it said so before the chart was applied (no helm upgrade line)" "$(grep -c 'helm upgrade --install openagentix' "$TA_INSTALL_LOG")" 0
   fi
   for n in $SERVERS; do
     check "$n: still on the chart's account" "$(jq -r --arg n "$n" '.items[]|select(.metadata.name==$n)|.spec.serviceAccount // "none"' <<<"$VMJ")" "openagentix-$n"

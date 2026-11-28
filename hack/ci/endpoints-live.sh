@@ -74,7 +74,12 @@ GP=$($K get pods -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROFI
 check "the pod of the group's vMCP holds the header Secrets by reference, as environment values (positive control)" "$(jq '[.items[].spec.containers[].env[]?|select((.valueFrom.secretKeyRef.name//"")|test("^(echo|other)-mcp-auth$"))]|length>0' <<<"$GP")" true
 SA=$(jq -r '.items[0].spec.serviceAccountName // ""' <<<"$SHP")
 CAN=$($K auth can-i get "secret/echo-mcp-auth" -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
-obs "kubectl auth can-i get secret/echo-mcp-auth -n $MCPNS, as the shared vMCP's ServiceAccount ($SA): '${CAN:-no answer}' (ADR 0026 A3 expects yes: the ToolHive operator gives every vMCP read access to Secrets in the tools namespace)"
+# ADR 0031: with mcp.virtual.ownServiceAccounts on the account is the chart's and the answer must be no; with it off it is the operator's account (ADR 0026 A3) and the
+# answer is recorded, as before.
+case "$SA" in
+  openagentix-*) check "the shared vMCP's ServiceAccount ($SA, an account of the chart) cannot get the header Secret echo-mcp-auth, nor list Secrets (ADR 0031)" "${CAN:-no answer}/$($K auth can-i list secrets -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)" "no/no";;
+  *) obs "kubectl auth can-i get secret/echo-mcp-auth -n $MCPNS, as the shared vMCP's ServiceAccount ($SA): '${CAN:-no answer}' (ADR 0026 A3 expects yes when mcp.virtual.ownServiceAccounts is off: the ToolHive operator gives every vMCP read access to Secrets in the tools namespace)";;
+esac
 
 echo "# the endpoint refuses a call without its header value, and with a wrong one"
 PORT=$((20000 + RANDOM % 20000))

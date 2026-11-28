@@ -293,7 +293,12 @@ GPD=$($K get pods -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=tools-$PROF
 check "the pod of the group's tool server holds the header Secret by reference (positive control)" "$(jq --arg s "$AUTH_SECRET" '[.items[].spec.containers[].env[]?|select((.valueFrom.secretKeyRef.name//"")==$s)]|length>0' <<<"$GPD")" true
 SA=$(jq -r '.items[0].spec.serviceAccountName // ""' <<<"$SHP")
 CAN=$($K auth can-i get "secret/$AUTH_SECRET" -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
-obs "kubectl auth can-i get secret/$AUTH_SECRET -n $MCPNS, as the shared tool server's ServiceAccount ($SA): '${CAN:-no answer}' (ADR 0026 A3 expects yes: the ToolHive operator gives every tool server read access to Secrets in the tools namespace; the header Secret is as safe as that namespace)"
+# ADR 0031: with mcp.virtual.ownServiceAccounts on (the use case values turn it on) the account is the chart's and the answer must be no; with it off it is the
+# operator's account (ADR 0026 A3) and the answer is recorded, as before.
+case "$SA" in
+  openagentix-*) check "the shared tool server's ServiceAccount ($SA, an account of the chart) cannot get the header Secret $AUTH_SECRET, nor list Secrets (ADR 0031)" "${CAN:-no answer}/$($K auth can-i list secrets -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)" "no/no";;
+  *) obs "kubectl auth can-i get secret/$AUTH_SECRET -n $MCPNS, as the shared tool server's ServiceAccount ($SA): '${CAN:-no answer}' (ADR 0026 A3 expects yes when mcp.virtual.ownServiceAccounts is off: the ToolHive operator gives every tool server read access to Secrets in the tools namespace; the header Secret is as safe as that namespace)";;
+esac
 CANPOD=$($K auth can-i create pods -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$SA" 2>/dev/null || true)
 check "the shared tool server's ServiceAccount cannot create pods in the tools namespace (so it cannot copy the labels that the records ingress policy admits)" "${CANPOD:-no answer}" no
 check "the records service does not listen for REST on the network: the REST port is on the pod's loopback (the pod's own spec sets no RECORDS_REST_ADDR)" "$($K get deployment records -n "$RNS" -o json | jq '[.spec.template.spec.containers[0].env[]|select(.name=="RECORDS_REST_ADDR")]|length')" 0

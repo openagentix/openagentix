@@ -285,17 +285,23 @@ fi
 # Helm replaces the user-supplied values of the release on every run (issue #212). When the release holds a key path or a named list entry that this run's
 # values (VALS: the -f files and the --set-file scenarios) lack, a run with a shorter VALUES_FILE list would remove whole features and agents without a word.
 # Read only; it stops here, before anything is changed, unless ALLOW_VALUE_REMOVAL=1. A first install (no release) and an unchanged list pass silently.
-if [ "$CLUSTER_UP" = 1 ]; then
-  bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${VALS[@]+"${VALS[@]}"} || exit 1
-fi
 # Tool server accounts (ADR 0031): with mcp.virtual.ownServiceAccounts off, say which header credentials every tool server can read; and refuse to turn it from
-# true to false on a live release (a values file left out of the list would give the reach back) unless ALLOW_TOOL_SECRET_READ=1. hack/tool-accounts-check.sh,
-# tested without a cluster. Read only; before anything is changed.
+# true to false on a live release (a values file left out of the list would give the reach back) unless ALLOW_TOOL_SECRET_READ=1. This comes before the check of
+# the release values below, so that the refusal names this switch; with ALLOW_TOOL_SECRET_READ=1 that check does not report this one key as lost (one override
+# for the one decision). hack/tool-accounts-check.sh, tested without a cluster. Read only; before anything is changed.
 # shellcheck source=hack/tool-accounts-check.sh
 . hack/tool-accounts-check.sh
 ta_warn_off <<<"$RENDERED"
 # shellcheck disable=SC2086   # $K is a command, as everywhere in this script
 if [ "$CLUSTER_UP" = 1 ]; then ta_refuse_off $K <<<"$RENDERED" || exit 1; fi
+RVD_IGNORE=()
+if [ "${ALLOW_TOOL_SECRET_READ:-0}" = 1 ]; then
+  { grep -vE '^[[:space:]]*(#|$)' hack/release-values-ignore.txt; echo mcp.virtual.ownServiceAccounts; } > "$QS_TMP/release-values-ignore.txt"
+  RVD_IGNORE=(--ignore-file "$QS_TMP/release-values-ignore.txt")
+fi
+if [ "$CLUSTER_UP" = 1 ]; then
+  bash hack/release-values-diff.sh --enforce --release "$RELEASE" --namespace "$RELEASE_NS" --kube-context "$CTX" ${RVD_IGNORE[@]+"${RVD_IGNORE[@]}"} ${VALS[@]+"${VALS[@]}"} || exit 1
+fi
 if jq -e 'select(.kind=="Deployment" and .metadata.name=="telegram-bridge")' <<<"$RENDERED" >/dev/null && [ -z "${TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
   echo "WARN: TELEGRAM_ALLOWED_CHAT_IDS not set. The bridge refuses to start without an allowlist (unless the Secret already has one, or you set bridge.allowlist.enabled=false in your values, which opens the bot to anyone)."
 fi

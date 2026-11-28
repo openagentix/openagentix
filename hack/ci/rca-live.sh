@@ -71,7 +71,17 @@ RMS=toolhive-vmcp-$PROFILE
 echo "       RemoteMCPServer $RMS status: $($K get remotemcpserver -n "$KNS" "$RMS" -o json 2>/dev/null | jq -c '{conditions:[.status.conditions[]?|{type,status,reason}],tools:[.status.discoveredTools[]?.name]}' 2>/dev/null | cut -c1-600)"
 echo "       VirtualMCPServer tools-$PROFILE: $($K get virtualmcpserver -n "$MCPNS" "tools-$PROFILE" -o json 2>/dev/null | jq -c '{phase:.status.phase,conditions:[.status.conditions[]?|{type,status,reason}]}' 2>/dev/null | cut -c1-600)"
 check "no vMCP condition DiscoveredAuthConfig-* is False" "$($K get virtualmcpserver -n "$MCPNS" -o json | jq '[.items[].status.conditions[]?|select((.type|startswith("DiscoveredAuthConfig-")) and .status=="False")]|length')" 0
-check "the agent pod-rca is Ready" "$($K get agents.api.kagent.dev pod-rca -n "$KNS" -o json 2>/dev/null | jq -r '[.status.conditions[]?|select(.type=="Ready")|.status]|first // "unknown"')" True
+# ADR 0031: the use case values turn mcp.virtual.ownServiceAccounts on. Every tool server then runs as an account of the chart that cannot read a Secret, so the
+# bearer value of cluster-read is not readable through the API by any tool server of the namespace (it stays an environment value of the pods of the group).
+TS_SA=$($K get virtualmcpserver -n "$MCPNS" "tools-$PROFILE" -o jsonpath='{.spec.serviceAccount}' 2>/dev/null)
+case "$TS_SA" in
+  openagentix-*)
+    for tsn in tools "tools-$PROFILE"; do
+      check "the tool server $tsn runs as an account of the chart, which cannot get or list Secrets, create pods, StatefulSets or Deployments (ADR 0031)" "$(for q in "get secrets" "list secrets" "create pods" "create statefulsets.apps" "create deployments.apps"; do $K auth can-i $q -n "$MCPNS" --as="system:serviceaccount:$MCPNS:openagentix-$tsn" 2>/dev/null || true; done | tr '\n' ' ')" "no no no no no "
+    done;;
+  *) echo "       the tool server tools-$PROFILE names no account of the chart (mcp.virtual.ownServiceAccounts is off): every tool server can read every Secret in $MCPNS (ADR 0026 A3)";;
+esac
+check "the agent pod-rca is Ready""$($K get agents.api.kagent.dev pod-rca -n "$KNS" -o json 2>/dev/null | jq -r '[.status.conditions[]?|select(.type=="Ready")|.status]|first // "unknown"')" True
 
 # --- the audit source: the AUDIT lines of the vMCP of the profile, as JSON lines with a `tool` field -------------------------------
 # The vMCP writes one AUDIT line per call to its standard output. A reader copies the whole log every second into one file (a rename, so a

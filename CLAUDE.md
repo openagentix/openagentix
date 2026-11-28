@@ -72,7 +72,7 @@ Install on a cluster (only when your change touches the installer or live behavi
 ```sh
 PROFILE=quickstart ./install.sh        # no key, no chat token: the stub model answers; then hack/ask.sh quickstart "..."
 hack/ci/smoke.sh                       # checks the quick start end to end
-VALUES_FILE="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml" ./install.sh
+VALUES_FILE="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml components/tools/own-service-accounts-values.yaml" ./install.sh
 ```
 
 The full demo needs `ANTHROPIC_API_KEY` and, with the Telegram bridge, `TELEGRAM_BOT_TOKEN`. Helm replaces release values on every run, so pass the same `VALUES_FILE` each time. See the README, "Full demo install".

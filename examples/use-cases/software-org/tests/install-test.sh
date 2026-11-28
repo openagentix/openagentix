@@ -222,7 +222,7 @@ FAKE_HELM_VALUES="$(jq -c '. * {"gateway":{"stubModel":{"scenarios":{"files":{"s
 check "--real-model on a release that holds this use case's scenario file passes (the file goes away with the stub)" "[ $rc = 0 ]" "rc=$rc $(tail -2 "$LOG/out")"
 
 echo "# --beside-full-demo"
-FDLIST="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml"
+FDLIST="components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml components/tools/own-service-accounts-values.yaml"
 reset
 CLUSTER=openagentix ANTHROPIC_API_KEY=$SECRET_KEY STUB_SCENARIOS=/tmp/mine.json VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix FAKE_STUB=1 FAKE_SCENARIOS=1 run --beside-full-demo; rc=$?
 check "beside the full demo: exits 0, the platform installer runs once, on the cluster the caller named" "[ $rc = 0 ] && [ \"\$(wc -l < '$LOG/platform.calls' | tr -d ' ')\" = 1 ] && grep -qx 'CLUSTER=openagentix' '$LOG/platform.env' && grep -qx 'KUBE_CONTEXT=kind-openagentix' '$LOG/platform.env'" "rc=$rc $(tail -4 "$LOG/out")"

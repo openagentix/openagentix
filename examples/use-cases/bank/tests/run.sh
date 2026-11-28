@@ -218,7 +218,7 @@ check "ctl.sh asks as an analyst, not as the approver" "grep -q 'ASK_USER=desk:a
 
 echo "# beside the full demo (values-full-demo.yaml, composed after the values of the install you have)"
 FD="$HERE/values-full-demo.yaml"
-DEMO_FILES=(components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml)
+DEMO_FILES=(components/channels/demo-values.yaml components/schedules/demo-values.yaml components/notify/demo-values.yaml components/observability/demo-values.yaml components/knowledge/graph-demo-values.yaml components/governance/demo-values.yaml components/governance/profiles-demo-values.yaml components/governance/memory-demo-values.yaml components/control-plane/demo-values.yaml components/console/demo-values.yaml components/tools/own-service-accounts-values.yaml)
 DEMO_ARGS=(); : > "$T/demo.json"
 for f in "${DEMO_FILES[@]}"; do DEMO_ARGS+=(-f "$ROOT/$f"); yq . "$ROOT/$f" >> "$T/demo.json"; done
 jq -s 'reduce .[] as $x ({}; . * $x)' "$T/demo.json" > "$T/demo-merged.yaml"
