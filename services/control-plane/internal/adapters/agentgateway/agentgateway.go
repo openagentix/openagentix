@@ -28,6 +28,9 @@ var cm = kube.Resource{Version: "v1", Plural: "configmaps", Kind: "ConfigMap", N
 // (which has no dot) can never be equal to it.
 var userRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.[a-z]([-a-z0-9]{0,38}[a-z0-9])?$`)
 
+// classRE is a DNS label of at most 40 characters: no quote, backslash or control character can reach the entry.
+var classRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$`)
+
 // metadataKeys maps the reserved label keys the gateway carries as metadata to the metadata names, in the order written.
 var metadataKeys = []struct{ label, meta string }{{api.LabelTeam, "team"}, {api.LabelProject, "project"}}
 
@@ -47,7 +50,8 @@ func New(api API, namespace string) *Adapter { return &Adapter{api: api, ns: nam
 func (a *Adapter) Name() string { return "agentgateway" }
 
 // entry is the exact text install.sh writes: {"keyHash":"<hash>","metadata":{"user_id":"<user>"}}.
-func entry(user, hash string, labels map[string]string) string {
+// A budget class is the last member (ADR 0029), the one place the admission guard accepts it.
+func entry(user, hash string, labels map[string]string, class string) string {
 	h, _ := json.Marshal(hash)
 	u, _ := json.Marshal(user)
 	meta := `"user_id":` + string(u)
@@ -57,15 +61,22 @@ func entry(user, hash string, labels map[string]string) string {
 			meta += `,"` + k.meta + `":` + string(j)
 		}
 	}
+	if class != "" {
+		j, _ := json.Marshal(class)
+		meta += `,"budget_class":` + string(j)
+	}
 	return `{"keyHash":` + string(h) + `,"metadata":{` + meta + `}}`
 }
 
 // Register sets the entry of user. A missing ConfigMap is an error: the chart creates it.
-func (a *Adapter) Register(ctx context.Context, user, hash string, labels map[string]string) error {
+func (a *Adapter) Register(ctx context.Context, user, hash string, labels map[string]string, class string) error {
 	if !userRE.MatchString(user) {
 		return fmt.Errorf("gateway user id %q is not a valid <namespace>.<name>", user)
 	}
-	err := a.api.PatchMerge(ctx, cm, a.ns, ConfigMapName, "", kube.Object{"data": kube.Object{user: entry(user, hash, labels)}})
+	if class != "" && (class == "default" || !classRE.MatchString(class)) {
+		return fmt.Errorf("budget class %q is not a DNS label of at most 40 characters (or is the reserved name default)", class)
+	}
+	err := a.api.PatchMerge(ctx, cm, a.ns, ConfigMapName, "", kube.Object{"data": kube.Object{user: entry(user, hash, labels, class)}})
 	if err != nil {
 		return fmt.Errorf("write key entry for %s: %w", user, err)
 	}
@@ -97,6 +108,7 @@ func (a *Adapter) Entries(ctx context.Context) (map[string]keys.Entry, error) {
 		}
 		_ = json.Unmarshal([]byte(s), &e)
 		ent := keys.Entry{Hash: e.KeyHash}
+		ent.Class, _ = e.Metadata["budget_class"].(string)
 		for _, k := range metadataKeys {
 			if v, _ := e.Metadata[k.meta].(string); v != "" {
 				if ent.Labels == nil {

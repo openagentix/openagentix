@@ -545,6 +545,7 @@ components:
         violations: {type: array, items: {type: string}}
         capabilities: {type: object, additionalProperties: true}
         agentRef: {$ref: "#/components/schemas/ObjectRef"}
+        budget: {type: object, required: [class], properties: {class: {type: string, description: "The budget class written to the key entry, default when it has none, unknown when the controller cannot say (ADR 0029)"}}}
         controller: {type: object, additionalProperties: true}
     Agent:
       type: object

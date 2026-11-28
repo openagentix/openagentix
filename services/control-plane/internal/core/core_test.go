@@ -97,12 +97,13 @@ type fakeGateway struct {
 	mu       sync.Mutex
 	entries  map[string]string
 	labels   map[string]map[string]string
+	classes  map[string]string
 	failReg  error
 	regCalls int
 }
 
 func (g *fakeGateway) Name() string { return "fake" }
-func (g *fakeGateway) Register(_ context.Context, user, hash string, labels map[string]string) error {
+func (g *fakeGateway) Register(_ context.Context, user, hash string, labels map[string]string, class string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.regCalls++
@@ -110,6 +111,10 @@ func (g *fakeGateway) Register(_ context.Context, user, hash string, labels map[
 		return g.failReg
 	}
 	g.entries[user] = hash
+	if g.classes == nil {
+		g.classes = map[string]string{}
+	}
+	g.classes[user] = class
 	if g.labels == nil {
 		g.labels = map[string]map[string]string{}
 	}
@@ -134,7 +139,7 @@ func (g *fakeGateway) Entries(context.Context) (map[string]keys.Entry, error) {
 	defer g.mu.Unlock()
 	out := map[string]keys.Entry{}
 	for k, v := range g.entries {
-		out[k] = keys.Entry{Hash: v, Labels: g.labels[k]}
+		out[k] = keys.Entry{Hash: v, Labels: g.labels[k], Class: g.classes[k]}
 	}
 	return out, nil
 }

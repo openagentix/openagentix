@@ -1160,6 +1160,10 @@
                                             {detail.status.agentRef.name}</code
                                         >{:else}<span class="t3">None</span>{/if}
                                 </dd>
+                                {#if detail.status.budget}
+                                    <dt>Budget class</dt>
+                                    <dd data-testid="budget-class"><code>{detail.status.budget.class}</code></dd>
+                                {/if}
                                 {#if detail.status.capabilities}
                                     <dt>Capabilities</dt>
                                     <dd><code>{JSON.stringify(detail.status.capabilities)}</code></dd>

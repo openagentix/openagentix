@@ -120,6 +120,7 @@ controller keeps for itself is under `status.controller` and may change without 
 | `effectiveTools`, `effectiveEgress` | the tools and egress origins as applied |
 | `violations` | one sentence per refused rule |
 | `capabilities` | what the runtime can do, see "Runtime capabilities" |
+| `budget` | `budget.class`: the budget class the controller wrote to the agent's gateway key entry (ADR 0029): the class of `controlPlane.policy.budgetClasses.definitions`, `default` when there is none, `unknown` when it cannot say (the entry is cut while suspended, or the write failed). It says what was written, not that the gateway enforces it. Absent while the definition is refused |
 | `agentRef` | one generic reference to the runtime's object, for people who debug |
 | `controller` | `keySecret`, `keyFingerprint`, `appliedGeneration`, `appliedSpec` (that spec as JSON text), `gatewayUserId`, `toolServer` (the backend the profile resolved to). Internal |
 

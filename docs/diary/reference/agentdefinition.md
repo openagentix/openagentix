@@ -274,6 +274,8 @@ What a client may rely on:
 | `status.capabilities.cancelStopsLoop` | string | no | one of `yes`, `no`, `unknown` |  |
 | `status.capabilities.perRunIdentity` | string | no | one of `none`, `session`, `run`, `unknown` |  |
 | `status.capabilities.isolation` | string | no |  | How the agent is separated from others: sandbox-per-session, sandboxed-pod or container. Absent is unknown. |
+| `status.budget` | object | no |  | What the controller wrote to the agent's key entry at the model gateway (ADR 0029). class is the budget class of the entry, "default" when it has none, or "unknown" when the controller cannot say (the entry is cut while the definition is suspended, or the write failed). It says what was written, not that the gateway enforces it. Absent while the definition is refused. |
+| `status.budget.class` | string | no | max length 40 |  |
 | `status.agentRef` | object | no |  | One generic reference to the runtime's object, for people who debug. |
 | `status.agentRef.apiVersion` | string | no |  |  |
 | `status.agentRef.kind` | string | no |  |  |

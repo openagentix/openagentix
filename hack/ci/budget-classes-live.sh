@@ -12,6 +12,8 @@
 #   2 a key of class tight is refused with 429 after its limit while a key of class wide still passes
 #   3 a key with no class gets the default budget (it is refused later than tight, earlier than never)
 #   4 a refused call never reaches the model (the stand-in counts the same number of requests as there were 200 answers)
+#   6 an AgentDefinition agent gets the class the operator names for definitions (ADR 0029, slice 4): its key entry carries it, status.budget.class says
+#     so, and its key is refused with 429 at that class's limit while a chart agent of a wider class passes
 #   5 the overshoot with parallel calls: how many calls pass a bucket that has room for one more (the number is printed, not hidden)
 # It changes the cluster it runs on (the model's base URL, a stand-in, a ConfigMap of test keys) and puts both back. It refuses to run anywhere but a
 # GitHub Actions run on a kind cluster whose context is named by BUDGET_CLASSES_CI_CONTEXT (the workflow sets both), and never on kind-openagentix, the default
@@ -39,6 +41,7 @@ note() { printf '  --   %s\n' "$1"; }
 cleanup() {
   [ -z "$PF" ] || kill "$PF" 2>/dev/null
   $K delete configmap budget-proof-keys budget-proof-pool -n "$GW_NS" --ignore-not-found >/dev/null 2>&1
+  $K delete agentdefinition budget-def -n "$KNS" --ignore-not-found --wait=false >/dev/null 2>&1
   if [ -n "$ORIG_URL" ]; then
     $K patch agentgatewaymodel quickstart-model -n "$GW_NS" --type merge -p "{\"spec\":{\"baseURL\":\"$ORIG_URL\"}}" >/dev/null 2>&1
   fi
@@ -233,6 +236,47 @@ chk "15 classes and the fallback are 16 conditional entries" "$(jq '.spec.traffi
 $K apply --dry-run=server --server-side --force-conflicts -f "$TD/max.json" >/dev/null 2>"$TD/max.err" && ok "the API server accepts the policy with 16 conditional entries" || bad "the API server refused the policy with 16 entries: $(head -c 300 "$TD/max.err")"
 jq -c '.spec.traffic.rateLimit.conditional |= (.[0:15] + [{"condition":"apiKey.budget_class == \"c15\"","policy":{"local":[{"tokens":1,"unit":"Hours"}]}}] + .[15:])' "$TD/max.json" > "$TD/over.json"
 if $K apply --dry-run=server --server-side --force-conflicts -f "$TD/over.json" >/dev/null 2>"$TD/over.err"; then bad "the API server accepted 17 conditional entries (the limit of 15 classes would not come from the CRD)"; else ok "the API server refuses 17 conditional entries: $(tr '\n' ' ' < "$TD/over.err" | grep -o 'Too many[^"]*\|must have at most[^"]*' | head -1)"; fi
+
+echo "# 8 an AgentDefinition agent gets the class of definitions (controlPlane.policy.budgetClasses.definitions: tight)"
+chk "the quick start agent, made from a definition, reports the class in its status" "$($K get agentdefinition quickstart -n "$KNS" -o jsonpath='{.status.budget.class}' 2>/dev/null)" tight
+$K apply -f - >/dev/null <<YAML
+apiVersion: openagentix.io/v1alpha1
+kind: AgentDefinition
+metadata: {name: budget-def, namespace: $KNS}
+spec:
+  description: CI definition for the budget class proof
+  model: quickstart-model
+  instructions: |
+    You are a test agent. Answer in one short sentence.
+  toolProfile: lookup
+  tools: [osv_query_vulnerability]
+YAML
+DCLASS=""
+for _ in $(seq 1 90); do
+  DCLASS=$($K get agentdefinition budget-def -n "$KNS" -o jsonpath='{.status.budget.class}' 2>/dev/null)
+  [ -n "$DCLASS" ] && break
+  sleep 2
+done
+chk "status.budget.class of the new definition is the class of definitions" "$DCLASS" tight
+DENT=$($K get configmap llm-api-keys-control-plane -n "$GW_NS" -o json | jq -c '.data["kagent.budget-def"]|fromjson|.metadata')
+note "the definition's key entry (hash left out): $DENT"
+chk "its key entry carries the class as the last member" "$(jq -c 'keys_unsorted' <<<"$DENT")" '["user_id","budget_class"]'
+chk "and the class is tight" "$(jq -r '.budget_class' <<<"$DENT")" tight
+# the key of the definition: a Secret the controller made (this script runs as the CI cluster's admin and reads it; the controller never does)
+DSEC=$($K get secrets -n "$KNS" -l openagentix.io/agent-definition=budget-def -o jsonpath='{.items[0].metadata.name}')
+{ printf 'Authorization: Bearer '; $K get secret -n "$KNS" "$DSEC" -o jsonpath='{.data.OPENAI_API_KEY}' | base64 -d; printf '\n'; } > "$TD/h-def"; chmod 600 "$TD/h-def"
+for _ in $(seq 1 45); do call "$TD/h-def" def-first; [ "$(st def-first)" != 401 ] && break; sleep 2; done
+DA=0; [ "$(st def-first)" = 200 ] && DA=1
+s=$(st def-first)
+for i in $(seq 1 40); do [ "$s" = 429 ] && break; call "$TD/h-def" "def-$i"; s=$(st "def-$i"); [ "$s" = 200 ] && DA=$((DA+1)); done
+note "definition agent: $DA calls admitted, then HTTP $s (the chart agent of the same class admitted $TA, the default $NA)"
+chk "the key of the definition is refused with 429 at the class limit" "$s" 429
+[ "$DA" -ge 1 ] && [ "$DA" -lt "$NA" ] && ok "it was admitted $DA time(s), fewer than the default budget gives ($NA): the class applied, not the default" || bad "the definition's key was admitted $DA time(s) (the default gives $NA)"
+call "$TD/h-budget-wide" wide-def; chk "a chart agent of the wider class still passes while the definition's agent is refused" "$(st wide-def)" 200
+REF2=0; for i in $(seq 1 5); do call "$TD/h-def" "defrefused-$i"; [ "$(st "defrefused-$i")" = 429 ] && REF2=$((REF2+1)); done
+chk "5 more calls with the spent definition key: all 429" "$REF2" 5
+EVT2=$($K get --raw "/api/v1/namespaces/$PNS/services/budget-recorder:8080/proxy/events")
+chk "the model saw none of them" "$(jq '[.[]|select(.text|test("budget-proof defrefused-"))]|length' <<<"$EVT2")" 0
 
 echo
 echo "passed=$PASS failed=$FAIL"

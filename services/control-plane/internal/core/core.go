@@ -5,6 +5,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -981,13 +982,14 @@ func (a *attempt) apply() error {
 	held := a.st.Controller.HeldKeyHash
 	if !p.Suspended && held != "" && reg.Hash == "" {
 		// resume: the hash that was held is registered again, so the same key works and no key is made
-		if err := c.cfg.Gateway.Register(ctx, p.GatewayUserID, held, p.Labels); err != nil {
+		if err := c.cfg.Gateway.Register(ctx, p.GatewayUserID, held, p.Labels, p.BudgetClass); err != nil {
+			a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 			a.set(api.CondKeyReady, "False", "KeyFailed", err.Error())
 			a.set(api.CondApplied, "False", "NotApplied", "waiting for the gateway key")
 			a.set(api.CondReady, "False", "NotApplied", "")
 			return a.finish("key_failed", retryExp, "secret", p.KeySecret, "err", err)
 		}
-		reg, adopted = keys.Entry{Hash: held, Labels: p.Labels}, false
+		reg, adopted = keys.Entry{Hash: held, Labels: p.Labels, Class: p.BudgetClass}, false
 		entries[p.GatewayUserID] = reg
 		known = keys.Fingerprint(held)
 	}
@@ -999,10 +1001,11 @@ func (a *attempt) apply() error {
 		res, err = keys.Ensure(ctx, keys.Params{
 			Namespace: keyNS, SecretName: p.KeySecret, DataKey: rt.KeyDataKey(), User: p.GatewayUserID,
 			Labels: keyLabels, Owner: keyOwner, Registered: reg.Hash, Known: known,
-			EntryLabels: p.Labels, RegisteredLabels: reg.Labels, Adopted: adopted, Hold: p.Suspended,
+			EntryLabels: p.Labels, RegisteredLabels: reg.Labels, EntryClass: p.BudgetClass, RegisteredClass: reg.Class, Adopted: adopted, Hold: p.Suspended,
 		}, c.cfg.Secrets, c.cfg.Gateway, c.cfg.Mint)
 	}
 	if err != nil {
+		a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 		a.set(api.CondKeyReady, "False", "KeyFailed", err.Error())
 		a.set(api.CondApplied, "False", "NotApplied", "waiting for the gateway key")
 		a.set(api.CondReady, "False", "NotApplied", "")
@@ -1010,8 +1013,10 @@ func (a *attempt) apply() error {
 	}
 	a.st.Controller.KeySecret, a.st.Controller.KeyFingerprint = p.KeySecret, res.Fingerprint
 	if p.Suspended {
+		a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown} // the entry is cut: the gateway holds no class for this agent
 		// the hash is remembered first, the entry cut second: an interruption in between loses nothing
 		if err := a.holdKey(p.GatewayUserID, res.Hash, entries); err != nil {
+			a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 			a.set(api.CondKeyReady, "False", "KeyFailed", err.Error())
 			a.set(api.CondApplied, "False", "NotApplied", "waiting for the gateway key")
 			a.set(api.CondReady, "False", "NotApplied", "")
@@ -1020,7 +1025,8 @@ func (a *attempt) apply() error {
 		a.set(api.CondKeyReady, "False", "KeySuspended", "Secret "+p.KeySecret+" exists; the gateway does not know its hash while the definition is suspended")
 	} else {
 		a.st.Controller.HeldKeyHash = ""
-		entries[p.GatewayUserID] = keys.Entry{Hash: res.Hash, Labels: p.Labels}
+		a.st.Budget = &api.BudgetStatus{Class: cmp.Or(p.BudgetClass, api.BudgetDefault)}
+		entries[p.GatewayUserID] = keys.Entry{Hash: res.Hash, Labels: p.Labels, Class: p.BudgetClass}
 		a.set(api.CondKeyReady, "True", "KeyReady", "Secret "+p.KeySecret)
 	}
 	// the objects carry the fingerprint (they must roll when the key is replaced), so they are rendered again with it
@@ -1181,6 +1187,7 @@ func (a *attempt) refused(violations []string, earlier []string) error {
 	a.st.Violations = violations
 	a.set(api.CondAccepted, "False", "PolicyViolation", fmt.Sprintf("%d rule(s) refused; see status.violations", len(violations)))
 	if !a.running {
+		a.st.Budget = nil // nothing ran, so there is no entry to report
 		a.unknownIfAbsent(api.CondKeyReady, "NotAccepted")
 		a.set(api.CondApplied, "False", "NotAccepted", "the definition is refused; nothing is running")
 		a.set(api.CondReady, "False", "NotAccepted", "")
@@ -1267,16 +1274,36 @@ func (a *attempt) keyForPrevious(pp plan.Plan) error {
 		return err
 	}
 	if pp.Suspended {
-		return a.holdKey(pp.GatewayUserID, entries[pp.GatewayUserID].Hash, entries)
+		if err := a.holdKey(pp.GatewayUserID, entries[pp.GatewayUserID].Hash, entries); err != nil {
+			a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
+			return err
+		}
+		a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown} // the entry is cut: the gateway holds no class for this agent
+		return nil
 	}
 	if held := a.st.Controller.HeldKeyHash; held != "" {
 		if entries[pp.GatewayUserID].Hash == "" {
-			if err := a.c.cfg.Gateway.Register(a.ctx, pp.GatewayUserID, held, pp.Labels); err != nil {
+			if err := a.c.cfg.Gateway.Register(a.ctx, pp.GatewayUserID, held, pp.Labels, pp.BudgetClass); err != nil {
+				a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 				return err
 			}
-			entries[pp.GatewayUserID] = keys.Entry{Hash: held, Labels: pp.Labels}
+			entries[pp.GatewayUserID] = keys.Entry{Hash: held, Labels: pp.Labels, Class: pp.BudgetClass}
 		}
 		a.st.Controller.HeldKeyHash = ""
+	}
+	// The entry follows the operator's class while the previous generation keeps running: a different class is written again with the same hash.
+	if cur, ok := entries[pp.GatewayUserID]; ok && cur.Hash != "" && cur.Class != pp.BudgetClass {
+		if err := a.c.cfg.Gateway.Register(a.ctx, pp.GatewayUserID, cur.Hash, pp.Labels, pp.BudgetClass); err != nil {
+			a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
+			return err
+		}
+		entries[pp.GatewayUserID] = keys.Entry{Hash: cur.Hash, Labels: pp.Labels, Class: pp.BudgetClass}
+		cur = entries[pp.GatewayUserID]
+	}
+	if cur, ok := entries[pp.GatewayUserID]; ok && cur.Hash != "" {
+		a.st.Budget = &api.BudgetStatus{Class: cmp.Or(cur.Class, api.BudgetDefault)}
+	} else {
+		a.st.Budget = &api.BudgetStatus{Class: api.BudgetUnknown}
 	}
 	return nil
 }
@@ -1296,7 +1323,7 @@ func (a *attempt) removeRunning(violations []string) error {
 	if c.ps != nil && c.ps.entries != nil {
 		delete(c.ps.entries, a.user)
 	}
-	a.st.AgentRef, a.st.Endpoint, a.st.Revision = nil, nil, ""
+	a.st.AgentRef, a.st.Endpoint, a.st.Revision, a.st.Budget = nil, nil, "", nil
 	a.st.EffectiveTools, a.st.EffectiveEgress = nil, nil
 	a.st.Controller = api.ControllerState{}
 	a.set(api.CondKeyReady, "Unknown", "NotAccepted", "")
@@ -1322,6 +1349,10 @@ func cloneStatus(s api.Status) api.Status {
 	if s.Capabilities != nil {
 		cp := *s.Capabilities
 		s.Capabilities = &cp
+	}
+	if s.Budget != nil {
+		b := *s.Budget
+		s.Budget = &b
 	}
 	return s
 }

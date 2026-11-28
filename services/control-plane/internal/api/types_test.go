@@ -65,6 +65,7 @@ func TestStatusContractSplitsPublicFromController(t *testing.T) {
 		Revision:     "abc123abc123",
 		Endpoint:     &Endpoint{Protocol: "a2a", URL: "http://gate/agents/kagent/x", ProtocolVersion: "1.0"},
 		Capabilities: &Capabilities{Approvals: Yes},
+		Budget:       &BudgetStatus{Class: "default"},
 		AgentRef:     &ObjectRef{APIVersion: "v", Kind: "K", Name: "n"},
 		Controller:   ControllerState{KeySecret: "s", KeyFingerprint: "f", AppliedGeneration: 2, AppliedSpec: "{}", GatewayUserID: "kagent.x", ToolServer: "ts"},
 	}

@@ -362,7 +362,13 @@ type Policy struct {
 	ReservedNames []string `json:"reservedNames"`
 	// SuspendAll is the operator's stop switch: every definition is treated as suspended.
 	SuspendAll bool `json:"suspendAll"`
+	// BudgetClass is the one budget class of every definition (ADR 0029): the name written into the gateway key entry of each agent made from a
+	// definition. Empty is the default budget. The operator sets it; a definition has no field for it.
+	BudgetClass string `json:"budgetClass,omitempty"`
 }
+
+// BudgetClassRE is a DNS label of at most 40 characters; "default" is reserved (ADR 0029).
+var BudgetClassRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$`)
 
 func allowed(list []string, v string) bool {
 	return slices.Contains(list, "*") || slices.Contains(list, v)
@@ -503,6 +509,9 @@ func LoadPolicy(path string) (*Policy, error) {
 		if !reservedRE.MatchString(n) {
 			errs = append(errs, fmt.Errorf("reservedNames entry %q must be a name or namespace/name", n))
 		}
+	}
+	if p.BudgetClass != "" && (p.BudgetClass == "default" || !BudgetClassRE.MatchString(p.BudgetClass)) {
+		errs = append(errs, fmt.Errorf("budgetClass %q must be a DNS label of at most 40 characters and not \"default\"", p.BudgetClass))
 	}
 	errs = append(errs, p.validateRuntimes()...)
 	if err := errors.Join(errs...); err != nil {

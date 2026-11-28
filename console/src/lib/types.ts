@@ -81,7 +81,7 @@ export interface Endpoint {
 
 /**
  * The public status contract (ADR 0012): conditions (Accepted and Ready are the contract, the rest informational),
- * observedGeneration, endpoint, revision, effectiveTools, effectiveEgress, violations, capabilities, agentRef.
+ * observedGeneration, endpoint, revision, effectiveTools, effectiveEgress, violations, capabilities, agentRef, budget.
  * `controller` is internal and may change without notice: shown collapsed, never relied on.
  */
 export interface Status {
@@ -94,6 +94,8 @@ export interface Status {
     violations: string[];
     capabilities?: Record<string, unknown>;
     agentRef?: ObjectRef;
+    /** status.budget (ADR 0029): the budget class written to the agent's gateway key entry; "default" and "unknown" are not class names. Read only. */
+    budget?: { class: string };
     controller?: Record<string, unknown>;
 }
 

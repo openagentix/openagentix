@@ -258,6 +258,11 @@ spec:
                     cancelStopsLoop: {type: string, enum: ["yes", "no", "unknown"]}
                     perRunIdentity: {type: string, enum: [none, session, run, unknown]}
                     isolation: {type: string, description: "How the agent is separated from others: sandbox-per-session, sandboxed-pod or container. Absent is unknown."}
+                budget:
+                  type: object
+                  description: "What the controller wrote to the agent's key entry at the model gateway (ADR 0029). class is the budget class of the entry, \"default\" when it has none, or \"unknown\" when the controller cannot say (the entry is cut while the definition is suspended, or the write failed). It says what was written, not that the gateway enforces it. Absent while the definition is refused."
+                  properties:
+                    class: {type: string, maxLength: 40}
                 agentRef:
                   type: object
                   description: One generic reference to the runtime's object, for people who debug.

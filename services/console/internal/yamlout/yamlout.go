@@ -306,6 +306,10 @@ func Render(m Meta, spec model.Spec, st *model.Status) string {
 		o.list(2, "effectiveTools", st.EffectiveTools)
 		o.list(2, "effectiveEgress", st.EffectiveEgress)
 		o.list(2, "violations", st.Violations)
+		if st.Budget != nil {
+			o.line(2, "budget:")
+			o.line(4, "class: %s", Scalar(st.Budget.Class))
+		}
 	}
 	return o.b.String()
 }

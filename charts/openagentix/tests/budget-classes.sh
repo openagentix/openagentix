@@ -27,8 +27,12 @@ eq "full demo: explicit empty classes render byte-identical" "$(helm template op
 if [ -n "${OA_BASELINE_CHART:-}" ]; then   # the chart as it was before this feature (CI: a checkout of main)
   BL() { helm template openagentix "$OA_BASELINE_CHART" -n openagentix-system "$@" 2>&1 | shasum -a 256; }
   eq "the default render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$B0" "$(BL)"
-  eq "the quick start render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$BQ0" "$(BL -f "$RCQ")"
-  eq "the full demo render is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$BF0" "$(BL "${CP9[@]}" --set gateway.stubModel.enabled=true)"
+  # With the control plane on, the render holds the AgentDefinition CRD, which gained status.budget (ADR 0029, slice 4). The CRD is compared with that one
+  # property removed, so any other change to it fails; every other document is compared as it is.
+  NOBUDGET() { helm template openagentix "$1" -n openagentix-system "${@:2}" 2>&1 | yq -c 'select(.!=null)' | jq -c 'if .kind=="CustomResourceDefinition" then del(.spec.versions[]?.schema.openAPIV3Schema.properties.status.properties.budget) else . end' | shasum -a 256; }
+  eq "the quick start render, with status.budget removed from the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOBUDGET "$CHART" -f "$RCQ")" "$(NOBUDGET "$OA_BASELINE_CHART" -f "$RCQ")"
+  eq "the full demo render, with status.budget removed from the CRD, is byte-identical to the baseline chart (OA_BASELINE_CHART)" "$(NOBUDGET "$CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)" "$(NOBUDGET "$OA_BASELINE_CHART" "${CP9[@]}" --set gateway.stubModel.enabled=true)"
+  eq "the CRD of the quick start render holds the status.budget property" "$(helm template openagentix "$CHART" -n openagentix-system -f "$RCQ" | yq -c 'select(.kind=="CustomResourceDefinition")' | jq -c '.spec.versions[].schema.openAPIV3Schema.properties.status.properties.budget|keys|join(",")')" '"description,properties,type"'
 fi
 GUARD_CM='.[]|select(.kind=="ValidatingAdmissionPolicy" and .metadata.name=="openagentix-control-plane-guard-configmaps")'
 DG0=$(docs "${CP9[@]}")
@@ -144,3 +148,11 @@ bc_fail "gateway off: a class that is a map is refused" "budgetClass" "${GOFF[@]
 bc_fail "gateway off: a class that no class list defines is refused" "agents[a]: budgetClass \"wide\"" "${GOFF[@]}" --set-json "agents=$HOSTILE_C"
 HOSTILE_D='[{"name":"a","description":"x","model":"claude-haiku","systemPrompt":"x","tools":[]}]'
 eq "gateway off: an agent with no class renders" "$([ -z "$(render_err "${GOFF[@]}" --set-json "agents=$HOSTILE_D")" ] && echo rendered || echo failed)" rendered
+
+echo "# budget classes: the class of definitions reaches the controller's policy (ADR 0029, slice 4)"
+PJ='.[]|select(.kind=="ConfigMap" and .metadata.name=="openagentix-control-plane-policy")|.data["policy.json"]|fromjson'
+eq "definitions empty: the controller's policy has no budgetClass" "$(q "$DG0" "$PJ|has(\"budgetClass\")")" false
+D4=$(docs "${CP9[@]}" "${DEFS[@]}" --set controlPlane.policy.budgetClasses.definitions=bank-agents)
+eq "definitions=bank-agents: the controller's policy names it" "$(q "$D4" "$PJ|.budgetClass")" bank-agents
+eq "definitions=bank-agents: nothing else in the policy file changes" "$(q "$D4" "$PJ|del(.budgetClass)|tojson" | shasum -a 256)" "$(q "$DG0" "$PJ|tojson" | shasum -a 256)"
+eq "definitions=bank-agents: the controller rolls on the change (the policy checksum is on the pod template)" "$([ "$(q "$D4" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")|.spec.template.metadata.annotations["checksum/policy"]')" != "$(q "$DG0" '.[]|select(.kind=="Deployment" and .metadata.name=="openagentix-control-plane")|.spec.template.metadata.annotations["checksum/policy"]')" ] && echo differs || echo same)" differs
