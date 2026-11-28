@@ -1,6 +1,7 @@
 {{- if .Values.mcp.enabled }}
 {{- $m := .Values.mcp }}
 {{- $_ := include "oa.profilesCheck" . }}
+{{- $_ := include "oa.toolAccountsCheck" . }}
 apiVersion: toolhive.stacklok.dev/v1beta1
 kind: MCPGroup
 metadata:
@@ -115,6 +116,13 @@ spec:
       inline:
         policies: {{ toJson $policies }}
   outgoingAuth: {source: discovered}
+  {{- if $m.virtual.ownServiceAccounts }}
+  # ADR 0031: the account is the chart's (below). With the field set, the tool group operator makes no ServiceAccount, Role or RoleBinding for it.
+  serviceAccount: {{ printf "openagentix-%s" $m.virtual.name }}
+  {{- end }}
+{{- if $m.virtual.ownServiceAccounts }}
+{{ include "oa.toolServerAccount" (dict "root" . "name" $m.virtual.name) }}
+{{- end }}
 {{- /* Tools for container agents (ADR 0019): profiles listed in controlPlane.containerAgents.toolProfiles get a second object below (variant
 "workload") with the same filter and code mode, and an incomingAuth of its own. Empty list (the default): nothing changes. */}}
 {{- $wl := include "oa.caToolProfiles" . | fromJsonArray }}
@@ -223,6 +231,12 @@ spec:
         policies: {{ $allow | toJson }}
     {{- end }}
   outgoingAuth: {source: discovered}
+  {{- if $m.virtual.ownServiceAccounts }}
+  serviceAccount: {{ printf "openagentix-%s-%s%s" $m.virtual.name $p.name (ternary "-workload" "" (ne $v "")) }}
+  {{- end }}
+{{- if $m.virtual.ownServiceAccounts }}
+{{ include "oa.toolServerAccount" (dict "root" $ "name" (printf "%s-%s%s" $m.virtual.name $p.name (ternary "-workload" "" (ne $v "")))) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
