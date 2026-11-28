@@ -36,7 +36,7 @@ The comparison below was made from the vendors' public documentation on 2026-11-
 | Builder | a no-code or low-code studio, a command-line tool, resources as code | **in progress**: ADR 0007 |
 | Models | a catalog, routing, failover | **built**: gateway, keys, failover, prompt caching. **Planned**: routing by rules and by a router (ADR 0008) |
 | Quality | evaluation, simulation, red teaming, prompt optimisation | **missing** |
-| Safety | content safety, prompt-attack detection, PII handling, egress control, human approval, deterministic tool policy | **built**: egress allowlists, tool policy. **Missing**: content guardrails, PII, approvals |
+| Safety | content safety, prompt-attack detection, PII handling, egress control, human approval, deterministic tool policy | **built**: egress allowlists, tool policy. **Missing**: content guardrails, PII. **Approvals**: in the system of record that owns the act (ADR 0028); the platform does not hold tool calls |
 | Observability and cost | traces, metrics, cost, budgets, alerts | **built**: traces, cost and tokens per agent, token budgets. **Planned**: FinOps and budgets (ADR 0009) |
 | Lifecycle | versions, environments, pinned endpoints | **missing** |
 | Channels | chat products, schedules | **built**: Telegram, signed webhooks, schedules. **Untested**: Slack |
@@ -83,7 +83,7 @@ Sizes are relative. Each release has its own decision records before code.
 | Release | Theme | Adds | Depends on |
 |---|---|---|---|
 | **0.3** | **Control plane and console** | `AgentDefinition`, the controller, platform policy, the web console with the agent builder and playground; then the other kinds: `Schedule`, `Channel` and `Trigger`, `ModelProvider` and `ModelRoute` (static and rules), `ToolServer` and `ToolProfile`, `KnowledgeCollection` and `KnowledgeSource`, `Skill` with the organisation registry, `ObservabilitySettings`, `Budget`, costs and traces pages | ADR 0007, 0008, 0009 |
-| **0.4** | **Trust** | an identity per agent, a credential store for outbound access and acting on behalf of a user, guardrails (prompt attacks, content, PII) at the model and tool gateways, human approval for chosen tool calls, console login with OpenID Connect | platform policy, gate rule reload |
+| **0.4** | **Trust** | an identity per agent, a credential store for outbound access and acting on behalf of a user, guardrails (prompt attacks, content, PII) at the model and tool gateways, a convention for approvals in the system of record (ADR 0028; no platform hold on tool calls), console login with OpenID Connect | platform policy, gate rule reload |
 | **0.5** | **Lifecycle** | immutable agent versions, environments, canary releases, registries for agents, tools and MCP servers, agent blueprints | stable `AgentDefinition`, skill registry |
 | **0.6** | **Quality** | datasets, evaluation suites and runs, simulation, red-team runs, a release gate on evaluation results, the model router service with measured savings | versions, traces |
 | **0.7** | **Teams** | tenants, quotas, budgets in money per team, showback, more than one namespace | identity and login |
