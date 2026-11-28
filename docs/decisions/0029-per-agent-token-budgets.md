@@ -1,9 +1,11 @@
 # ADR 0029: per-agent token budgets in the one gateway policy, by budget class
 
-Status: Proposed (the slice 2 spike ran; see "Spike results")
+Status: Accepted (2026-11-28)
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/229 (reference use cases; the follow-up named in ADR 0026 section D)
 Replaces: none. The first slice of the `Budget` kind of ADR 0009, done as chart values and operator policy, with no new kind, no new resource field and no new component. See "Relation to other records".
+
+The 7-day review period was waived by the maintainer on 2026-11-28; an independent review was done and its changes are in this text. The owner's decisions on the open questions are at the end, under "Decisions on the open questions".
 
 The operator names a few budget classes in chart values, each a token limit per time unit, counted per agent or shared by every agent of the class. A chart agent names a class in its values; every `AgentDefinition` gets the one class the operator sets for definitions. A definition cannot choose its class. The chart renders one conditional rate limit entry per class in the one gateway policy, and the agent's key entry carries the class name. Agents that name no class keep today's budget. Off by default: with no class, the chart renders byte for byte what it renders today. Nothing here is built. The gateway behaviour it relies on was shown in a spike on a throwaway cluster ("Spike results"); the chart render, the guard and the controller are *unverified* until their slices are done.
 
@@ -211,13 +213,15 @@ Each slice is one pull request, tests first.
 - *Unverified*: the number of buckets a replica keeps; retry of an upstream 429 with a conditional limit; two replicas behind the Service; overshoot with a slow or streaming model; two `local` entries in one conditional policy; the chart render and the guard of this record.
 - Read again before quoting: the agentgateway version pinned by the installer and its `rateLimit` fields.
 
-## Questions for the maintainer
+## Decisions on the open questions
 
-1. **Budget classes now, as the first slice of `Budget`, instead of waiting for the kind?** Recommended: yes. The spike shows the gateway does it in the one policy, and the reference use cases need a brake before a real model runs unattended. Docs call it a soft limit, never a spend cap.
-2. **One operator-chosen class for all definitions, no spec field?** Recommended: yes. The spike confirmed that a key gets a fresh bucket the first time it meets a class, so a class chosen in a spec could be switched to get more.
-3. **An optional per-minute entry in a class, beside the hourly one, to stop bursts sooner?** Recommended: yes if slice 3 shows that two `local` entries in one conditional policy both apply; otherwise drop it.
-4. **The default budget stays 1,000,000 tokens per hour per key?** Recommended: yes for compatibility. The recorded runs fit it (one bank run, two equipment runs or about four root-cause runs an hour per key); the use case values set a class.
-5. **Money limits.** Recommended: out of this record. They need spend read back from the gateway's metrics and a controller that lowers a limit, which ADR 0009 describes; and any price list is owner-gated.
+These were the open questions of the proposed record. The owner decided them on 2026-11-28, taking every recommended answer, as below.
+
+1. **Budget classes now, as the first slice of `Budget`, instead of waiting for the kind?** Decided, as recommended: yes. The spike shows the gateway does it in the one policy, and the reference use cases need a brake before a real model runs unattended. Docs call it a soft limit, never a spend cap.
+2. **One operator-chosen class for all definitions, no spec field?** Decided, as recommended: yes. The spike confirmed that a key gets a fresh bucket the first time it meets a class, so a class chosen in a spec could be switched to get more.
+3. **An optional per-minute entry in a class, beside the hourly one, to stop bursts sooner?** Decided, as recommended: yes if slice 3 shows that two `local` entries in one conditional policy both apply; otherwise drop it.
+4. **The default budget stays 1,000,000 tokens per hour per key?** Decided, as recommended: yes for compatibility. The recorded runs fit it (one bank run, two equipment runs or about four root-cause runs an hour per key); the use case values set a class.
+5. **Money limits.** Decided, as recommended: out of this record. They need spend read back from the gateway's metrics and a controller that lowers a limit, which ADR 0009 describes; and any price list is owner-gated.
 
 ## Review notes
 
