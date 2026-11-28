@@ -222,6 +222,9 @@ var workloadResponseHeaders = map[string]bool{
 
 // modifyResponse rewrites the agent card of a listed agent; every other response passes through untouched.
 func (h *handler) modifyResponse(resp *http.Response) error {
+	if ec, ok := resp.Request.Context().Value(keyEvent).(*eventCall); ok {
+		return h.rewriteEventResponse(resp, ec)
+	}
 	t, _ := resp.Request.Context().Value(keyTarget).(*target)
 	if t == nil {
 		return nil

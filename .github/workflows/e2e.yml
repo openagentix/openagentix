@@ -16,6 +16,11 @@ on:
       - services/**
       - console/**
       - hack/ci/smoke.sh
+      - hack/ci/msgid-scope.sh
+      - hack/ci/event-live.sh
+      - hack/ci/event_live.py
+      - hack/ci/event-recorder.py
+      - hack/ci/event-ci-values.yaml
       - hack/ci/diagnostics-live.sh
       - hack/ci/diagnostics-ci-values.yaml
       - hack/ci/rca-live.sh
@@ -69,6 +74,10 @@ on:
         description: 'Run the live proof of the pod root-cause agent (examples/use-cases/software-org, issue #229) instead of the profiles: the quick start plus the use case, the stub model with its scenarios, a real agent session through the A2A gate, tools/oa-eval'
         type: boolean
         default: false
+      event_triggers:
+        description: 'Run the live proof of event callers (ADR 0027, issue #229) instead of the profiles: the quick start plus hack/ci/event-ci-values.yaml, the stub model, a recording stand-in between the A2A gate and the runtime'
+        type: boolean
+        default: false
       adr_spikes:
         description: 'Run the design spikes of ADR 0029 (a, the model gateway) and ADR 0027 (b, the runtime behind the A2A gate), or both (issue #229, hack/spikes/adr-spikes.sh) instead of the profiles. It observes a throwaway cluster and never gates a merge'
         type: choice
@@ -85,7 +94,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && inputs.adr_spikes == 'none') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none') }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -134,6 +143,10 @@ jobs:
           start=$(date +%s)
           hack/ci/smoke.sh 2>&1 | tee smoke.log
           echo "smoke_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+      - name: message id scope of the runtime (ADR 0027, per user id; a repeat with returnImmediately)
+        run: |
+          set -o pipefail
+          hack/ci/msgid-scope.sh 2>&1 | tee msgid-scope.log
       - name: demo walkthrough (hack/demo.sh)
         id: demo
         env:
@@ -186,6 +199,10 @@ jobs:
             echo "### Smoke test"
             echo '```'
             cat smoke.log 2>/dev/null || true
+            echo '```'
+            echo "### Message id scope (ADR 0027)"
+            echo '```'
+            cat msgid-scope.log 2>/dev/null || true
             echo '```'
             echo "### Demo walkthrough (hack/demo.sh)"
             echo '```'
@@ -722,6 +739,79 @@ jobs:
             kind-logs
           retention-days: 14
           if-no-files-found: ignore
+
+  # Opt-in (workflow_dispatch with the input `event_triggers`; EVENT_LIVE=1 for the script): event callers on a real cluster (ADR 0027, issue #229). The quick start plus
+  # hack/ci/event-ci-values.yaml (two event callers and one plain caller), the stub model, no key, no token. hack/ci/event-live.sh puts a recording stand-in between the
+  # A2A gate and the runtime (a second container of the gate pod), then starts runs as an event caller and checks what the stand-in received, the refusals, the rate
+  # limit, the audit lines and the logs. It also runs the check of the runtime's message id scope. The run is scripted by the stub model: it proves the wiring.
+  e2e-event-triggers:
+    name: e2e (event triggers, ADR 0027)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.event_triggers }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: install (PROFILE=quickstart plus the event values, no key, no token)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/event-ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: message id scope of the runtime
+        run: |
+          set -o pipefail
+          hack/ci/msgid-scope.sh 2>&1 | tee msgid-scope.log
+      - name: live check of event callers
+        env:
+          EVENT_LIVE: "1"
+          EVENT_OUT: event-out
+        run: |
+          set -o pipefail
+          hack/ci/event-live.sh 2>&1 | tee event-live.log
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## Event callers on a real cluster (ADR 0027, issue #229)"
+            echo "The stub model answers: the run is SCRIPTED. The recording stand-in sits between the gate and the controller."
+            echo '```'
+            cat msgid-scope.log 2>/dev/null || echo "the message id scope check did not run"
+            echo '```'
+            echo '```'
+            cat event-live.log 2>/dev/null || echo "the live check did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true
+          echo "--- the gate (audit lines hold no message text) and the stand-in"
+          kubectl logs -n openagentix-gateway -l app=a2a-gate -c a2a-gate --tail=300 | cut -c1-400 || true
+          kubectl logs -n openagentix-gateway -l app=a2a-gate -c recorder --tail=20 || true
+          kubectl logs -n kagent deploy/kagent-controller --tail=100 | cut -c1-400 || true
+          kind export logs ./kind-logs --name openagentix || true
+      - name: upload the report and the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: event-triggers
+          path: |
+            event-out/report.json
+            event-live.log
+            msgid-scope.log
+            install.log
+            kind-logs
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Opt-in (workflow_dispatch with the input `adr_spikes`): two design spikes on the quick start, the stub model only (issue #229). Spike A reads what the
   # model gateway does with a per-key class in a conditional rate limit (ADR 0029, PR #262). Spike B reads what the runtime behind the A2A gate does with a

@@ -58,6 +58,8 @@ type Options struct {
 	// that agent gets 503, for every caller. All container agents together also share one pool of half of
 	// MaxInFlight (at least 1), so they can never take the slots the built-in agents need.
 	WorkloadMaxInFlight int
+	// Now is the clock of the event callers' rate buckets (default time.Now). Tests move it.
+	Now func() time.Time
 
 	// Bring your own A2A agent (routes.go). All off while RoutesFile is empty.
 	RoutesFile        string          // the controller-written list of container agents
@@ -82,7 +84,10 @@ const (
 // request-scoped values for the proxy's Rewrite
 type ctxKey int
 
-const keyUser ctxKey = 1
+const (
+	keyUser  ctxKey = 1
+	keyEvent ctxKey = 3 // an *eventCall: the request is an accepted event call (event.go)
+)
 
 type userVal struct {
 	id  string
@@ -98,6 +103,9 @@ type handler struct {
 	workPool   chan struct{} // all container agents together: half of MaxInFlight
 	agentMu    sync.Mutex
 	agentSlots map[string]chan struct{} // per container agent, created on first use
+
+	evMu   sync.Mutex
+	events map[string]*eventState // per event caller (ADR 0027): rate bucket and open calls, in this process
 }
 
 // New builds the gate handler.
@@ -160,7 +168,11 @@ var stripHeaders = []string{
 
 func (h *handler) rewrite(up *url.URL) func(*httputil.ProxyRequest) {
 	return func(pr *httputil.ProxyRequest) {
-		if t, ok := pr.In.Context().Value(keyTarget).(*target); ok {
+		if ec, ok := pr.In.Context().Value(keyEvent).(*eventCall); ok {
+			// an event call: the runtime gets the gate's own headers, never the caller's
+			pr.SetURL(up)
+			pr.Out.Header = eventRequestHeaders(ec)
+		} else if t, ok := pr.In.Context().Value(keyTarget).(*target); ok {
 			// a listed agent: scheme, host and path come from the fixed template and the route, never from the request
 			pr.SetURL(&url.URL{Scheme: "http", Host: t.host})
 			pr.Out.URL.Path, pr.Out.URL.RawPath = t.path, ""
@@ -234,6 +246,8 @@ func deny(w http.ResponseWriter, code int, text string) {
 // fields of the audit line, filled in as the request goes
 type auditRec struct {
 	caller, agent, userID, contextID, traceID, reason, rpc string
+	event                                                  bool   // the caller has an event block: the line gets event_id
+	eventID                                                string // the caller's messageId once the shape check passed, else "invalid"
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -296,6 +310,19 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 		return
 	}
 	a.caller = caller.Name
+	var evState *eventState
+	var evRateOK bool
+	var evRetry int
+	if caller.Event != nil {
+		// every authenticated request of an event caller is charged, refusals included (ADR 0027, step 4)
+		a.event, a.eventID = true, "invalid"
+		// An answer that is sent before the body is read would otherwise wait for the rest of it (the server discards the unread
+		// body first), and the request would hold its shared slot while a slow sender stalls. The connection of an event
+		// caller is closed after every answer.
+		w.Header().Set("Connection", "close")
+		evState = h.eventState(caller)
+		evRateOK, evRetry = evState.take(h.now(), caller.Event.Rate)
+	}
 	if len(claimed) > 0 {
 		// Recorded only now, after authentication: an unauthenticated caller cannot put a chosen string in the log.
 		// Hashed by default, and cut short in any case.
@@ -343,6 +370,11 @@ func (h *handler) serve(w *recorder, r *http.Request, a *auditRec) {
 		}
 		uv = userVal{id: id, set: true}
 		a.userID = id
+	}
+
+	if caller.Event != nil {
+		h.serveEvent(w, r, a, caller, evState, evRateOK, evRetry, ns, name, route, uv)
+		return
 	}
 
 	// 4. the body. Only its start is read (SniffBytes, within SniffTimeout), to learn the JSON-RPC method and the
@@ -706,6 +738,9 @@ func (h *handler) writeAudit(r *http.Request, a *auditRec, status int, d time.Du
 	}
 	if a.reason != "" {
 		attrs = append(attrs, "reason", a.reason)
+	}
+	if a.event {
+		attrs = append(attrs, "event_id", a.eventID) // the sender's messageId, never the text
 	}
 	h.o.Audit.Info("audit", attrs...)
 }

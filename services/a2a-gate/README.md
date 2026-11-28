@@ -87,6 +87,8 @@ The body of an error is `{"error":"<text>"}`; the `reason` is only in the audit 
 | 401 | `no_token`, `bad_token` | no, more than one, or an invalid bearer value |
 | 403 | `unknown_caller`, `agent`, `user_id`, `method` | no rule for the caller, agent or user id outside the rule, method not allowed or not found |
 | 403 | `path`, `grpc`, `memory`, `frame` | route not allowed, gRPC on an A2A route, memory RPC without `memory: true`, bad memory frame |
+| 403 | `message_shape` | an event caller's message is not exactly the shape its rule allows, or the request has `Content-Encoding` |
+| 429 | `rate`, `caller_busy` | an event caller is over its rate, or has `maxInFlight` calls open (`Retry-After` is set) |
 | 408 | `body_timeout` | the start of the body did not arrive in 10 s |
 | 413 | `body_too_large` | body over `A2A_GATE_MAX_BODY` (a memory call over 605 bytes) |
 | 502 | `upstream` | the controller (or the container agent) did not answer |
@@ -137,6 +139,58 @@ one of these three (not a bad routes file) stops the gate at start.
 
 The gate needs the `system:auth-delegator` ClusterRole for TokenReview (the chart binds it). It has no
 dependency outside the Go standard library.
+
+## Event callers (ADR 0027)
+
+A caller whose rule has an `event` block is a system of record that starts one agent run for one of its records. It
+may send a short text that matches the operator's pattern, and nothing else. The block is optional. Without it a
+caller behaves exactly as above.
+
+```json
+{"name":"kestrel-fault-events","serviceAccount":{"namespace":"kestrel-records","name":"records-events"},
+ "agents":["kagent/service-agent"],"userId":{"fixed":"event:kestrel-fault-events"},
+ "event":{"text":"Work case SVC-[0-9]{4}-[0-9]{4}","rate":{"perMinute":6,"burst":3},"maxInFlight":2}}
+```
+
+- **Rules (checked at start; the gate does not start on a violation).** A ServiceAccount caller only. No `methods`,
+  `memory` or `key`. `userId` must be `fixed`, and no other caller's rule may equal it or cover it with a prefix. At most
+  16 event callers. Every field of the block is required: `text` (at most 256 characters), `rate.perMinute` (1 to 600),
+  `rate.burst` (1 to 60), `maxInFlight` (1 to 32). `"event": null` is refused.
+- **The text pattern.** The gate wraps it as `^(?:pattern)$` and parses it with `regexp/syntax`. Allowed: literals from
+  `A-Z a-z 0-9 _ . : -` and the space; classes whose members are all in `[A-Za-z0-9_.:-]` and not negated; `{n}`,
+  `{n,m}` with `m` at most 64, and `?`; concatenation and groups. Refused: alternation, `*`, `+`, `{n,}`, `.`, every
+  escape class, negated classes, flags, `^` and `$`, a backslash before a letter or digit, a pattern that matches
+  the empty text, and a space under a repeat or an optional (it would let words repeat: a space may only be fixed
+  text, as in `Work case CASE-[0-9]{4}`), more than 3 spaces, and more than 2 character classes that hold a letter (fixed spaces between word slots would make a sentence). A class of the two cases of one letter, as in `Work case [Ww][0-9]{4}`, is accepted: Go reads it as a case-folded literal, and the text must still be ASCII. The text must be printable ASCII and at most 1024 bytes, whatever the pattern.
+- **Per request, after authentication, the agent check and the user id rule.** Only the JSON-RPC route (REST routes and
+  the agent card: 403 `path`), and never a container agent (403 `agent`). Then the rate and the open calls (see Limits),
+  **before any byte of the body is read**. Then `Content-Encoding` is refused. The body must
+  fit in `A2A_GATE_SNIFF_BYTES` and is parsed strictly: no duplicate key, keys compared exactly (a case variant is an
+  unknown key), only `jsonrpc`, `id`, `method`, `params` at the top, only `message` in `params`, only `messageId`,
+  `role` and `parts` in the message, one part with one key `text`. So no `configuration`, `contextId`, `taskId`,
+  `metadata`, `extensions`, file or data part. `method` is `SendMessage`, `role` is `ROLE_USER`, `messageId` is 1 to
+  128 characters of `A-Za-z0-9._:-`, `id` is a string of the same form (1 to 128 characters of `A-Za-z0-9._:-`) or an int64. Any deviation is 403 `message_shape`, and the
+  answer names no part of the body.
+- **The gate builds its own request.** The body is serialised from the parsed values, with the message id
+  `<caller>:<messageId>:<first 16 hex of the SHA-256 of the text>` and `configuration.returnImmediately: true`. The
+  caller's bytes are never forwarded. The request headers are `Content-Type: application/json`, `A2A-Version: 1.0`,
+  the caller's `Traceparent` when it is a well-formed W3C traceparent, and the gate's `X-User-Id`. `Tracestate` and every
+  other header of the caller are dropped, not refused.
+- **The answer.** The sender gets `{"jsonrpc":"2.0","id":<id>,"result":{"id":"<task id>","status":{"state":"<state>"}}}`
+  and nothing else (this flat form is what the sender reads; the runtime's own answer has `result.task`). A JSON-RPC
+  error becomes its code with the message `refused` and the fixed status 502, whatever status the runtime used; an
+  answer the gate cannot read, or one over 1 MiB, is 502 with `{"error":"bad gateway"}`. No answer text, and none of the
+  runtime's headers or status, reaches the sender.
+- **Limits.** A token bucket per caller (`rate`) and at most `maxInFlight` open calls per caller. Every authenticated
+  request of the caller is charged one token, refusals included. They are checked right after the route, before the
+  body is read: over the rate is 429 `rate` (with `Retry-After` in whole seconds), over `maxInFlight` is 429
+  `caller_busy` (`Retry-After: 1`), whatever the body is (a malformed body over the rate gets 429 too). So an event
+  caller can never hold more shared slots than its own `maxInFlight`, even with slow bodies. Every answer to an event
+  caller closes the connection. The slot is released on every path. The state is in this process: with N replicas the limits are N times the
+  values, and a restart (every `helm upgrade` that changes the rules) refills the buckets. `maxInFlight` bounds open
+  calls, not running tasks.
+- **Audit.** One more field, `event_id`: the caller's `messageId` after the shape check passed, `invalid` before (so also on a 429, which is answered before the body is read). Never
+  the text, never the rebuilt id.
 
 ## Limits that protect the gate itself
 

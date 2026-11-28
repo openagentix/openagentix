@@ -1,0 +1,43 @@
+# Values for the live check of event callers (ADR 0027, issue #229): hack/ci/event-live.sh. Used with PROFILE=quickstart (VALUES_FILE).
+# Lists are replaced, not merged, so the quick start's own caller is listed again.
+#   ev-live   an event caller with one text shape and roomy limits. The live script starts runs with it and sends its refused bodies.
+#   ev-rate   an event caller with a tiny bucket (burst 2, one a minute): the live script drives it into 429.
+#   ev-plain  a caller WITHOUT an event block, user id prefix plain:. It may not use an event caller's user id.
+# The ServiceAccounts are made by the live script in the namespace event-ci; the callers are reached through a port-forward.
+# An event caller may name only agents of agents[] (the chart then knows that none has long-term memory), so the live check gets a chart agent of its
+# own: no memory, the stub model, the quick start's tool profile. The quick start's own agent is an AgentDefinition and is not named by an event caller.
+agents:
+  - name: ev-agent
+    description: Answers an event of the live check (the stub model)
+    model: quickstart-model
+    toolProfile: lookup
+    tools:
+      - tools:
+          - osv_query_vulnerability
+    systemPrompt: |
+      You are a short-answer assistant used by a live check. Answer in one sentence.
+governance:
+  a2a:
+    callers:
+      - name: quickstart-ask
+        serviceAccount: {namespace: openagentix-system, name: quickstart-ask}
+        agents: ["kagent/quickstart"]
+        userId: {exact: "quickstart:ask"}
+      - name: ev-live
+        serviceAccount: {namespace: event-ci, name: ev-live}
+        agents: [ev-agent]
+        event:
+          text: 'Work case SVC-[0-9]{4}-[0-9]{4}'
+          rate: {perMinute: 600, burst: 60}   # roomy: the live script sends about forty requests to it
+          maxInFlight: 4
+      - name: ev-rate
+        serviceAccount: {namespace: event-ci, name: ev-rate}
+        agents: [ev-agent]
+        event:
+          text: 'Work case SVC-[0-9]{4}-[0-9]{4}'
+          rate: {perMinute: 1, burst: 2}
+          maxInFlight: 2
+      - name: ev-plain
+        serviceAccount: {namespace: event-ci, name: ev-plain}
+        agents: ["kagent/quickstart", "kagent/ev-agent"]
+        userId: {prefix: "plain:"}

@@ -1254,7 +1254,142 @@ eq "a caller with two user id rules fails the render"  "$([ -n "$(render_err "${
 printf 'governance:\n  a2a:\n    callers:\n      - {name: ci, serviceAccount: {namespace: a, name: b}, agents: [assistant]}\n' > "$GX"
 eq "a caller without a user id rule fails the render"  "$([ -n "$(render_err "${GON[@]}" -f "$GX")" ] && echo failed || echo rendered)" failed
 rm -f "$GX"
-eq "audit.userId must be hash or raw"                  "$([ -n "$(render_err "${GON[@]}" --set governance.a2a.audit.userId=plain)" ] && echo failed || echo rendered)" failed
+
+echo "# governance: caller entries accept only the keys the chart reads (ADR 0027)"
+GK="$(dirname "$0")/.caller-keys.yaml"
+for extra in 'evnet: {text: x}' 'userid: {exact: y}' 'agent: assistant' 'key: true' 'methods2: [SendMessage]' 'Event: {}'; do
+  printf 'governance:\n  a2a:\n    callers:\n      - {name: ci-smoke, serviceAccount: {namespace: ci, name: smoke}, agents: [assistant], userId: {exact: "ci:smoke"}, %s}\n' "$extra" > "$GK"
+  E=$(render_err "${GON[@]}" -f "$GK")
+  eq "an unknown key in a caller entry ($extra) fails the render and names caller and key" "$([ "$(printf '%s' "$E" | command grep -c 'callers\[ci-smoke\].*key')" -ge 1 ] && echo yes || echo no)" yes
+done
+printf 'governance:\n  a2a:\n    callers:\n      - ci-smoke\n' > "$GK"
+eq "a caller entry that is not an object fails the render" "$([ -n "$(render_err "${GON[@]}" -f "$GK")" ] && echo failed || echo rendered)" failed
+printf 'governance:\n  a2a:\n    callers:\n      - {name: ci-smoke, serviceAccount: {namespace: ci, name: smoke}, agents: [assistant], userId: {exact: "ci:smoke"}, methods: [SendMessage], memory: true}\n' > "$GK"
+eq "an entry with only the seven known keys still renders" "$([ -z "$(render_err "${GON[@]}" -f "$GK")" ] && echo rendered || echo failed)" rendered
+rm -f "$GK"
+
+echo "# governance: event callers (ADR 0027)"
+EVX="$(dirname "$0")/.event-variant.yaml"
+EVA="$(dirname "$0")/.event-agents.yaml"
+# the chart's assistant has memory on; an event caller may not reach such an agent, so the variant turns it off
+yq -y '{agents: (.agents|map(if .name=="assistant" then del(.memory) else . end))}' "$CHART/values.yaml" > "$EVA"
+EVSA='serviceAccount: {namespace: rec, name: events}'
+EVPAT='Work case SVC-[0-9]{4}-[0-9]{4}'
+# ev_entry <name> <extra members, may be empty> -> one caller entry with a good event block unless the extras replace it
+ev_entry() { printf "      - {name: %s, serviceAccount: {namespace: rec, name: %s}, agents: [assistant], %s}\n" "$1" "$1" "$2"; }
+ev_uid() { printf "userId: {%s: '%s'}" "$1" "$2"; }
+ev_block() { printf "event: {text: '%s', rate: {perMinute: %s, burst: %s}, maxInFlight: %s}" "$1" "$2" "$3" "$4"; }
+EVOK=$(ev_block "$EVPAT" 6 3 2)
+EV_EMPTY='event: {}'
+EV_NOTEXT='event: {rate: {perMinute: 6, burst: 3}, maxInFlight: 2}'
+EV_NUMTEXT='event: {text: 42, rate: {perMinute: 6, burst: 3}, maxInFlight: 2}'
+EV_NORATE='event: {text: abc, maxInFlight: 2}'
+EV_NOMAX='event: {text: abc, rate: {perMinute: 6, burst: 3}}'
+EV_UNKNOWN='event: {text: abc, rate: {perMinute: 6, burst: 3}, maxInFlight: 2, window: 5}'
+EV_UNKNOWN_RATE='event: {text: abc, rate: {perMinute: 6, burst: 3, per: 5}, maxInFlight: 2}'
+EV_MISSPELT='evnet: {text: abc, rate: {perMinute: 6, burst: 3}, maxInFlight: 2}'
+EV_FIXEDOWN="userId: {fixed: 'event:custom'}, $EVOK"
+# ev_err <entries> [values args...] -> helm's error text
+ev_err() { local e=$1; shift; printf 'governance:\n  a2a:\n    callers:\n%s' "$e" > "$EVX"; render_err "${GON[@]}" "$@" -f "$EVX"; }
+ev_fails() { # ev_fails <description> <entries> <pattern in the error> [values args...]
+  local d=$1 e=$2 p=$3; shift 3
+  local E; E=$(ev_err "$e" "$@")
+  eq "$d" "$([ "$(printf '%s' "$E" | command grep -c -- "$p")" -ge 1 ] && echo failed-as-expected || echo "no match: $E")" failed-as-expected
+}
+E=$(ev_err "$(ev_entry fault-events "$EVOK")" -f "$EVA")
+eq "an event caller with every field renders"          "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
+printf 'governance:\n  a2a:\n    callers:\n%s' "$(ev_entry fault-events "$EVOK")" > "$EVX"
+RX=$(q "$(docs "${GON[@]}" -f "$EVA" -f "$EVX")" '.[]|select(.kind=="ConfigMap" and .metadata.name=="a2a-gate-rules")|.data["rules.json"]')
+EVR='.callers[]|select(.name=="fault-events")'
+eq "its rule has the event block as written"           "$(jq -c "$EVR|.event" <<<"$RX")" '{"maxInFlight":2,"rate":{"burst":3,"perMinute":6},"text":"Work case SVC-[0-9]{4}-[0-9]{4}"}'
+eq "its user id defaults to event:<name>, fixed"       "$(jq -c "$EVR|.userId" <<<"$RX")" '{"fixed":"event:fault-events"}'
+eq "its rule has no methods, no memory and no key"     "$(jq -c "$EVR|[has(\"methods\"),has(\"memory\"),has(\"key\")]" <<<"$RX")" '[false,false,false]'
+eq "its agent is the full name"                        "$(jq -c "$EVR|.agents" <<<"$RX")" '["kagent/assistant"]'
+eq "the other callers have no event member"            "$(jq -c '[.callers[]|select(.name!="fault-events")|has("event")]|unique' <<<"$RX")" '[false]'
+eq "the numbers are integers in the file"              "$(jq -r "$EVR|.event.rate.perMinute|type" <<<"$RX")" number
+printf 'governance:\n  a2a:\n    callers:\n%s' "$(ev_entry fault-events "$EV_FIXEDOWN")" > "$EVX"
+eq "a fixed user id of its own is kept"                "$(q "$(docs "${GON[@]}" -f "$EVA" -f "$EVX")" '.[]|select(.kind=="ConfigMap" and .metadata.name=="a2a-gate-rules")|.data["rules.json"]|fromjson|.callers[]|select(.name=="fault-events")|.userId.fixed')" event:custom
+ev_fails "event with methods fails (any value)"        "$(ev_entry fault-events "methods: [SendMessage], $EVOK")" 'fault-events.*methods' -f "$EVA"
+ev_fails "event with memory: false fails too"          "$(ev_entry fault-events "memory: false, $EVOK")" 'fault-events.*memory' -f "$EVA"
+ev_fails "event with memory: true fails"               "$(ev_entry fault-events "memory: true, $EVOK")" 'fault-events.*memory' -f "$EVA"
+ev_fails "event with a key fails"                      "$(ev_entry fault-events "key: true, $EVOK")" 'fault-events.*key' -f "$EVA"
+ev_fails "event with an exact user id fails"           "$(ev_entry fault-events "$(ev_uid exact 'event:x'), $EVOK")" 'fault-events.*fixed' -f "$EVA"
+ev_fails "event with a prefix user id fails"           "$(ev_entry fault-events "$(ev_uid prefix 'event:'), $EVOK")" 'fault-events.*fixed' -f "$EVA"
+ev_fails "event with an empty fixed user id fails"     "$(ev_entry fault-events "$(ev_uid fixed ''), $EVOK")" 'fault-events.*fixed' -f "$EVA"
+ev_fails "event: null fails"                           "$(ev_entry fault-events 'event: null')" 'fault-events.*event' -f "$EVA"
+ev_fails "event: a string fails"                       "$(ev_entry fault-events 'event: yes')" 'fault-events.*event' -f "$EVA"
+ev_fails "event: {} fails (every field is required)"   "$(ev_entry fault-events "$EV_EMPTY")" 'fault-events.*event.text' -f "$EVA"
+ev_fails "no text fails"                               "$(ev_entry fault-events "$EV_NOTEXT")" 'event.text' -f "$EVA"
+ev_fails "an empty text fails"                         "$(ev_entry fault-events "$(ev_block '' 6 3 2)")" 'event.text' -f "$EVA"
+ev_fails "a text over 256 characters fails"            "$(ev_entry fault-events "$(ev_block "$(printf 'a%.0s' $(seq 1 257))" 6 3 2)")" 'event.text.*256' -f "$EVA"
+ev_fails "a non-string text fails"                     "$(ev_entry fault-events "$EV_NUMTEXT")" 'event.text' -f "$EVA"
+ev_fails "a text with a non-ASCII character fails"     "$(ev_entry fault-events "$(ev_block 'Work case é' 6 3 2)")" 'event.text.*ASCII' -f "$EVA"
+# every pattern in event-patterns-refused.txt fails the render, and the gate's own test (event_parity_test.go) requires the gate to refuse each too
+while IFS= read -r pat; do
+  case "$pat" in ''|'#'*) continue;; esac
+  E=$(ev_err "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" -f "$EVA")
+  eq "the shared refused text '$pat' fails the render" "$([ -n "$E" ] && echo failed || echo rendered)" failed
+done < "$(dirname "$0")/event-patterns-refused.txt"
+# refused by the chart only (the gate accepts them: the chart is stricter on purpose)
+for pat in '(?:abc)' '[[:alpha:]]' 'a{2,}b?(?:x)'; do
+  ev_fails "the text '$pat' is refused at render (the chart only)" "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'fault-events.*event.text' -f "$EVA"
+done
+for pat in '(abc' 'abc)'; do
+  ev_fails "the text '$pat' does not compile: refused with mustRegexMatch" "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" 'error parsing regexp' -f "$EVA"
+done
+# every pattern in this file renders, and the gate's own tests (services/a2a-gate/internal/rules/event_parity_test.go) require the gate to accept each
+while IFS= read -r pat; do
+  case "$pat" in ''|'#'*) continue;; esac
+  E=$(ev_err "$(ev_entry fault-events "$(ev_block "$pat" 6 3 2)")" -f "$EVA")
+  eq "the text '$pat' renders"                         "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
+done < "$(dirname "$0")/event-patterns-accepted.txt"
+ev_fails "no rate fails"                               "$(ev_entry fault-events "$EV_NORATE")" 'event.rate' -f "$EVA"
+ev_fails "no maxInFlight fails"                        "$(ev_entry fault-events "$EV_NOMAX")" 'event.maxInFlight' -f "$EVA"
+for bad in '0 3 2:perMinute' '601 3 2:perMinute' '6 0 2:burst' '61 61 2:burst' '6 3 0:maxInFlight' '6 3 33:maxInFlight' '1.5 3 2:perMinute' "'6' 3 2:perMinute" '6 3 -1:maxInFlight'; do
+  nums=${bad%%:*}; field=${bad##*:}; read -r n1 n2 n3 <<<"$nums"
+  ev_fails "event.$field out of range ($nums) fails"   "$(ev_entry fault-events "$(ev_block abc "$n1" "$n2" "$n3")")" "event.*$field" -f "$EVA"
+done
+for ok in '1 1 1' '600 60 32'; do
+  read -r n1 n2 n3 <<<"$ok"
+  E=$(ev_err "$(ev_entry fault-events "$(ev_block abc $n1 $n2 $n3)")" -f "$EVA")
+  eq "the limits $ok render"                           "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
+done
+ev_fails "an unknown key in event fails"               "$(ev_entry fault-events "$EV_UNKNOWN")" 'event.*window' -f "$EVA"
+ev_fails "an unknown key in event.rate fails"          "$(ev_entry fault-events "$EV_UNKNOWN_RATE")" 'event.rate.*per' -f "$EVA"
+ev_fails "a misspelt event key fails (no free-text caller is left)" "$(ev_entry fault-events "$EV_MISSPELT")" 'fault-events.*evnet' -f "$EVA"
+ev_fails "an event caller for an agent with memory fails" "$(ev_entry fault-events "$EVOK")" 'fault-events.*assistant.*memory'
+ev_fails "the same by the full agent name fails"       "$(printf '      - {name: fault-events, %s, agents: [kagent/assistant], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*assistant.*memory'
+ev_fails "an event caller for a container agent namespace fails" "$(printf '      - {name: fault-events, %s, agents: [openagentix-workloads/echo-go], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*container' -f "$EVA"
+ev_fails "an event caller may name only agents of agents[]: another namespace fails" "$(printf '      - {name: fault-events, %s, agents: [other/agent-with-memory], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*agents' -f "$EVA"
+ev_fails "an event caller may name only agents of agents[]: an unlisted agent in the kagent namespace fails" "$(printf '      - {name: fault-events, %s, agents: [kagent/quickstart], %s}\n' "$EVSA" "$EVOK")" 'fault-events.*agents' -f "$EVA"
+ev_fails "an unknown chart agent fails as for any caller" "$(printf '      - {name: fault-events, %s, agents: [ghost], %s}\n' "$EVSA" "$EVOK")" 'ghost' -f "$EVA"
+ev_other() { printf '      - {name: %s, serviceAccount: {namespace: oth, name: %s}, agents: [assistant], userId: {%s}}\n' "$1" "$1" "$2"; }
+ev_fails "another caller with the same fixed user id fails"  "$(ev_entry fault-events "$EVOK")"$'\n'"$(ev_other other "fixed: 'event:fault-events'")" 'event:fault-events' -f "$EVA"
+ev_fails "another caller with that exact user id fails"      "$(ev_entry fault-events "$EVOK")"$'\n'"$(ev_other other "exact: 'event:fault-events'")" 'event:fault-events' -f "$EVA"
+ev_fails "another caller with a prefix that covers it fails" "$(ev_entry fault-events "$EVOK")"$'\n'"$(ev_other other "prefix: 'event:'")" 'event:fault-events' -f "$EVA"
+ev_fails "the order of the entries does not matter"          "$(ev_other other "prefix: 'event:fault'")"$'\n'"$(ev_entry fault-events "$EVOK")" 'event:fault-events' -f "$EVA"
+ev_fails "the bridge prefix may not cover it"                "$(ev_entry fault-events "$EVOK")" 'event:fault-events' -f "$EVA" --set bridge.userIdPrefix=event:
+SCH=$(yq -r '.schedules[0].name' "$REPO/components/schedules/demo-values.yaml")
+ev_fails "a schedule's user id may not be its user id"       "$(ev_entry fault-events "$(ev_uid fixed "schedule:$SCH"), $EVOK")" "schedule:$SCH" -f "$EVA"
+BND=$(yq -r '.channels.bindings[0].name' "$REPO/components/channels/demo-values.yaml")
+ev_fails "a Kourier binding's user id may not be its user id" "$(ev_entry fault-events "$(ev_uid fixed "kourier:$BND"), $EVOK")" "kourier:$BND" -f "$EVA"
+E=$(ev_err "$(ev_entry fault-events "$EVOK")"$'\n'"$(ev_other other "prefix: 'event:fault-events-x'")"$'\n'"$(ev_other other2 "exact: 'event:other'")" -f "$EVA")
+eq "user ids that do not cover it are fine"           "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
+many() { # many <n>: n event callers, one ServiceAccount and one user id each
+  local i; for i in $(seq 1 "$1"); do ev_entry "ev$i" "$EVOK"; done
+}
+E=$(ev_err "$(many 16)" -f "$EVA")
+eq "16 event callers render"                           "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
+ev_fails "17 event callers fail"                       "$(many 17)" '16' -f "$EVA"
+E=$(ev_err "$(many 3)" -f "$EVA")
+eq "event callers with the same agent and rate render" "$([ -z "$E" ] && echo rendered || echo "$E")" rendered
+# the default render does not change, and nothing about events appears without an event block
+D0=$(docs "${GON[@]}")
+eq "no event member anywhere in the default rules"     "$(q "$D0" '.[]|select(.kind=="ConfigMap" and .metadata.name=="a2a-gate-rules")|.data["rules.json"]|contains("event")')" false
+printf 'governance:\n  a2a:\n    callers:\n      - {name: ci-smoke, serviceAccount: {namespace: ci, name: smoke}, agents: [assistant], userId: {exact: "ci:smoke"}}\n' > "$EVX"
+eq "an extra caller without event has the same rule as before" "$(q "$(docs "${GON[@]}" -f "$EVX")" '.[]|select(.kind=="ConfigMap" and .metadata.name=="a2a-gate-rules")|.data["rules.json"]|fromjson|.callers[]|select(.name=="ci-smoke")|tostring')" '{"agents":["kagent/assistant"],"name":"ci-smoke","serviceAccount":{"name":"smoke","namespace":"ci"},"userId":{"exact":"ci:smoke"}}'
+rm -f "$EVX" "$EVA"
+eq "audit.userId must be hash or raw"                 "$([ -n "$(render_err "${GON[@]}" --set governance.a2a.audit.userId=plain)" ] && echo failed || echo rendered)" failed
 eq "the gate needs kagent.enabled"                     "$([ -n "$(render_err "${GON[@]}" --set kagent.enabled=false)" ] && echo failed || echo rendered)" failed
 eq "an invalid gate block is not checked while it is off" "$([ -z "$(render_err --set governance.a2a.audit.userId=plain)" ] && echo rendered || echo failed)" rendered
 eq "the gate alone (no channels, no schedules) renders" "$(q "$(docs --set governance.a2a.enabled=true)" '[.[]|select(.metadata.name|tostring|test("a2a"))|.kind]|sort|join(",")')" ClusterRoleBinding,ConfigMap,Deployment,NetworkPolicy,PodDisruptionBudget,Service,ServiceAccount

@@ -1,0 +1,115 @@
+# Event text patterns (ADR 0027) that BOTH the chart and the gate must refuse. One per line; lines that start with # are comments.
+# charts/openagentix/tests/run.sh requires a render failure for each, and services/a2a-gate/internal/rules/event_parity_test.go requires the gate's
+# grammar to refuse each. A pattern that only one side refuses is a test failure: add it here only when both do, and fix the weaker side when a
+# new pattern shows a gap. The accepted list (event-patterns-accepted.txt) is the other half.
+a|b
+(a|b)c
+ab|ac
+a*
+ab*
+a+
+ab+
+a{2,}
+a.b
+.*
+a\sb
+a\Sb
+a\Wb
+a\Db
+a\pLb
+a\PLb
+a\db
+a\wb
+[^a]b
+[^0-9]{4}
+(?i)abc
+(?i:abc)
+(?m)abc
+(?s)a
+(?P<x>a)
+(?=a)a
+^abc
+abc$
+a^b
+\babc
+\Aabc
+abc\z
+\Qabc\E
+\x41
+\101
+a\nb
+a\tb
+a?
+(a?){2}
+()a
+(?:)a
+a{1,65}
+a{65}
+((a{64}){64}){64}
+(a{64}){64}
+a??b
+a{1,2}?b
+a[0-9]{1,3}?
+a+?
+a*?
+a()
+(())a
+(a
+a)
+a)(b
+a)|(b
+a\
+[0-z]
+[.-:]
+[a/]
+[\d]
+[a-é]
+[α]
+café
+a/b
+a;b
+a{
+a{x}
+a{2
+a]
+"a"
+\(a\)
+a\(b
+a\/b
+a\\b
+a{2}{3}
+(ab)*
+a\|b
+a,b
+a=b
+a@b
+a#b
+Work/case [0-9]{4}
+[a b]
+a[b
+[[:^alpha:]]
+[[:space:]]
+[\x00-\x{10FFFF}]
+\x{0041}
+(?#x)a
+a?+
+[0-9]{0,8}
+[0-9]{100}
+[0-9]{1,65}
+[a-z]{1,12}( [a-z]{1,12}){0,40}
+([A-Za-z0-9:._-]{1,15} ?){1,60}
+(?:[A-Za-z0-9:._-]{1,15} ?){1,60}
+a ?b
+a {2}b
+x( y){1,3}
+(a b)?c
+((a b){1,2} c){1,2}
+((a) b){2}
+(([a-z]{1,12}) ){1,40}
+[a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12} [a-z]{1,12}
+[a-z]{1,12} [a-z]{1,12} [a-z]{1,12}
+[A-Z]{2}-[A-Z]{2}-[A-Z]{2}
+a b c d e
+Work case number one two three
+[a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_][a-z_]
+[a-z_][a-z_][a-z_]

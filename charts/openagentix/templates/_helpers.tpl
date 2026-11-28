@@ -213,6 +213,12 @@ exporters:
 http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- end -}}
 
+{{- /* "ok" when .v is a whole number (not a string, not 1.5) from .min to .max, else empty. Used for the event block (ADR 0027). */ -}}
+{{- define "oa.wholeBetween" -}}
+{{- $v := .v -}}
+{{- if and (or (kindIs "float64" $v) (kindIs "int64" $v) (kindIs "int" $v)) (eq (float64 $v) (float64 (int64 $v))) (ge (int64 $v) (int64 .min)) (le (int64 $v) (int64 .max)) -}}ok{{- end -}}
+{{- end -}}
+
 {{- /* The caller rules of the A2A gate, as JSON. Derived from the bridge, the schedules and the Kourier bindings, plus
        governance.a2a.callers. Each caller lists the JSON-RPC methods it may use: what the chart's own callers really send
        (the bridge and the schedules: SendMessage; Kourier: send, stream, read, subscribe, cancel). It holds no secret.
@@ -237,12 +243,19 @@ http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- end -}}
 {{- end -}}
 {{- $seen := list -}}
+{{- $evCount := 0 -}}
 {{- range $i, $c := $a.callers -}}
+{{- if not (kindIs "map" $c) }}{{ fail (printf "governance.a2a.callers[%d]: must be an object" $i) }}{{ end -}}
 {{- if not $c.name }}{{ fail (printf "governance.a2a.callers[%d]: name is required" $i) }}{{ end -}}
 {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$" (toString $c.name)) }}{{ fail (printf "governance.a2a.callers[%d]: name %q must be letters, digits, '.', '_' or '-' (at most 63)" $i (toString $c.name)) }}{{ end -}}
 {{- if or (eq $c.name "bridge") (hasPrefix "schedule-" $c.name) (hasPrefix "kourier-" $c.name) }}{{ fail (printf "governance.a2a.callers[%d]: name %q is reserved for the callers the chart derives (bridge, schedule-*, kourier-*)" $i $c.name) }}{{ end -}}
 {{- if has $c.name $seen }}{{ fail (printf "governance.a2a.callers: name %q is used twice" $c.name) }}{{ end -}}
 {{- $seen = append $seen $c.name -}}
+{{- /* only the keys this helper reads: a misspelt key (evnet, userid, agent) must fail here, not be dropped and leave a caller with the defaults (ADR 0027) */ -}}
+{{- if and (hasKey $c "event") (hasKey $c "key") }}{{ fail (printf "governance.a2a.callers[%s]: an event caller authenticates with a ServiceAccount: the key is not allowed" $c.name) }}{{ end -}}
+{{- range $k, $v := $c -}}
+{{- if not (has $k (list "name" "serviceAccount" "agents" "userId" "methods" "memory" "event")) }}{{ fail (printf "governance.a2a.callers[%s]: unknown key %q (allowed: name, serviceAccount, agents, userId, methods, memory, event)" $c.name $k) }}{{ end -}}
+{{- end -}}
 {{- if not (and $c.serviceAccount $c.serviceAccount.namespace $c.serviceAccount.name) }}{{ fail (printf "governance.a2a.callers[%s]: serviceAccount needs namespace and name" $c.name) }}{{ end -}}
 {{- if not $c.agents }}{{ fail (printf "governance.a2a.callers[%s]: agents must list at least one agent" $c.name) }}{{ end -}}
 {{- $full := list -}}
@@ -254,6 +267,82 @@ http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- end -}}
 {{- end -}}
 {{- $u := $c.userId | default dict -}}
+{{- /* ADR 0027: the event block. Every field is required, every key is checked, and the user id is fixed (default event:<name>). */ -}}
+{{- $evEntry := dict -}}
+{{- if hasKey $c "event" -}}
+{{- $ev := $c.event -}}
+{{- $where := printf "governance.a2a.callers[%s]" $c.name -}}
+{{- if not (kindIs "map" $ev) }}{{ fail (printf "%s: event must be an object with text, rate and maxInFlight" $where) }}{{ end -}}
+{{- range $k, $v := $ev -}}
+{{- if not (has $k (list "text" "rate" "maxInFlight")) }}{{ fail (printf "%s: event has an unknown key %q (allowed: text, rate, maxInFlight)" $where $k) }}{{ end -}}
+{{- end -}}
+{{- if hasKey $c "methods" }}{{ fail (printf "%s: an event caller has no methods: it sends SendMessage only" $where) }}{{ end -}}
+{{- if hasKey $c "memory" }}{{ fail (printf "%s: an event caller may not have memory (the memory service is not for event callers)" $where) }}{{ end -}}
+{{- if not $u -}}
+{{- $u = dict "fixed" (printf "event:%s" $c.name) -}}
+{{- else if or (not (kindIs "string" (get $u "fixed"))) (not (get $u "fixed")) (get $u "exact") (get $u "prefix") (gt (len (toString (get $u "fixed"))) 256) -}}
+{{- fail (printf "%s: an event caller's userId must be {fixed: \"...\"} (default event:%s): an event sender never chooses its user id" $where $c.name) -}}
+{{- end -}}
+{{- if not (kindIs "string" $ev.text) }}{{ fail (printf "%s: event.text is required and must be a string" $where) }}{{ end -}}
+{{- $t := $ev.text -}}
+{{- if eq (len $t) 0 }}{{ fail (printf "%s: event.text must not be empty" $where) }}{{ end -}}
+{{- if gt (len $t) 256 }}{{ fail (printf "%s: event.text must be at most 256 characters" $where) }}{{ end -}}
+{{- if not (regexMatch "^[ -~]+$" $t) }}{{ fail (printf "%s: event.text must be printable ASCII" $where) }}{{ end -}}
+{{- /* tokens the gate's grammar refuses (the gate is the authority and re-checks the tree; this is stricter on purpose) */ -}}
+{{- $bare := regexReplaceAll "\\\\." $t "E" -}}
+{{- $bare = regexReplaceAll "\\[[^\\]]*\\]" $bare "C" -}}
+{{- $bare = regexReplaceAll "\\{[0-9]+(,[0-9]+)?\\}" $bare "R" -}}
+{{- range $tok := list "|" "*" "+" "(?" "[^" "^" "$" -}}
+{{- if contains $tok $t }}{{ fail (printf "%s: event.text %q uses %q: alternation, * and +, flags and groups with (?, negated classes and anchors are refused (one identifier, bounded)" $where $t $tok) }}{{ end -}}
+{{- end -}}
+{{- if or (contains "{" $bare) (contains "}" $bare) }}{{ fail (printf "%s: event.text %q has a brace that is not a repeat {n} or {n,m}" $where $t) }}{{ end -}}
+{{- if contains "." $bare }}{{ fail (printf "%s: event.text %q has an unescaped '.': it matches any character; write \\. or put it in a class" $where $t) }}{{ end -}}
+{{- if regexMatch "\\\\[A-Za-z0-9]" $t }}{{ fail (printf "%s: event.text %q uses an escape class or a letter escape (\\s \\S \\w \\W \\d \\D \\p ...): use a character class such as [0-9]" $where $t) }}{{ end -}}
+{{- if regexMatch "\\{[0-9]+,\\}" $t }}{{ fail (printf "%s: event.text %q has an open repeat {n,}: bound it with {n,m}" $where $t) }}{{ end -}}
+{{- /* parity with the gate's grammar, so a rendered values file can never stop the gate from starting: only the gate's alphabet, escapes only of . - : _, classes only inside it, repeats of at most 64, no word repeats */ -}}
+{{- if regexMatch "\\\\([^._:-]|$)" $t }}{{ fail (printf "%s: event.text %q has a backslash that is not before one of . - : _ (the only escapes the gate allows)" $where $t) }}{{ end -}}
+{{- range $cls := regexFindAll "\\[[^\\]]*\\]" $t -1 -}}
+{{- if not (regexMatch "^\\[-?([A-Z]-[A-Z]|[a-z]-[a-z]|[0-9]-[0-9]|[A-Za-z0-9_.:]|\\\\[._:-])+-?\\]$" $cls) }}{{ fail (printf "%s: event.text %q has the character class %s: members may only be letters, digits and _ . : - (ranges A-Z, a-z, 0-9)" $where $t $cls) }}{{ end -}}
+{{- end -}}
+{{- if regexMatch "[^A-Za-z0-9_:() ?RCE-]" $bare }}{{ fail (printf "%s: event.text %q has a character outside the gate's alphabet (letters, digits and _ . : - and the space)" $where $t) }}{{ end -}}
+{{- range $rep := regexFindAll "\\{[0-9]+(,[0-9]+)?\\}" $t -1 -}}
+{{- range $num := regexFindAll "[0-9]+" $rep -1 -}}
+{{- if or (gt (len $num) 2) (gt (int $num) 64) }}{{ fail (printf "%s: event.text %q repeats more than 64 times (%s)" $where $t $rep) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- if or (regexMatch "\\(.* .*\\)" $t) (regexMatch " [?{]" $t) }}{{ fail (printf "%s: event.text %q has a space inside a group (also a nested one) or before ? or {: that lets words repeat. Keep spaces as fixed text, for example 'Work case CASE-[0-9]{4}'" $where $t) }}{{ end -}}
+{{- if or (regexMatch "[?}][?]" $t) (regexMatch "\\(\\)" $t) }}{{ fail (printf "%s: event.text %q has a lazy repeat (?? or }?) or an empty group ()" $where $t) }}{{ end -}}
+{{- if gt (len (regexFindAll " " $t -1)) 3 }}{{ fail (printf "%s: event.text %q has more than 3 spaces: fixed words would make a sentence. Use an identifier, for example 'Work case CASE-[0-9]{4}'" $where $t) }}{{ end -}}
+{{- if gt (len (regexFindAll "\\[[^\\]]*[A-Za-z][^\\]]*\\]" $t -1)) 2 }}{{ fail (printf "%s: event.text %q has more than 2 character classes with letters: variable-length words would make a sentence. Digits are the safe variable part" $where $t) }}{{ end -}}
+{{- /* plain regexMatch hides a compile error, so the pattern is compiled with mustRegexMatch, anchored the way the gate anchors it */ -}}
+{{- $_ := mustRegexMatch (printf "^(?:%s)$" $t) "" -}}
+{{- /* the gate parses the pattern on its own, before it anchors it: a ")" that only closes the wrapper (a)(b) would compile here and not there */ -}}
+{{- $depth := 0 -}}
+{{- range $par := regexFindAll "[()]" $bare -1 -}}
+{{- if eq $par "(" }}{{ $depth = add1 $depth }}{{ else }}{{ $depth = sub $depth 1 }}{{ end -}}
+{{- if lt (int $depth) 0 }}{{ fail (printf "%s: event.text %q closes a group that was not opened" $where $t) }}{{ end -}}
+{{- end -}}
+{{- if ne (int $depth) 0 }}{{ fail (printf "%s: event.text %q has a group that is not closed" $where $t) }}{{ end -}}
+{{- if regexMatch (printf "^(?:%s)$" $t) "" }}{{ fail (printf "%s: event.text %q matches the empty text" $where $t) }}{{ end -}}
+{{- if not (kindIs "map" $ev.rate) }}{{ fail (printf "%s: event.rate is required: {perMinute: 1..600, burst: 1..60}" $where) }}{{ end -}}
+{{- range $k, $v := $ev.rate -}}
+{{- if not (has $k (list "perMinute" "burst")) }}{{ fail (printf "%s: event.rate has an unknown key %q (allowed: perMinute, burst)" $where $k) }}{{ end -}}
+{{- end -}}
+{{- if not (include "oa.wholeBetween" (dict "v" $ev.rate.perMinute "min" 1 "max" 600)) }}{{ fail (printf "%s: event.rate.perMinute is required and must be a whole number from 1 to 600" $where) }}{{ end -}}
+{{- if not (include "oa.wholeBetween" (dict "v" $ev.rate.burst "min" 1 "max" 60)) }}{{ fail (printf "%s: event.rate.burst is required and must be a whole number from 1 to 60" $where) }}{{ end -}}
+{{- if not (include "oa.wholeBetween" (dict "v" $ev.maxInFlight "min" 1 "max" 32)) }}{{ fail (printf "%s: event.maxInFlight is required and must be a whole number from 1 to 32" $where) }}{{ end -}}
+{{- $evEntry = dict "text" $t "rate" (dict "perMinute" (int $ev.rate.perMinute) "burst" (int $ev.rate.burst)) "maxInFlight" (int $ev.maxInFlight) -}}
+{{- $evCount = add1 $evCount -}}
+{{- if gt (int $evCount) 16 }}{{ fail "governance.a2a.callers: at most 16 callers may have an event block" }}{{ end -}}
+{{- /* an event caller may not reach an agent with long-term memory (all its events share one user id and so one memory scope), nor a container agent (0.3) */ -}}
+{{- $cag := (($.Values.controlPlane | default dict).containerAgents | default dict) -}}
+{{- range $full -}}
+{{- $ns := first (splitList "/" .) -}}{{- $nm := last (splitList "/" .) -}}
+{{- if and $cag.namespace (eq $ns $cag.namespace) }}{{ fail (printf "%s: agent %q is a container agent: an event caller may not reach container agents in this release" $where .) }}{{ end -}}
+{{- if not (and (eq $ns $kns) (has $nm $agents)) }}{{ fail (printf "%s: agent %q is not an agent of agents[]: an event caller may name only agents of agents[] by name, so the chart can check that none has long-term memory" $where .) }}{{ end -}}
+{{- if eq $ns $kns }}{{ range $.Values.agents }}{{ if and (eq .name $nm) .memory .memory.enabled }}{{ fail (printf "%s: agent %q has long-term memory on: all events of one caller share one user id, so one memory scope. An event caller may not reach it" $where $nm) }}{{ end }}{{ end }}{{ end -}}
+{{- end -}}
+{{- end -}}
 {{- $set := 0 -}}{{- range $k := list "exact" "prefix" "fixed" }}{{ if get $u $k }}{{ $set = add $set 1 }}{{ end }}{{ end -}}
 {{- if ne (int $set) 1 }}{{ fail (printf "governance.a2a.callers[%s]: userId needs exactly one of exact, prefix and fixed" $c.name) }}{{ end -}}
 {{- $methods := list -}}
@@ -271,7 +360,20 @@ http://a2a-gate.{{ .Values.governance.a2a.namespace }}.svc.cluster.local:8080
 {{- if not (kindIs "bool" $c.memory) }}{{ fail (printf "governance.a2a.callers[%s]: memory must be true or false" $c.name) }}{{ end -}}
 {{- if $c.memory }}{{ $_ := set $entry "memory" true }}{{ end -}}
 {{- end -}}
+{{- if $evEntry }}{{ $_ := set $entry "event" $evEntry }}{{ end -}}
 {{- $callers = append $callers $entry -}}
+{{- end -}}
+{{- /* an event caller's fixed user id belongs to it alone: no other rule (extra or derived) may equal it or cover it with a prefix, so no other caller can take its message ids */ -}}
+{{- range $e := $callers -}}
+{{- if hasKey $e "event" -}}
+{{- $id := get $e.userId "fixed" -}}
+{{- range $o := $callers -}}
+{{- if ne $o.name $e.name -}}
+{{- $ou := $o.userId -}}
+{{- if or (eq (get $ou "exact") $id) (eq (get $ou "fixed") $id) (and (get $ou "prefix") (hasPrefix (get $ou "prefix") $id)) }}{{ fail (printf "governance.a2a.callers: the user id rule of caller %q covers %q, the user id of the event caller %q, which belongs to that caller alone" $o.name $id $e.name) }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- /* a caller of the controller's port that was admitted by networkPolicy.extraA2ACallers must have a rule, or it would be cut off silently */ -}}
 {{- range $x := .Values.networkPolicy.extraA2ACallers -}}
