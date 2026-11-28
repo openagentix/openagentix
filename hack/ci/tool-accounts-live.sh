@@ -159,8 +159,12 @@ probe_pod() {  # probe_pod <account>: prints the HTTP codes of three reads with 
   local sa=$1 name="ta-probe-${1#openagentix-}" script out
   script='T=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token); C=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt; B=https://kubernetes.default.svc/api/v1/namespaces/'"$MCPNS"'; for p in secrets/echo-mcp-auth secrets configmaps/kube-root-ca.crt; do printf "%s " "$(curl -s -m 10 -o /dev/null -w %{http_code} --cacert $C -H "Authorization: Bearer $T" $B/$p)"; done; echo'
   $K delete pod "$name" -n "$MCPNS" --ignore-not-found --wait=true >/dev/null 2>&1
-  out=$($K run "$name" -n "$MCPNS" -l ta-live=probe --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet \
-    --overrides "$(jq -cn --arg sa "$sa" --arg name "$name" --arg s "$script" '{spec:{serviceAccountName:$sa,containers:[{name:$name,image:"curlimages/curl:8.10.1",command:["sh","-c",$s],securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]},runAsNonRoot:true,runAsUser:100,seccompProfile:{type:"RuntimeDefault"}}}]}}')" 2>/dev/null | tail -1)
+  # a pod that runs to the end and a read of its log: an attached run loses the first lines of a short pod
+  $K run "$name" -n "$MCPNS" -l ta-live=probe --image=curlimages/curl:8.10.1 --restart=Never \
+    --overrides "$(jq -cn --arg sa "$sa" --arg name "$name" --arg s "$script" '{spec:{serviceAccountName:$sa,containers:[{name:$name,image:"curlimages/curl:8.10.1",command:["sh","-c",$s],securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]},runAsNonRoot:true,runAsUser:100,seccompProfile:{type:"RuntimeDefault"}}}]}}')" >/dev/null 2>&1
+  for _ in $(seq 1 40); do case "$($K get pod "$name" -n "$MCPNS" -o jsonpath='{.status.phase}' 2>/dev/null)" in Succeeded|Failed) break;; esac; sleep 2; done
+  out=$($K logs "$name" -n "$MCPNS" 2>/dev/null | tail -1)
+  $K delete pod "$name" -n "$MCPNS" --ignore-not-found --wait=false >/dev/null 2>&1
   printf '%s' "$out"
 }
 for n in tools-disputes tools-rca tools; do
@@ -185,6 +189,11 @@ mcp_open() {
   printf '%s' "${sid:--}"
 }
 mcp_call() { mcp_post "$1" "$2" "$3" "{\"jsonrpc\":\"2.0\",\"id\":$4,\"method\":\"$5\",\"params\":$6}"; }
+sess_debug() {  # sess_debug <port> <token file> <tool server>: why no session opened (a status line, the start of the body, the end of the log; never a token)
+  [ "$SID" = - ] || return 0
+  echo "       no session on $3: $(curl -s -m 20 -i -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$2")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ta-live","version":"0"}}}' "http://127.0.0.1:$1/mcp" 2>&1 | tr '\r\n' '  ' | cut -c1-300)"
+  $K logs -n "$MCPNS" -l "app=virtualmcpserver,toolhive-name=$3" --all-containers --tail=15 2>/dev/null | cut -c1-260 | sed 's/^/       | /'
+}
 TD=$(mktemp -d)
 P1=$((20000 + RANDOM % 10000)); P2=$((P1 + 1)); P3=$((P1 + 2))
 $K port-forward -n "$MCPNS" svc/vmcp-tools-disputes "$P1:4483" >/dev/null 2>&1 & PF=$!
@@ -192,7 +201,7 @@ $K port-forward -n "$MCPNS" svc/vmcp-tools-rca "$P2:4483" >/dev/null 2>&1 & PF2=
 $K port-forward -n "$MCPNS" svc/vmcp-tools-lookup "$P3:4483" >/dev/null 2>&1 & PF3=$!
 sleep 4
 mcp_token openagentix-vmcp-disputes > "$TD/d"; mcp_token openagentix-vmcp-rca > "$TD/r"; mcp_token openagentix-vmcp-lookup > "$TD/l"
-SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P1 "$TD/d"); [ "$SID" != - ] && break; sleep 5; done
+SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P1 "$TD/d"); [ "$SID" != - ] && break; sleep 5; done; sess_debug $P1 "$TD/d" tools-disputes
 LIST=$(mcp_call $P1 "$TD/d" "$SID" 2 tools/list '{}' | jq -r '[.result.tools[]?.name]|sort|join(" ")' 2>/dev/null)
 check "group disputes: tools/list lists the endpoint, the knowledge base mirror and the notify mirror tools of the profile" "$LIST" "delivery-disputes_notify_list_destinations echo_echo echo_list_notes knowledge-disputes_kb_list_collections"
 SEEN() { $K logs -n "$ENS" deploy/echo --tail=2000 2>/dev/null | grep -c '"presented": "self"'; }
@@ -206,12 +215,12 @@ check "group disputes: a call through the knowledge base mirror reaches the know
 CALL=$(mcp_call $P1 "$TD/d" "$SID" 5 tools/call '{"name":"delivery-disputes_notify_list_destinations","arguments":{}}')
 obs "group disputes: a call through the notify mirror answered: $(printf '%s' "$CALL" | cut -c1-200)"
 check "group disputes: a call through the notify mirror reaches notify (an answer, not a transport error)" "$(jq -r '((.result != null) or ((.error.message // "")|test("denied|not found|unknown")|not))|tostring' <<<"$CALL" 2>/dev/null)" true
-SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P2 "$TD/r"); [ "$SID" != - ] && break; sleep 5; done
+SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P2 "$TD/r"); [ "$SID" != - ] && break; sleep 5; done; sess_debug $P2 "$TD/r" tools-rca
 CALL=$(mcp_call $P2 "$TD/r" "$SID" 3 tools/call '{"name":"cluster-read_pods_list_in_namespace","arguments":{"namespace":"kagent"}}')
 check "group diagnostics: a call through tools-rca reaches cluster-read with its bearer value and answers (the server refuses a call without it)" "$(jq -r '(.result.isError//false|tostring)+" "+([.result.content[]?.text]|join(" ")|length>0|tostring)' <<<"$CALL" 2>/dev/null)" "false true"
 CALL=$(mcp_call $P2 "$TD/r" "$SID" 4 tools/call '{"name":"knowledge-diagnostics_kb_list_collections","arguments":{}}')
 check "group diagnostics: a call through the knowledge base mirror of the group is not an error" "$(jq -r '(.error==null and (.result.isError//false)==false)|tostring' <<<"$CALL" 2>/dev/null)" true
-SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P3 "$TD/l"); [ "$SID" != - ] && break; sleep 5; done
+SID=-; for _ in $(seq 1 12); do SID=$(mcp_open $P3 "$TD/l"); [ "$SID" != - ] && break; sleep 5; done; sess_debug $P3 "$TD/l" tools-lookup
 LIST=$(mcp_call $P3 "$TD/l" "$SID" 2 tools/list '{}' | jq -r '[.result.tools[]?.name]|sort|join(" ")' 2>/dev/null)
 check "shared group: tools/list on the profile lookup lists its one tool" "$LIST" "osv_query_vulnerability"
 echo "# after the calls: every backend still ready, still no forbidden line"
