@@ -6,7 +6,7 @@ description: Tool servers that run under accounts of the chart with no right on 
 
 # Tool server accounts
 
-Issue [#229](https://github.com/openagentix/openagentix/issues/229), [ADR 0031](../../decisions/0031-tool-server-secret-reach.md), slices 3 and 4. Before this change every tool server (the ToolHive `VirtualMCPServer` pods in `mcp.namespace`) ran under an account that the tool group operator made, and that account could get, list and watch every Secret in the namespace. So the header credential of one use case could be read through the API by the tool server of another.
+Issue [#229](https://github.com/openagentix/openagentix/issues/229), [ADR 0031](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0031-tool-server-secret-reach.md), slices 3 and 4. Before this change every tool server (the ToolHive `VirtualMCPServer` pods in `mcp.namespace`) ran under an account that the tool group operator made, and that account could get, list and watch every Secret in the namespace. So the header credential of one use case could be read through the API by the tool server of another.
 
 ## What it does
 

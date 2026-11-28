@@ -125,7 +125,7 @@ mkdir -p "$D/real"
 for c in helm kubectl install; do
   cat > "$D/real/$c" <<EOS
 #!/usr/bin/env bash
-if [ "$c" = kubectl ] && [ "\$1 \$2" = "config current-context" ]; then echo "\${FAKE_CTX:-kind-openagentix}"; echo "$c \$*" >> "$D/real/calls.ok"; exit 0; fi
+if [ "$c" = kubectl ] && [ "\$1 \$2" = "config current-context" ]; then echo "\${FAKE_CTX-kind-openagentix}"; echo "$c \$*" >> "$D/real/calls.ok"; exit 0; fi
 echo "$c \$*" >> "$D/real/calls.REAL"; exit 1
 EOS
   chmod +x "$D/real/$c"
@@ -136,6 +136,8 @@ OUT=$(G FAKE_CTX=kind-openagentix); t "a local run on the context kind-openagent
 t "... and no helm, kubectl (apart from reading the context name) or install command was run" "$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')/$(cat "$D/real/calls.ok" | wc -l | tr -d ' ')" 0/1
 OUT=$(G KUBECTL=kubectl FAKE_CTX=kind-openagentix); t "KUBECTL=kubectl does not switch the guard off: the same run is refused (exit 2), and nothing but the context read was called" "$(n '^exit=2$')/$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')/$(cat "$D/real/calls.ok" | wc -l | tr -d ' ')" 1/0/1
 OUT=$(G KUBECTL=kubectl FAKE_CTX=kind-openagentix LIFECYCLE_CI_CONTEXT=kind-openagentix); t "... and naming kind-openagentix in LIFECYCLE_CI_CONTEXT does not allow it" "$(n '^exit=2$')/$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')" 1/0
+OUT=$(G FAKE_CTX=); t "no context yet, by hand: refused (exit 2), nothing called" "$(n '^exit=2$')/$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')" 1/0
+OUT=$(G FAKE_CTX= GITHUB_ACTIONS=true); t "no context yet on GitHub Actions (the test makes its own cluster): the guard passes (the fake install then fails, exit 1)" "$(n '^exit=1$')/$(n 'refusing')" 1/0
 OUT=$(G FAKE_CTX=gke_prod_cluster LIFECYCLE_CI_CONTEXT=gke_prod_cluster); t "a context that is not kind or k3d is refused even when named" "$(n '^exit=2$')/$(n 'not a kind or k3d context')" 1/1
 t "... with no cluster call" "$(cat "$D/real/calls.REAL" 2>/dev/null | wc -l | tr -d ' ')" 0
 OUT=$(G FAKE_CTX=kind-ci LIFECYCLE_CI_CONTEXT=kind-ci); t "a kind context named by LIFECYCLE_CI_CONTEXT passes the guard (the fake install then fails, exit 1, not 2)" "$(n '^exit=1$')/$(n 'refusing')" 1/0

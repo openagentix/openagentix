@@ -655,7 +655,7 @@ YAML
   [ "$(wc -l < "$TMP/ta-rbac.jsonl" | tr -d ' ')" = 6 ] && ok "the render has six account objects (a ServiceAccount, a Role and a RoleBinding for each)" || bad "the render has six account objects" "got $(wc -l < "$TMP/ta-rbac.jsonl" | tr -d ' ')"
   allowed "the tool servers with spec.serviceAccount are accepted (server-side dry run, strict validation)" bash -c "kubectl apply --server-side --dry-run=server --validate=strict -f - < '$TMP/ta-vmcps.jsonl'"
   GOT=$(kubectl apply --server-side --dry-run=server -o json -f "$TMP/ta-vmcps.jsonl" 2>/dev/null | jq -s -r '[.[]|.items // [.]|.[]|.metadata.name+"="+(.spec.serviceAccount // "none")]|sort|join(" ")')
-  [ "$GOT" = "tools=openagentix-tools tools-disputes=openagentix-tools-disputes" ] && ok "the API server keeps spec.serviceAccount of each tool server ($GOT)" || bad "spec.serviceAccount is kept" "got '$GOT'"
+  [ "$GOT" = "tools-disputes=openagentix-tools-disputes tools=openagentix-tools" ] && ok "the API server keeps spec.serviceAccount of each tool server ($GOT)" || bad "spec.serviceAccount is kept" "got '$GOT'"
   jq -c '.spec.serviceAcount=.spec.serviceAccount|del(.spec.serviceAccount)' <(sed -n 1p "$TMP/ta-vmcps.jsonl") > "$TMP/ta-badfield.json"
   refused "a wrong field name for the account is refused by the schema (negative control)" "serviceAcount" kubectl apply --server-side --dry-run=server --validate=strict -f "$TMP/ta-badfield.json"
   allowed "the three kinds of account objects are applied (strict validation)" bash -c "kubectl apply --server-side --validate=strict -f - < '$TMP/ta-rbac.jsonl'"

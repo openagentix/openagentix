@@ -28,7 +28,7 @@ K=${KUBECTL:-kubectl}; HELM=${HELM:-helm}
 # kubeconfig and nothing else before it decides.
 . "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
 KUBECTL=${KUBECTL:-kubectl}; export KUBECTL
-require_ci_context lifecycle-test LIFECYCLE_CI_CONTEXT
+require_ci_context lifecycle-test LIFECYCLE_CI_CONTEXT allow-none   # on GitHub Actions only, and only with no context yet: the test makes its own cluster with the installer
 RELEASE=${RELEASE:-openagentix}; RELEASE_NS=${RELEASE_NS:-openagentix-system}
 NS_RE=${LIFECYCLE_NS_RE:-'^(openagentix-.*|agentgateway-system|kagent|toolhive-system|ate-system)$'}
 SECRET_NS_RE=${LIFECYCLE_SECRET_NS_RE:-'^(openagentix-.*|agentgateway-system)$'}
