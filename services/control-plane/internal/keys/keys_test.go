@@ -36,16 +36,21 @@ func TestHashMatchesInstaller(t *testing.T) {
 type fakeRegistry struct {
 	entries map[string]string
 	labels  map[string]map[string]string
+	classes map[string]string
 	calls   int
 	err     error
 }
 
-func (f *fakeRegistry) Register(_ context.Context, user, hash string, labels map[string]string) error {
+func (f *fakeRegistry) Register(_ context.Context, user, hash string, labels map[string]string, class string) error {
 	f.calls++
 	if f.err != nil {
 		return f.err
 	}
 	f.entries[user] = hash
+	if f.classes == nil {
+		f.classes = map[string]string{}
+	}
+	f.classes[user] = class
 	if f.labels == nil {
 		f.labels = map[string]map[string]string{}
 	}

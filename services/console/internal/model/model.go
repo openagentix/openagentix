@@ -82,8 +82,8 @@ type Endpoint struct {
 }
 
 // Status is the public status contract: conditions (Accepted and Ready are the contract; KeyReady, Applied and Synced are
-// informational), observedGeneration, endpoint, revision, effectiveTools, effectiveEgress, violations, capabilities and
-// agentRef. Everything else is under Controller, which is internal and may change without notice: the console shows it
+// informational), observedGeneration, endpoint, revision, effectiveTools, effectiveEgress, violations, capabilities, agentRef and
+// budget. Everything else is under Controller, which is internal and may change without notice: the console shows it
 // in a collapsed section and depends on none of it.
 type Status struct {
 	ObservedGeneration int64          `json:"observedGeneration"`
@@ -95,7 +95,14 @@ type Status struct {
 	Violations         []string       `json:"violations"`
 	Capabilities       map[string]any `json:"capabilities,omitempty"`
 	AgentRef           *ObjectRef     `json:"agentRef,omitempty"`
+	Budget             *Budget        `json:"budget,omitempty"`
 	Controller         map[string]any `json:"controller,omitempty"`
+}
+
+// Budget is status.budget (ADR 0029): the budget class the controller wrote to the agent's gateway key entry, "default" when it has none and
+// "unknown" when it cannot say. Read only: the console never writes it.
+type Budget struct {
+	Class string `json:"class"`
 }
 
 // State is the one word of the status badge (UI-SPEC section 7).

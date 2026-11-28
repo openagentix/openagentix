@@ -60,6 +60,8 @@ type Plan struct {
 	Suspended bool
 	// Labels holds the reserved labels team and project, copied from the definition (informational only).
 	Labels map[string]string
+	// BudgetClass is the one class the operator names for definitions (ADR 0029); "" is the default budget. It is not part of the revision.
+	BudgetClass string
 	// Revision is a stable hash of what was applied (see Revision).
 	Revision string
 	// RuntimeType is the effective runtime type (api.RuntimeBuiltin or api.RuntimeContainer).
@@ -167,6 +169,9 @@ func Build(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolResolver, 
 	for _, sk := range s.Skills {
 		p.Skills = append(p.Skills, Skill{Name: sk.Name, Ref: c.Skills[sk.Name]})
 	}
+	if pol != nil {
+		p.BudgetClass = pol.BudgetClass
+	}
 	p.Revision = revision(s, p, c.Memory.DefaultTTLDays)
 	return p, nil
 }
@@ -210,6 +215,9 @@ func buildContainer(d *api.AgentDefinition, c *catalog.Catalog, tr catalog.ToolR
 			}
 			p.Labels[k] = v
 		}
+	}
+	if pol != nil {
+		p.BudgetClass = pol.BudgetClass
 	}
 	p.Revision = revision(s, p, c.Memory.DefaultTTLDays)
 	return p, nil

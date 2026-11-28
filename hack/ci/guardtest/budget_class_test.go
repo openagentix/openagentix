@@ -113,3 +113,34 @@ func TestBudgetClassGuard(t *testing.T) {
 		})
 	})
 }
+
+// The text the controller itself writes (the file is also what services/control-plane's adapter test compares its output with) is
+// allowed by the guard when it names the class of definitions, and refused when it names any other class.
+func TestTheControllersOwnEntriesPassTheGuard(t *testing.T) {
+	var cases []struct {
+		User, Hash, Team, Project, Class, Entry string
+	}
+	readJSON(t, "services/control-plane/testdata/key-entries.json", &cases)
+	if len(cases) < 4 {
+		t.Fatalf("%d cases", len(cases))
+	}
+	for _, definitions := range []string{"", "bank-agents", "other-class"} {
+		sets := append([]string{}, budgetSets...)
+		sets = append(sets, "gateway.policy.budgetClasses[2].name=other-class", "gateway.policy.budgetClasses[2].tokens=1000", "gateway.policy.budgetClasses[2].unit=Hours", "gateway.policy.budgetClasses[2].per=agent")
+		if definitions != "" {
+			sets = append(sets, "controlPlane.policy.budgetClasses.definitions="+definitions)
+		}
+		r := render(t, sets...)
+		e, err := newEngine(r.Policies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var list []expectation
+		for _, c := range cases {
+			x := keyUpdate("definitions="+definitions+": "+c.User+" class="+c.Class, m{c.User: c.Entry}, m{c.User: entry(c.User, hash64, "", "")})
+			x.allow = c.Class == "" || c.Class == definitions
+			list = append(list, x)
+		}
+		runKeyCases(t, e, list)
+	}
+}

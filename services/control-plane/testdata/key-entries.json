@@ -1,0 +1,10 @@
+[
+  {"user": "kagent.researcher", "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "class": "",
+   "entry": "{\"keyHash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"metadata\":{\"user_id\":\"kagent.researcher\"}}"},
+  {"user": "kagent.researcher", "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "class": "bank-agents",
+   "entry": "{\"keyHash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"metadata\":{\"user_id\":\"kagent.researcher\",\"budget_class\":\"bank-agents\"}}"},
+  {"user": "kagent.a", "hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "team": "payments", "class": "bank-agents",
+   "entry": "{\"keyHash\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"metadata\":{\"user_id\":\"kagent.a\",\"team\":\"payments\",\"budget_class\":\"bank-agents\"}}"},
+  {"user": "kagent.b", "hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "team": "payments", "project": "ledger", "class": "bank-agents",
+   "entry": "{\"keyHash\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"metadata\":{\"user_id\":\"kagent.b\",\"team\":\"payments\",\"project\":\"ledger\",\"budget_class\":\"bank-agents\"}}"}
+]

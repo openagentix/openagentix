@@ -696,8 +696,9 @@ controlPlane:
   # Names are checked against the catalog at render time (a typo fails the render instead of silently allowing nothing).
   policy:
     # The budget class of every AgentDefinition (ADR 0029): empty gives the default budget (gateway.policy.tokenBudget); otherwise the name of a class
-    # in gateway.policy.budgetClasses with per: agent. A definition cannot choose its class. This value only lets the admission guard accept the member
-    # in the key entries of definitions; the controller writes it with the next slice of ADR 0029.
+    # in gateway.policy.budgetClasses with per: agent. A definition cannot choose its class. The controller writes the class as the last member of the
+    # key entry of every agent made from a definition, rewrites an entry that has another class (with the same key), and reports it in
+    # status.budget.class. The admission guard accepts exactly this one class. Changing it restarts the controller (the policy file changes).
     budgetClasses:
       definitions: ""
     maxAgents: 5                      # definitions in total; the oldest keep their place

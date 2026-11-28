@@ -242,12 +242,26 @@ type Status struct {
 	Violations         []string      `json:"violations"`
 	Capabilities       *Capabilities `json:"capabilities,omitempty"`
 	AgentRef           *ObjectRef    `json:"agentRef,omitempty"`
+	Budget             *BudgetStatus `json:"budget,omitempty"`
 
 	Controller ControllerState `json:"controller"`
 }
 
+// BudgetStatus is what the controller wrote to the key entry of the agent (ADR 0029). Class is the budget class of the entry, "default" when the
+// entry has none, or "unknown" when the controller cannot say what the gateway holds (the entry is cut while the definition is suspended, or
+// the write failed). It says what was written, not that the gateway enforces it.
+type BudgetStatus struct {
+	Class string `json:"class"`
+}
+
+// Budget class values of BudgetStatus that are not a class name.
+const (
+	BudgetDefault = "default"
+	BudgetUnknown = "unknown"
+)
+
 // PublicStatusFields lists the status fields that are part of the contract, besides status.controller.
-var PublicStatusFields = []string{"conditions", "observedGeneration", "endpoint", "revision", "effectiveTools", "effectiveEgress", "violations", "capabilities", "agentRef"}
+var PublicStatusFields = []string{"conditions", "observedGeneration", "endpoint", "revision", "effectiveTools", "effectiveEgress", "violations", "capabilities", "agentRef", "budget"}
 
 type AgentDefinition struct {
 	APIVersion string     `json:"apiVersion"`
@@ -334,7 +348,7 @@ func (s Status) Patch() map[string]any {
 	b, _ := json.Marshal(s)
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
-	for _, k := range []string{"endpoint", "agentRef", "capabilities"} {
+	for _, k := range []string{"endpoint", "agentRef", "capabilities", "budget"} {
 		if _, ok := m[k]; !ok {
 			m[k] = nil // merge patch: null removes the field
 		}
