@@ -167,6 +167,7 @@ jobs:
           examples/use-cases/bank/tests/live-guard-test.sh
           examples/use-cases/equipment/tests/install-test.sh
           examples/use-cases/equipment/tests/live-guard-test.sh
+          hack/ci/events-live-test.sh
       - name: reference docs tests
         run: |
           pip install --quiet pyyaml==6.0.2 jsonschema==4.26.0

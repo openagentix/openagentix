@@ -39,6 +39,7 @@ echo "$*" >> "` + callsFile + `"
 case "$*" in
   *port-forward*) echo $$ >> "` + pidFile + `"; echo "Forwarding from 127.0.0.1:` + u.Port() + ` -> 8081"; exec sleep 120 ;;
   *"get secret records-approver-token"*) printf %s "` + base64.StdEncoding.EncodeToString([]byte(leadToken)) + `" ;;
+  *"get deployment records"*) printf %s "$FAKE_EVENT_URL" ;;
   *) echo "unexpected kubectl call: $*" >&2; exit 9 ;;
 esac
 `
@@ -257,5 +258,35 @@ func TestEquipmentCtlFaultAndRequestEvents(t *testing.T) {
 		if _, code := e.ctl(t, bad...); code == 0 {
 			t.Fatalf("%v must be refused", bad)
 		}
+	}
+}
+
+func TestEquipmentCtlSaysTheSenderStartsTheAgentWhenItIsOn(t *testing.T) {
+	e := newEqEnv(t)
+	on := []string{"FAKE_EVENT_URL=http://a2a-gate.openagentix-gateway.svc.cluster.local:8080/agents/kagent/service-agent"}
+	out, code, calls := eqCtlWith(t, e.rest, on, "fault", "KT260-00130", "E-322")
+	if code != 0 || !strings.Contains(out, "deduplicated: false") || !strings.Contains(out, "the event sender is on") || strings.Contains(out, "next:") {
+		t.Fatalf("a new fault with the sender on (%d): %s", code, out)
+	}
+	if !strings.Contains(calls, "get deployment records") || strings.Contains(calls, "create") || strings.Contains(calls, "apply") {
+		t.Fatalf("ctl.sh asked the cluster for more than the setting: %s", calls)
+	}
+	if !regexp.MustCompile(`event_id case-SVC-[0-9]{4}-[0-9]{4}`).MatchString(out) {
+		t.Fatalf("the output does not name the event id: %s", out)
+	}
+	// the same fault again reuses the open case: no event is queued, so the old hint is right
+	out, code, _ = eqCtlWith(t, e.rest, on, "fault", "KT260-00130", "E-322")
+	if code != 0 || !strings.Contains(out, "deduplicated: true") || strings.Contains(out, "the event sender is on") || !strings.Contains(out, "next:") {
+		t.Fatalf("a repeated fault with the sender on (%d): %s", code, out)
+	}
+	// the sender off: as before
+	out, code, _ = eqCtlWith(t, e.rest, nil, "fault", "KT260-00131", "E-322")
+	if code != 0 || strings.Contains(out, "the event sender is on") || !strings.Contains(out, "next:") {
+		t.Fatalf("a fault with the sender off (%d): %s", code, out)
+	}
+	// --ask keeps working
+	out, code, _ = eqCtlWith(t, e.rest, on, "request", "KT260-00130", "the machine stops when it is warm")
+	if code != 0 || !strings.Contains(out, "the event sender is on") {
+		t.Fatalf("a request with the sender on (%d): %s", code, out)
 	}
 }

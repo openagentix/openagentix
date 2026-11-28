@@ -124,6 +124,68 @@ check "exits 0" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
 check "the Secrets are not made again, and nothing is restarted" "! grep -q 'create secret' '$LOG/calls' && ! grep -q 'delete secret' '$LOG/calls' && ! grep -q 'rollout restart' '$LOG/calls'"
 check "the output says they exist" "grep -q 'Secrets exist' '$LOG/out'"
 
+echo "# the event sender (EVENTS, ADR 0027): off by default, on with EVENTS=1, the same on a second run"
+reset
+FAKE_STUB=1 run; rc=$?
+check "EVENTS unset: exits 0 and the manifest has no event setting, no gate token and no marker line" "[ $rc = 0 ] && ! grep -q -e RECORDS_EVENT -e gate-token -e openagentix-a2a -e 'EVENTS-' '$LOG/applied.yaml'" "exit $rc"
+check "EVENTS unset: the pod still makes no connection (egress is the empty list) and runs as the ServiceAccount records, as before" "grep -q '^  egress: \[\]' '$LOG/applied.yaml' && grep -q 'serviceAccountName: records$' '$LOG/applied.yaml' && grep -q 'automountServiceAccountToken: false' '$LOG/applied.yaml'"
+check "EVENTS unset: the platform values are what they were before the sender existed: no event caller, no namespace admitted to the gate" "yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) == null and (.networkPolicy.extraA2ACallers == null)' '$LOG/platform-values.yaml' >/dev/null"
+check "EVENTS unset: the ServiceAccount of the pod is records (as before), and the account of the other form, records-events, is deleted after the rollout" "grep -q 'name: records$' '$LOG/applied.yaml' && grep -q 'serviceAccountName: records$' '$LOG/applied.yaml' && ! grep -q 'records-events' '$LOG/applied.yaml' && grep -q 'delete serviceaccount records-events -n kestrel-records' '$LOG/calls' && ! grep -q 'delete serviceaccount records -n' '$LOG/calls'"
+check "EVENTS unset: the output does not say the sender is on" "! grep -q 'event sender is ON' '$LOG/out'"
+cp "$LOG/applied.yaml" "$TMP/applied-off.yaml"
+reset
+EVENTS=1 FAKE_STUB=1 run; rc=$?
+check "EVENTS=1: exits 0 and says the sender is on" "[ $rc = 0 ] && grep -q 'event sender is ON' '$LOG/out'" "exit $rc: $(tail -4 "$LOG/out")"
+check "EVENTS=1: the platform values add the event caller kestrel-fault-events and the namespace kestrel-records for the gate (values-events.yaml), and nothing else of the platform values changes" "yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) != null and (.networkPolicy.extraA2ACallers == [{\"namespace\":\"kestrel-records\",\"podLabels\":{\"app\":\"records\"}}])' '$LOG/platform-values.yaml' >/dev/null"
+check "EVENTS=1: the ServiceAccount is records-events, and the account records of the other form is deleted after the rollout" "grep -q 'name: records-events' '$LOG/applied.yaml' && grep -q 'serviceAccountName: records-events' '$LOG/applied.yaml' && grep -q 'delete serviceaccount records -n kestrel-records' '$LOG/calls' && ! grep -q 'delete serviceaccount records-events' '$LOG/calls'"
+check "EVENTS=1: the manifest is valid YAML and has no marker line" "yq -e . '$LOG/applied.yaml' >/dev/null && ! grep -q 'EVENTS-' '$LOG/applied.yaml'"
+check "EVENTS=1: the service gets the gate URL of its agent and the token file, and nothing else about events" "grep -q 'RECORDS_EVENT_GATE_URL, value: \"http://a2a-gate.openagentix-gateway.svc.cluster.local:8080/agents/kagent/service-agent\"' '$LOG/applied.yaml' && grep -q 'RECORDS_EVENT_TOKEN_FILE, value: /var/run/records-events/token' '$LOG/applied.yaml' && [ \"\$(grep -c RECORDS_EVENT '$LOG/applied.yaml')\" = 2 ]"
+check "EVENTS=1: the token is projected for the gate's audience, lives 600 seconds, and is mounted read only" "grep -q 'serviceAccountToken: {audience: openagentix-a2a, expirationSeconds: 600, path: token}' '$LOG/applied.yaml' && grep -q 'name: gate-token, mountPath: /var/run/records-events, readOnly: true' '$LOG/applied.yaml'"
+check "EVENTS=1: the pod may reach DNS and the gate on 8080 and nothing else" "yq -c 'select(.spec.policyTypes != null) | ((.spec.egress | length) == 2 and (.spec.egress[0].to[0].podSelector.matchLabels[\"k8s-app\"] == \"kube-dns\") and (.spec.egress[1].to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"] == \"openagentix-gateway\") and (.spec.egress[1].to[0].podSelector.matchLabels.app == \"a2a-gate\") and (.spec.egress[1].ports | length == 1) and (.spec.egress[1].ports[0].port == 8080) and (.spec.ingress | length == 0))' '$LOG/applied.yaml' | grep -qx true"
+check "EVENTS=1: no Kubernetes API token is mounted, and the manifest has no Role, ClusterRole or binding" "grep -q 'automountServiceAccountToken: false' '$LOG/applied.yaml' && [ \"\$(yq -r '.kind' '$LOG/applied.yaml' | grep -c -e Role -e Binding)\" = 0 ]"
+check "EVENTS=1: no secret value is in the output or the manifest" "! grep -qi -e 'bearer ' '$LOG/out'"
+cp "$LOG/applied.yaml" "$TMP/applied-on.yaml"
+: > "$LOG/calls"; : > "$LOG/applied.yaml"
+EVENTS=1 FAKE_STUB=1 run; rc=$?
+check "EVENTS=1 again: exits 0, the same manifest, no Secret made again and nothing restarted" "[ $rc = 0 ] && cmp -s '$LOG/applied.yaml' '$TMP/applied-on.yaml' && ! grep -q 'create secret' '$LOG/calls' && ! grep -q 'rollout restart' '$LOG/calls'"
+: > "$LOG/calls"; : > "$LOG/applied.yaml"
+FAKE_STUB=1 run; rc=$?
+check "EVENTS back to unset: the manifest is the one without the sender (a run turns it off again)" "[ $rc = 0 ] && cmp -s '$LOG/applied.yaml' '$TMP/applied-off.yaml'"
+echo "# switching the sender off again: the release holds the event caller, and that removal is intended (only that)"
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$HERE/values.yaml" "$HERE/values-events.yaml" 2>/dev/null | yq . > "$TMP/expected-on.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"knowledge":{"kb":{"sourceHash":"def","image":{"tag":"dev-1"}}},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"equipment.json":"Kestrel Valley service desk agent"}}}},"notify":{"requireReady":false}}' "$TMP/expected-on.json" > "$TMP/release-on.json"
+reset; cp "$TMP/release-on.json" "$LOG/release.json"
+FAKE_STUB=1 run; rc=$?
+check "a release that holds this use case's event caller and namespace, with EVENTS unset: updated, with no ALLOW_VALUE_REMOVAL (the removal is intended)" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls' && ! grep -q 'more than the quick start' '$LOG/out'" "exit $rc: $(tail -4 "$LOG/out")"
+check "and the platform installer gets values without the event entries" "yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) == null and .networkPolicy.extraA2ACallers == null' '$LOG/platform-values.yaml' >/dev/null"
+reset; jq '.networkPolicy.extraA2ACallers += [{"namespace":"somewhere-else","podLabels":{"app":"x"}}]' "$TMP/release-on.json" > "$LOG/release.json"
+FAKE_STUB=1 run; rc=$?
+check "the same release with ANOTHER namespace in extraA2ACallers: refused (only this use case's own entries may go), before any change" "[ $rc = 1 ] && grep -q 'more than the quick start' '$LOG/out' && grep -q 'extraA2ACallers' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+reset; jq '.governance.a2a.callers += [{"name":"another-caller","serviceAccount":{"namespace":"x","name":"y"},"agents":["a"],"userId":{"exact":"z"}}]' "$TMP/release-on.json" > "$LOG/release.json"
+FAKE_STUB=1 run; rc=$?
+check "the same release with ANOTHER caller rule: refused, naming it" "[ $rc = 1 ] && grep -q 'another-caller' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+reset; cp "$TMP/release-on.json" "$LOG/release.json"
+EVENTS=1 FAKE_STUB=1 run; rc=$?
+check "with EVENTS=1 the same release is simply updated (nothing is lost)" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+echo "# beside the other use case with its sender on: its event caller and its namespace for the gate are in the release, so they are composed again (nothing of it is lost)"
+reset
+OTHER_UC="$ROOT/examples/use-cases/bank"
+bash "$ROOT/hack/compose-values.sh" "$ROOT/components/quickstart/values.yaml" "$OTHER_UC/values.yaml" "$OTHER_UC/values-events.yaml" 2>/dev/null | yq . > "$TMP/other-on.json"
+jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"fernvale dispute desk agent"}}}}}' "$TMP/other-on.json" > "$LOG/release.json"
+FAKE_BANK=1 FAKE_STUB=1 run; rc=$?
+check "the release holds the other use case with its sender on: exits 0" "[ $rc = 0 ]" "exit $rc: $(tail -5 "$LOG/out")"
+check "its event caller fernvale-case-events and its namespace fernvale-records are in the values given to the platform installer, and this use case's own are not (EVENTS unset)" "yq -e '(.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and (.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) == null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"fernvale-records\"]' '$LOG/platform-values.yaml' >/dev/null"
+reset; cp "$TMP/other-on.json" "$LOG/release.json"; jq '. * {"controlPlane":{"apiServerCIDRs":["172.18.0.0/24"],"sourceHash":"abc"},"gateway":{"stubModel":{"sourceHash":"x","scenarios":{"files":{"scenario.json":"fernvale dispute desk agent"}}}}}' "$TMP/other-on.json" > "$LOG/release.json"
+EVENTS=1 FAKE_BANK=1 FAKE_STUB=1 run; rc=$?
+check "with EVENTS=1 beside it: both event callers and both namespaces are composed" "[ $rc = 0 ] && yq -e '(.networkPolicy.extraA2ACallers | map(.namespace) | sort) == [\"fernvale-records\",\"kestrel-records\"] and (.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) != null and (.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
+
+for bad in 2 yes true ''; do
+  [ -n "$bad" ] || continue
+  reset
+  EVENTS=$bad run; rc=$?
+  check "EVENTS=$bad is refused before anything is changed" "[ $rc = 1 ] && grep -q 'EVENTS must be 0 or 1' '$LOG/out' && ! grep -q 'apply' '$LOG/calls' && ! grep -q 'create' '$LOG/calls'" "exit $rc: $(tail -3 "$LOG/out")"
+done
+
 echo "# only some of the Secrets exist (an earlier run stopped half way)"
 for have in a t e m; do
   reset; : > "$LOG/ns"; : > "$LOG/ns_mcp"; : > "$LOG/secret_$have"
@@ -299,12 +361,19 @@ check "a name that clashes between the composed files (same agent name, other co
 
 reset
 ALSO_COMPOSE="$RT/examples/use-cases/bank/values.yaml" VALUES_FILE="$TMP/af/one.yaml" run --beside-full-demo; rc=$?
-check "an ALSO_COMPOSE file that is not named values-full-demo.yaml (the use case's own values.yaml would replace lists of the full demo) is refused before any change" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml files of other use cases' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+check "an ALSO_COMPOSE file that is not named values-full-demo.yaml (the use case's own values.yaml would replace lists of the full demo) is refused before any change" "[ $rc = 1 ] && grep -q 'values-full-demo.yaml and values-events.yaml files of other use cases' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
 reset
 mkdir -p "$TMP/af/x"; cp "$RT/examples/use-cases/bank/values-full-demo.yaml" "$TMP/af/x/values-full-demo.yaml"
 ALSO_COMPOSE="$TMP/af/x/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
 check "a file with that name, wherever it is, is accepted" "[ $rc = 0 ]" "exit $rc: $(tail -3 "$LOG/out")"
 
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+bash "$RT/hack/compose-values.sh" -o "$TMP/af/release-ev.yaml" "$TMP/af/user.json" "$OTHER_FD" "$RT/examples/use-cases/bank/values-events.yaml" 2>/dev/null && yq . "$TMP/af/release-ev.yaml" > "$LOG/release.json"
+ALSO_COMPOSE="$OTHER_FD $RT/examples/use-cases/bank/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE may list the other use case's values-events.yaml: its event caller and namespace are kept, and this use case's own are not added (EVENTS unset)" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and (.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) == null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"fernvale-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+EVENTS=1 ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "EVENTS=1 beside a full demo: this use case's values-events.yaml is composed after its values-full-demo.yaml" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) != null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"kestrel-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
 echo "# checks on the platform after the install"
 reset
 FAKE_NO_AGENT=1 run; rc=$?

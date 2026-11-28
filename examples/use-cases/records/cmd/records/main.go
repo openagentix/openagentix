@@ -1,11 +1,14 @@
 // Command records is the system-of-record service for the reference use cases: one small binary, one domain per
 // install. The bank domain is the first. It serves a REST API (default :8081), an MCP endpoint (default :8080)
 // and health checks on both. It makes no outbound connection and reads no secret: approver tokens are checked
-// against hashes in a file.
+// against hashes in a file. One exception, off unless configured (ADR 0027): with RECORDS_EVENT_GATE_URL and
+// RECORDS_EVENT_TOKEN_FILE it sends an event to the A2A gate for a case that an intake route opened, as its own
+// ServiceAccount (a projected token read from the file for every request, never logged).
 package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -28,6 +32,8 @@ type served interface {
 	Handler() http.Handler
 	MCPHandler(version string) http.Handler
 	FireDue(ctx context.Context) (int, error)
+	SetEvents(ev *core.Events)
+	Unworked(ctx context.Context, olderThan time.Duration) ([]string, error)
 }
 
 // version and defaultDomain are stamped at build time (-ldflags "-X main.version=... -X main.defaultDomain=bank").
@@ -123,6 +129,10 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 	if err := d.Seed(ctx); err != nil {
 		return fmt.Errorf("seed: %w", err)
 	}
+	sender, err := eventSender(getenv, d, db, log, clock)
+	if err != nil {
+		return err
+	}
 	mln, err := net.Listen("tcp", or(getenv("RECORDS_MCP_ADDR"), ":8080"))
 	if err != nil {
 		return err
@@ -150,6 +160,11 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 			}
 		}
 	}()
+	if sender != nil {
+		tick, _ := time.ParseDuration(or(getenv("RECORDS_EVENT_TICK"), "2s"))
+		go sender.Run(ctx, tick)
+		log.Info("event sender on: an intake route sends an event to the gate", "attempts", sender.MaxAttempts())
+	}
 	errc := make(chan error, 2)
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -166,4 +181,43 @@ func run(ctx context.Context, getenv func(string) string, log *slog.Logger, onLi
 		return err
 	}
 	return nil
+}
+
+// eventSender returns the event sender, or nil when it is not configured. It is on only when both the gate URL and the token file are set; one
+// without the other, or a value that is not valid, stops the service (fail closed). With it nil the store gets no events table.
+func eventSender(getenv func(string) string, d served, db *sql.DB, log *slog.Logger, clock core.Clock) (*core.Sender, error) {
+	url, tokenFile := getenv("RECORDS_EVENT_GATE_URL"), getenv("RECORDS_EVENT_TOKEN_FILE")
+	if url == "" && tokenFile == "" {
+		return nil, nil
+	}
+	cfg := core.SenderConfig{URL: url, TokenFile: tokenFile, Unworked: d.Unworked}
+	if v := getenv("RECORDS_EVENT_UNWORKED_AFTER"); v != "" {
+		dur, err := time.ParseDuration(v)
+		if err != nil || dur < time.Minute || dur > 24*time.Hour {
+			return nil, errors.New("RECORDS_EVENT_UNWORKED_AFTER must be a duration from 1m to 24h")
+		}
+		cfg.UnworkedAfter = dur
+	}
+	if v := getenv("RECORDS_EVENT_MAX_ATTEMPTS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 10 {
+			return nil, errors.New("RECORDS_EVENT_MAX_ATTEMPTS must be 1 to 10")
+		}
+		cfg.MaxAttempts = n
+	}
+	if v := getenv("RECORDS_EVENT_TICK"); v != "" {
+		if dur, err := time.ParseDuration(v); err != nil || dur < 10*time.Millisecond || dur > time.Minute {
+			return nil, errors.New("RECORDS_EVENT_TICK must be a duration from 10ms to 1m")
+		}
+	}
+	ev, err := core.NewEvents(db, clock)
+	if err != nil {
+		return nil, fmt.Errorf("events: %w", err)
+	}
+	s, err := core.NewSender(ev, cfg, core.NewAudit(db, log, clock), log, clock)
+	if err != nil {
+		return nil, err
+	}
+	d.SetEvents(ev)
+	return s, nil
 }

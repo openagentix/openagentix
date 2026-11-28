@@ -113,6 +113,13 @@ type Service struct {
 	approvals *core.Approvals
 	timers    *core.Timers
 	outbox    *core.Outbox
+	// events queues an event for a case the INTAKE route opened (ADR 0027). nil when the sender is off. Only CreateCase uses it: no MCP tool does.
+	events eventQueue
+}
+
+// eventQueue is the part of core.Events that the intake route uses.
+type eventQueue interface {
+	Enqueue(ctx context.Context, tx *sql.Tx, subject string) error
 }
 
 func loadCase(ctx context.Context, q querier, id string) (CaseView, error) {
@@ -275,6 +282,11 @@ func (s *Service) CreateCase(ctx context.Context, in NewCase) (CaseView, error) 
 		id, n, custID, in.AccountID, in.TransactionID, merchID, in.ClaimType, note, amount, core.FormatTime(now), core.FormatTime(AddWorkingDays(now, ResponseWorkingDays)))
 	if err != nil {
 		return CaseView{}, err
+	}
+	if s.events != nil {
+		if err := s.events.Enqueue(ctx, tx, id); err != nil {
+			return CaseView{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return CaseView{}, err

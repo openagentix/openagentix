@@ -182,8 +182,81 @@ sec controlPlane.policy.memory.allow 'false' 'true'
 sec controlPlane.policy.allowedRuntimes '["builtin"]' '["builtin","container"]'
 sec controlPlane.policy.runtimes.container.images '["registry.local/oa/"]' '["registry.example/"]'
 sec controlPlane.containerAgents.toolProfiles '["a"]' '["a","b"]'
-sec networkPolicy.extraA2ACallers '[]' '[{"namespace":"x"}]'
 sec networkPolicy.enabled 'true' 'false'
+
+# networkPolicy.extraA2ACallers is a list of entries named by `namespace` (ADR 0027 slices 5 and 6: a use case's records service calls the gate, and two use cases
+# can run side by side): entries are merged by namespace and every addition is reported as SECURITY-RELEVANT, like a caller rule. A changed entry is refused.
+# A new entry is refused unless it is narrow: podLabels that are not empty, keys namespace and podLabels only, a namespace that is not default, kube-*, openagentix-* or a namespace
+# of the chart's own values (the platform namespaces: the list the chart's endpoint check walks), and a caller rule in the composed result for a ServiceAccount of that namespace.
+xcfile() { # xcfile <file> <namespace> <entry json> [with-rule: 1|0]: a values file with one extraA2ACallers entry and (by default) a caller rule for the namespace
+  local f=$1 ns=$2 entry=$3 rule=${4:-1}
+  if [ "$rule" = 1 ]; then
+    jq -n --arg ns "$ns" --argjson e "$entry" '{governance:{a2a:{callers:[{name:("rule-"+$ns),serviceAccount:{namespace:$ns,name:"records-events"},agents:["agent"]}]}},networkPolicy:{extraA2ACallers:[$e]}}' > "$T/$f"
+  else
+    jq -n --argjson e "$entry" '{networkPolicy:{extraA2ACallers:[$e]}}' > "$T/$f"
+  fi
+}
+xcfile xc1.yaml kestrel-records '{"namespace":"kestrel-records","podLabels":{"app":"records"}}'
+xcfile xc2.yaml fernvale-records '{"namespace":"fernvale-records","podLabels":{"app":"records"}}'
+xcfile xc3.yaml kestrel-records '{"namespace":"kestrel-records","podLabels":{"app":"other"}}'
+w xc0.yaml <<'EOF'
+knowledge: {enabled: false}
+EOF
+run "$T/xc0.yaml" "$T/xc1.yaml"
+check "extraA2ACallers: a first file that has none, a later one adds an entry (with its caller rule): composed" "[ $RC = 0 ] && out_has '.networkPolicy.extraA2ACallers == [{namespace:\"kestrel-records\",podLabels:{app:\"records\"}}]'" "$(cat "$T/err")"
+check "extraA2ACallers: the addition is reported as security relevant and names the namespace" "grep -q 'SECURITY-RELEVANT' '$T/err' && grep 'SECURITY-RELEVANT' '$T/err' | grep -q 'kestrel-records'"
+run "$T/xc0.yaml" "$T/xc1.yaml" "$T/xc2.yaml"
+check "extraA2ACallers: two files with different namespaces are joined by namespace (the two use cases, each with its caller rule)" "[ $RC = 0 ] && out_has '(.networkPolicy.extraA2ACallers | map(.namespace)) == [\"kestrel-records\",\"fernvale-records\"]'" "$(cat "$T/err")"
+run "$T/xc0.yaml" "$T/xc1.yaml" "$T/xc1.yaml"
+check "extraA2ACallers: the same entry twice is kept once" "[ $RC = 0 ] && out_has '(.networkPolicy.extraA2ACallers | length) == 1'"
+run "$T/xc1.yaml" "$T/xc3.yaml"
+check "extraA2ACallers: the same namespace with other pod labels is refused, naming both files" "[ $RC = 1 ] && grep -q 'xc1.yaml' '$T/err' && grep -q 'xc3.yaml' '$T/err' && [ ! -s '$T/out' ]"
+w xc4.yaml <<'EOF'
+networkPolicy:
+  extraA2ACallers:
+    - {podLabels: {app: records}}
+EOF
+run "$T/xc1.yaml" "$T/xc4.yaml"
+check "extraA2ACallers: an entry without a namespace is refused" "[ $RC = 1 ] && grep -qi 'namespace' '$T/err'"
+w xc5.yaml <<'EOF'
+networkPolicy:
+  enabled: false
+  extraA2ACallers:
+    - {namespace: fernvale-records, podLabels: {app: records}}
+EOF
+run "$T/xc0.yaml" "$T/xc5.yaml"
+check "extraA2ACallers: another networkPolicy key beside it is still a security key and is refused" "[ $RC = 1 ] && grep -q 'networkPolicy.enabled' '$T/err'"
+# the narrow rules, one refusal each (the first file has no entry, the later one adds the entry)
+refuse_entry() { # refuse_entry <description> <namespace> <entry json> <part of the error> [with-rule 1|0]
+  xcfile xl.yaml "$2" "$3" "${5:-1}"
+  run "$T/xc0.yaml" "$T/xl.yaml"
+  check "extraA2ACallers: $1: refused (exit 1, nothing on stdout, the file named)" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'xl.yaml' '$T/err' && grep -q -- '$4' '$T/err'" "rc=$RC $(head -c 400 "$T/err")"
+}
+refuse_entry "no podLabels (every pod of the namespace would be admitted)" kestrel-records '{"namespace":"kestrel-records"}' 'podLabels'
+refuse_entry "empty podLabels" kestrel-records '{"namespace":"kestrel-records","podLabels":{}}' 'podLabels'
+refuse_entry "podLabels that is not a map" kestrel-records '{"namespace":"kestrel-records","podLabels":"records"}' 'podLabels'
+refuse_entry "an extra key (ipBlock)" kestrel-records '{"namespace":"kestrel-records","podLabels":{"app":"records"},"ipBlock":{"cidr":"0.0.0.0/0"}}' 'other than namespace and podLabels'
+refuse_entry "the namespace default" default '{"namespace":"default","podLabels":{"app":"records"}}' 'platform or system namespace'
+refuse_entry "the namespace kube-system" kube-system '{"namespace":"kube-system","podLabels":{"app":"x"}}' 'platform or system namespace'
+refuse_entry "another kube-* namespace" kube-public '{"namespace":"kube-public","podLabels":{"app":"x"}}' 'platform or system namespace'
+refuse_entry "a kube- namespace that the chart does not list" kube-extra '{"namespace":"kube-extra","podLabels":{"app":"x"}}' 'platform or system namespace'
+refuse_entry "an openagentix-* namespace" openagentix-gateway '{"namespace":"openagentix-gateway","podLabels":{"app":"x"}}' 'platform or system namespace'
+refuse_entry "an openagentix- namespace that the chart does not list" openagentix-anything '{"namespace":"openagentix-anything","podLabels":{"app":"x"}}' 'platform or system namespace'
+refuse_entry "a namespace of the chart's own values (kagent)" kagent '{"namespace":"kagent","podLabels":{"app":"x"}}' 'platform or system namespace'
+refuse_entry "no caller rule for a ServiceAccount of that namespace in the composed result" kestrel-records '{"namespace":"kestrel-records","podLabels":{"app":"records"}}' 'no caller rule' 0
+w xc6.yaml <<'EOF'
+governance:
+  a2a:
+    callers:
+      - {name: other-rule, serviceAccount: {namespace: another-ns, name: x}, agents: [agent]}
+EOF
+run "$T/xc0.yaml" "$T/xc6.yaml" "$T/xc1.yaml"
+check "extraA2ACallers: a caller rule for ANOTHER namespace does not satisfy the entry" "[ $RC = 0 ]" "$(cat "$T/err")"
+xcfile xl2.yaml kestrel-records '{"namespace":"kestrel-records","podLabels":{"app":"records"}}' 0
+run "$T/xc0.yaml" "$T/xc6.yaml" "$T/xl2.yaml"
+check "extraA2ACallers: with a rule for another namespace only, the entry without its own rule is refused" "[ $RC = 1 ] && grep -q 'no caller rule' '$T/err'"
+run "$T/xc0.yaml" "$T/xc1.yaml" "$T/xc2.yaml" "$T/xc3.yaml"
+check "extraA2ACallers: refusing a bad file writes nothing even when the others are good" "[ $RC = 1 ] && [ ! -s '$T/out' ]"
 sec governance.a2a.enabled 'true' 'false'
 sec mcp.virtual.incomingAuth.type '"anonymous"' '"oidc"'
 sec mcp.virtual.codeMode.enabled 'false' 'true'
@@ -250,7 +323,7 @@ unrelated: 1
 EOF
 # every leaf (arrays count as one leaf) of the chart defaults under a security key, as a JSON path array
 jq -c --argjson pfx '["controlPlane.policy.allowedModels","controlPlane.policy.allowedProfiles","controlPlane.policy.allowedSkills","controlPlane.policy.egress","controlPlane.policy.requireToolProfile","controlPlane.policy.allowKnowledge","controlPlane.policy.allowNotify","controlPlane.policy.memory","controlPlane.policy.allowedRuntimes","controlPlane.policy.runtimes","controlPlane.containerAgents.toolProfiles","networkPolicy","governance.a2a.enabled","mcp.virtual.incomingAuth","mcp.virtual.codeMode.enabled","mcp.egress.allow","observability.capture.content","gateway.policy"]' \
-  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
+  '[paths(type != "object")] | map(select(map(type) | index("number") == null)) | .[] | select((join(".")) as $d | $d != "networkPolicy.extraA2ACallers" and any($pfx[]; . as $s | $d == $s or ($d | startswith($s + "."))))' "$T/chart.json" > "$T/secpaths.jsonl"
 check "the chart defaults hold security keys to test (more than 40 leaves)" "[ \"\$(wc -l < '$T/secpaths.jsonl' | tr -d ' ')\" -gt 40 ]"
 NSEC=0
 while IFS= read -r P; do

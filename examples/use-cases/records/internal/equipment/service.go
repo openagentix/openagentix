@@ -130,6 +130,21 @@ type Service struct {
 	approvals *core.Approvals
 	timers    *core.Timers
 	outbox    *core.Outbox
+	// events queues an event for a case an INTAKE route opened (ADR 0027). nil when the sender is off. Only CreateFault and CreateRequest use it:
+	// no MCP tool does, so an agent cannot start a run for itself.
+	events eventQueue
+}
+
+// eventQueue is the part of core.Events that the intake routes use.
+type eventQueue interface {
+	Enqueue(ctx context.Context, tx *sql.Tx, subject string) error
+}
+
+func (s *Service) queueEvent(ctx context.Context, tx *sql.Tx, id string) error {
+	if s.events == nil {
+		return nil
+	}
+	return s.events.Enqueue(ctx, tx, id)
 }
 
 // GetCase returns a case.
@@ -596,6 +611,9 @@ func (s *Service) CreateFault(ctx context.Context, serial, code string) (CaseVie
 		if id, err = s.newCase(ctx, tx, serial, m.DealerID, "fault", code, "", false); err != nil {
 			return CaseView{}, false, err
 		}
+		if err := s.queueEvent(ctx, tx, id); err != nil {
+			return CaseView{}, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return CaseView{}, false, err
@@ -623,6 +641,9 @@ func (s *Service) CreateRequest(ctx context.Context, serial, note string, safety
 	}
 	id, err := s.newCase(ctx, tx, serial, m.DealerID, "request", "", note, len(safety) > 0 && safety[0])
 	if err != nil {
+		return CaseView{}, err
+	}
+	if err := s.queueEvent(ctx, tx, id); err != nil {
 		return CaseView{}, err
 	}
 	if err := tx.Commit(); err != nil {

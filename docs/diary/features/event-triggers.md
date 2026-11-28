@@ -6,7 +6,7 @@ description: "How a system of record starts one agent run through the A2A gate a
 
 # Event callers on the A2A gate
 
-Issue [#229](https://github.com/openagentix/openagentix/issues/229), [ADR 0027](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0027-event-triggers-through-the-gate.md), slices 3 and 4. The code is in `services/a2a-gate` (`internal/gate/event.go`, `internal/rules/event.go`, `internal/rules/eventtext.go`) and in the chart helper `oa.a2aRules`. The use cases do not send events yet: slices 5 to 7 of the ADR (the equipment and bank records services, and the docs for the channels path) are not built.
+Issue [#229](https://github.com/openagentix/openagentix/issues/229), [ADR 0027](https://github.com/openagentix/openagentix/blob/main/docs/decisions/0027-event-triggers-through-the-gate.md), slices 3 and 4. The code is in `services/a2a-gate` (`internal/gate/event.go`, `internal/rules/event.go`, `internal/rules/eventtext.go`) and in the chart helper `oa.a2aRules`. The use cases send events as a second step (slices 5 to 7, below): the equipment and bank records services, and the docs for the channels path.
 
 ## What it is
 
@@ -57,3 +57,19 @@ The chart checks the same things as the gate, so that a values file that renders
 - Container agents are refused for event callers in this release.
 - An event caller may name only agents of the chart's `agents[]` (by name), so that the chart can check that none has long-term memory. The gate cannot tell which agents have memory and does not check it. An agent made by an `AgentDefinition` cannot be named by an event caller in this release.
 - A JSON-RPC error from the runtime reaches the sender as its code with the message `refused` and the status 502, never the runtime's own status.
+
+## The use cases send events (slices 5 to 7)
+
+Off by default. `EVENTS=1 examples/use-cases/<use case>/install.sh` turns on the sender of the records service and adds `values-events.yaml` (the event caller rule and the namespace admitted to the gate) to the platform values, so with `EVENTS` unset the gate has neither: a case that an intake route accepts (a fault, a service request, a new dispute) queues one event in the same transaction, and a sender loop calls the gate as the event caller `kestrel-fault-events` or `fernvale-case-events`, with the pod's own ServiceAccount `records-events` and a projected token for the gate's audience. Only an intake route writes an event; no MCP tool does, which a test checks by calling every tool. The records pod may reach DNS and the gate on 8080 and nothing else. The rate and limits are sized from the measured token cost of a case (about 70,000 tokens for equipment, 100,000 to 180,000 for the bank, against the gateway's 1,000,000 an hour): the event rate spreads a burst but cannot fund the budget, and the gateway's budget is the hard stop. The numbers and the reasons are in each use case's README, "Event triggers".
+
+| Claim | Evidence |
+|---|---|
+| The sender sends the ADR's message, at least once and bounded | Go tests with a fake gate and a fake clock in `examples/use-cases/records/internal/core`: the body is the gate's input exactly, a 429 waits for `Retry-After` and uses no try, failures back off and are given up, a failed task gets a new attempt id, an unworked case is asked again up to the bound, the token is in no log or audit line, a redirect is not followed |
+| Only an intake route writes an event, in the case's transaction | Tests in the equipment and bank modules: a new fault, a request and a dispute queue one row; a repeat, a refused case and every MCP tool queue none; a failed enqueue leaves no case; with the sender off there is no `events` table |
+| The records service is off unless configured, and half a configuration stops it | `cmd/records` tests |
+| The install is idempotent and the manifest is the same as before when `EVENTS` is unset | the install tests with fakes (first run, second run, back to unset, beside the other use case and the full demo) and the manifest tests of both use cases |
+| Live: a real intake event starts the agent with no person; a repeat starts no second run; a burst is held to the rate and all are sent once; an agent tool causes no event; nothing is sent with the sender off | `hack/ci/events-live.sh`, opt-in jobs of the `e2e` workflow (equipment run 46123796056, bank run 46122654035, both on head 94b8326, all checks passed; the what-works row has the counts) |
+
+The channels path for senders that cannot speak A2A (slice 7), with what is weaker on it, is in [channels](./channels.md), "Events from a sender that cannot speak A2A". It is documentation only: no use case wires it.
+
+Not done: the sweep for unworked cases was not run live (it waits 30 minutes; the unit tests cover it); a real model was not used; more than one gate replica and a runtime restart were not tried.
