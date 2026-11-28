@@ -87,16 +87,16 @@ for v in tools-alpha tools-beta tools-sharedkb; do $K rollout restart "deploymen
 for v in tools-alpha tools-beta tools-sharedkb; do $K rollout status "deployment/$v" -n "$MCPNS" --timeout=180s >/dev/null 2>&1 || echo "       (vMCP $v: the restart was not confirmed)"; done
 # one port-forward, token and session per profile
 declare -A PORT SID
-n=0
+n=0; PBASE=$((30000 + RANDOM % 4000))   # three consecutive ports, so that no two port-forwards of this script share one (one live run answered "invalid audience" on beta, which a shared port would explain)
 for p in alpha beta sharedkb; do
-  n=$((n+1)); PORT[$p]=$((30000 + RANDOM % 5000 + n * 7))
+  PORT[$p]=$((PBASE + n)); n=$((n+1))
   $K port-forward -n "$MCPNS" "svc/vmcp-tools-$p" "${PORT[$p]}:4483" >/dev/null 2>&1 & PIDS+=($!)
   mcp_token "openagentix-vmcp-$p" > "$TD/tok-$p"
 done
 sleep 4
 for p in alpha beta sharedkb; do
   SID[$p]=-
-  for _ in $(seq 1 6); do SID[$p]=$(mcp_open "${PORT[$p]}" "$TD/tok-$p"); [ "${SID[$p]}" != - ] && break; sleep 5; done
+  for _ in $(seq 1 10); do SID[$p]=$(mcp_open "${PORT[$p]}" "$TD/tok-$p"); [ "${SID[$p]}" != - ] && break; sleep 5; done
   if [ "${SID[$p]}" = - ]; then
     # what the first attempt did, and what the vMCP says: the status and the start of the answer, never a token
     echo "       no session on $p: the answer to initialize was:"
