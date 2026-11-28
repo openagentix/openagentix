@@ -73,8 +73,9 @@ done < <(grep -v '^#' "$TABLE")
 echo "# 3 the shared helper"
 HELPER="$ROOT/hack/ci/lib/require-ci-context.sh"
 h() { # h <context> <env...>: source the helper and call it; prints the exit code
-  ( env -u GITHUB_ACTIONS FAKE_CTX="$1" FAKE_CALLS="$TMP/calls" KUBECTL="$BIN/kubectl" "${@:2}" bash -c '. "$0"; require_ci_context demo DEMO_CI_CONTEXT; echo passed' "$HELPER" ) > "$TMP/hout" 2>&1; echo $?
+  ( env -u GITHUB_ACTIONS HELPER_ARG="$HELPER_ARG" FAKE_CTX="$1" FAKE_CALLS="$TMP/calls" KUBECTL="$BIN/kubectl" "${@:2}" bash -c '. "$0"; require_ci_context demo DEMO_CI_CONTEXT $HELPER_ARG; echo passed' "$HELPER" ) > "$TMP/hout" 2>&1; echo $?
 }
+HELPER_ARG=""
 : > "$TMP/calls"
 check "a context that is neither kind nor k3d is refused, also on GitHub Actions" "[ \"\$(h prod DEMO_CI_CONTEXT=prod)\" = 2 ] && [ \"\$(h prod GITHUB_ACTIONS=true)\" = 2 ]"
 check "no context at all is refused" "[ \"\$(h '' GITHUB_ACTIONS=true)\" = 2 ]"
@@ -82,6 +83,10 @@ check "kind-openagentix is refused by hand, also when the variable names it" "[ 
 check "a kind context with no variable is refused by hand; with the variable naming another context too" "[ \"\$(h kind-a)\" = 2 ] && [ \"\$(h kind-a DEMO_CI_CONTEXT=kind-b)\" = 2 ]"
 check "a kind context that the variable names exactly is accepted by hand, so is a k3d one" "[ \"\$(h kind-a DEMO_CI_CONTEXT=kind-a)\" = 0 ] && [ \"\$(h k3d-a DEMO_CI_CONTEXT=k3d-a)\" = 0 ]"
 check "on GitHub Actions a kind context is accepted, kind-openagentix included (the quick start jobs use that name on their own runner)" "[ \"\$(h kind-a GITHUB_ACTIONS=true)\" = 0 ] && [ \"\$(h kind-openagentix GITHUB_ACTIONS=true)\" = 0 ]"
+HELPER_ARG=allow-none
+check "allow-none: no context at all is accepted on GitHub Actions only (a script that makes its cluster itself), and never by hand" "[ \"\$(h '' GITHUB_ACTIONS=true)\" = 0 ] && [ \"\$(h '')\" = 2 ] && [ \"\$(h '' DEMO_CI_CONTEXT=)\" = 2 ]"
+check "allow-none changes nothing else: a context of a person's cluster is still refused" "[ \"\$(h prod GITHUB_ACTIONS=true)\" = 2 ] && [ \"\$(h kind-openagentix DEMO_CI_CONTEXT=kind-openagentix)\" = 2 ]"
+HELPER_ARG=""
 check "the helper reads the context and nothing else" "[ \"\$(grep -vc '^kubectl config current-context ' '$TMP/calls')\" = 0 ]"
 check "the refusal says that nothing was changed" "h prod >/dev/null; grep -q 'Nothing was changed' '$TMP/hout'"
 
