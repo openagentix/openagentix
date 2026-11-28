@@ -1,11 +1,11 @@
 # ADR 0031: credentials of tool endpoints, and tool servers that cannot read the Secrets of the tools namespace
 
-Status: Proposed, spike required
+Status: Proposed
 Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/229 (reference use cases; the follow-up named in ADR 0026 decision 12)
-Replaces: none. The follow-up record that ADR 0026 A3 and decision 12 name for the Secret reach of every tool server in `mcp.namespace`. Builds on ADR 0025 section 4 and Amendment 1, and ADR 0026 A3 and A4. Closes one open row of ADR 0030 (proposed, PR #275). See "Relation to other records".
+Replaces: none. The follow-up record that ADR 0026 A3 and decision 12 name for the Secret reach of every tool server in `mcp.namespace`. Builds on ADR 0025 section 4 and Amendment 1, and ADR 0026 A3 and A4. Closes one open row of ADR 0030 (accepted, PR #275). See "Relation to other records".
 
-Today every tool server (the ToolHive `VirtualMCPServer` pods) in `mcp.namespace` runs under a ServiceAccount whose Role, made by the ToolHive operator, can get, list and watch every Secret in that namespace. So the header credential of one use case's endpoint is readable by the tool server of another use case. This record gives each tool server a ServiceAccount and a Role that the chart writes, with no right on Secrets, so the tool server accounts lose their Secret reach, and names it in the tool server's spec, which makes the operator create no ServiceAccount and no Role for it. Credentials still reach the tool server as environment values from Secret references, which the kubelet resolves; the pod never needs to read a Secret through the API. Off by default; with the new value unset, the chart renders byte for byte what it renders today. A spike on a throwaway cluster must answer the questions in "Spike" before this record can be accepted. Nothing here is built. Everything is *unverified* until the slices below are done.
+Today every tool server (the ToolHive `VirtualMCPServer` pods) in `mcp.namespace` runs under a ServiceAccount whose Role, made by the ToolHive operator, can get, list and watch every Secret in that namespace. So the header credential of one use case's endpoint is readable by the tool server of another use case. This record gives each tool server a ServiceAccount and a Role that the chart writes, with no right on Secrets, so the tool server accounts lose their Secret reach, and names it in the tool server's spec, which makes the operator create no ServiceAccount and no Role for it. Credentials still reach the tool server as environment values from Secret references, which the kubelet resolves; the pod never needs to read a Secret through the API. Off by default; with the new value unset, the chart renders byte for byte what it renders today. A spike on a throwaway cluster answered the fifteen questions of "Spike" as expected, with one partial answer (the ConfigMap rule stays); see "Spike results". The chart render, the install check and the use cases are not built and stay *unverified* until the slices below are done.
 
 ## Context
 
@@ -35,7 +35,7 @@ The version is pinned by `components/tools/install.sh` (`TOOLHIVE_VERSION=0.67.1
 | A. Do nothing (ADR 0026 decision 12) | Nothing to build | A compromise of any tool server pod gives every credential in `mcp.namespace` | Live `auth can-i` answers |
 | B. A namespace per credentialed tool group | Each tool server's Secret reach is its own group's Secrets, whatever the operator grants; the structural answer named in ADR 0026 | Moves tool servers out of `mcp.namespace`, which about 50 references in the chart templates key on (refusal lists, ingress and egress policies, the kb and notify ingress, the guard, the runtime's tool URLs); one OIDC config, telemetry config and default policy per namespace; every tool URL of a moved group changes | Read in the templates; nothing run |
 | C1. Narrow the operator's Role in place | Small | The operator puts the Role back on the next reconcile. Rejected | Source, `ensureRBACResources` |
-| C2. A ServiceAccount and Role the chart writes per tool server, named in `spec.serviceAccount`, with no rule on Secrets | Same pods, same namespace, same URLs; the operator creates no Role for it; the reach to every Secret goes | The chart owns rights that upstream defined; an upstream change of what the tool server reads can break it, so the spike and the install check are needed on every ToolHive version bump | Source, `ensureRBACResources` and the runtime readers; nothing run |
+| C2. A ServiceAccount and Role the chart writes per tool server, named in `spec.serviceAccount`, with no rule on Secrets | Same pods, same namespace, same URLs; the operator creates no Role for it; the reach to every Secret goes | The chart owns rights that upstream defined; an upstream change of what the tool server reads can break it, so the spike and the install check are needed on every ToolHive version bump | Source, `ensureRBACResources` and the runtime readers; the spike (run 46131733146), Role applied by hand |
 | C3. `outgoingAuth.source: inline` | The operator's own minimal Role, no Secret rule | A different upstream path than the one shown in the ADR 0025 spike and the two live use cases: backends are written statically by the operator, and every backend's auth is listed in each tool server's spec | Source; nothing run |
 | D. No shared credential: the endpoint checks the tool server's own projected token (audience-bound), by TokenReview or by the cluster's keys | No header Secret at all; tokens expire and rotate | ToolHive 0.67.1 cannot send it. It would need an upstream auth type, or an extra container in each tool server pod that reads a token file and adds the header (not checked that the pod template accepts one); and every endpoint must check tokens: TokenReview needs a cluster-wide grant for the endpoint, the keys need egress to the API server. A third-party endpoint cannot do it at all | CRD enum; nothing run |
 
@@ -50,7 +50,7 @@ The version is pinned by `components/tools/install.sh` (`TOOLHIVE_VERSION=0.67.1
 
 ## Decision
 
-**Option C2**, if the spike answers its questions as expected. C3 is the first fallback, B the second. D stays the direction for later, together with the gate token of ADR 0021 (proposed, PR #142) and identity in 0.4.
+**Option C2**, confirmed by the spike ("Spike results"). D stays the direction for later, together with the gate token of ADR 0021 (proposed, PR #142) and identity in 0.4.
 
 Why C2: the tool server accounts lose their reach to every Secret, with no new pod, no move, no new URL and no change to the policies, the guard or the catalog. It uses a field the CRD offers for this purpose, and the upstream code skips its own Role when the field is set. It keeps the discovered mode that the spike and the live use cases run on. Its weakness is that the chart now owns the list of rights, so a future ToolHive version that needs more would fail; the install check below makes that loud instead of silent.
 
@@ -71,7 +71,7 @@ One boolean. No new field on a resource. The words are the chart's own; no upstr
 For every tool server the chart renders (the shared one, each profile, each `-workload` variant):
 
 - a ServiceAccount `openagentix-<tool server name>` with `automountServiceAccountToken` left to the pod (the tool server needs its token for the API);
-- a Role of the same name with exactly these rules: get, list and watch on the ToolHive resources the upstream discovered rules name (`mcpgroups`, `mcpservers`, `mcpremoteproxies`, `mcpserverentries`, `mcpexternalauthconfigs`, `mcptoolconfigs`); get on `virtualmcpservers` and update and patch on `virtualmcpservers/status`, both limited by `resourceNames` to its own object; get, list and watch on `configmaps` (needed for the CA bundle watch, unless the spike shows otherwise). Nothing on `secrets`. Nothing else;
+- a Role of the same name with exactly these rules: get, list and watch on the ToolHive resources the upstream discovered rules name (`mcpgroups`, `mcpservers`, `mcpremoteproxies`, `mcpserverentries`, `mcpexternalauthconfigs`, `mcptoolconfigs`); get on `virtualmcpservers` and update and patch on `virtualmcpservers/status`, both limited by `resourceNames` to its own object; get, list and watch on `configmaps` (the CA bundle watch; without it the spike saw repeated `configmaps is forbidden` watch errors). Nothing on `secrets`. Nothing else;
 - a RoleBinding of the same name to that ServiceAccount;
 - `spec.serviceAccount: openagentix-<tool server name>` on the tool server.
 
@@ -141,7 +141,33 @@ On a throwaway kind cluster with its own kubeconfig (never the maintainer's clus
 14. Do a `helm upgrade` with the switch on, an operator restart and a re-install of the operator at the same version leave the chart's ServiceAccount, Role and RoleBinding as Helm wrote them?
 15. Under the new account, are the pod's volumes and environment sources the same as today, with nothing new?
 
-Stop rule: if question 1, 2, 3 or 4 is answered against the expectation, the chart slice does not start. The spike then tries C3 (`source: inline`) with the same questions 2 to 6, and this record is amended with the result before anything is built. If C3 fails too, option B gets its own amendment with its slice list.
+Stop rule: if question 1, 2, 3 or 4 is answered against the expectation, the chart slice does not start. (They were not; see "Spike results".)
+
+## Spike results
+
+Run [46131733146](https://github.com/openagentix/openagentix/actions/runs/46131733146) of the `e2e` workflow (input `adr0031`, job `e2e (adr 0031 spike, tool server accounts)`, PR #277), recorded in `docs/diary/features/adr-0031-tool-server-spike.md`. A kind cluster on a hosted runner, the quick start with the CI values of the endpoints job, the stub model, no paid call. ToolHive as running: operator image, both charts and the tool server image all v0.67.1. Four tool servers (`tools`, `tools-lookup`, `tools-lookup-cm` and `tools-disputes` with two endpoints that take a header from a Secret), each switched by hand to a ServiceAccount and the Role of "Render with `ownServiceAccounts: true`".
+
+| # | Answer |
+|---|---|
+| 1 | Yes. No operator ServiceAccount, Role or RoleBinding for a tool server with the field set; the hand-written objects unchanged across an event, a spec change and an operator restart |
+| 2 | Yes. Every backend `ready` on each tool server (`osv`, and both endpoints on `tools-disputes`) |
+| 3 | Yes. Tool lists and answers identical before and after; the endpoint received its header on every request |
+| 4 | Yes. `can-i get` and `list secrets` answered no for each account (yes for the operator's accounts before); a pod as the new account got 403 on a Secret read, a pod as the old account got 200 |
+| 5 | No forbidden or RBAC line in any tool server log at start, with an entry added while running, and with a backend restart |
+| 6 | Yes. A `-workload` variant accepted a pod-bound token with its audience and refused another audience (401 `invalid audience`) |
+| 7 | Partly. Without the ConfigMap rule the tool server kept working, but its log filled with repeated `configmaps is forbidden` watch errors. The rule stays |
+| 8 | Yes. Status kept updating with `resourceNames` on the own object; `can-i` no for another tool server's name |
+| 9 | The old `<name>-vmcp` objects stay after the switch and are not created again once deleted |
+| 10 | Node 2.479 GiB before, 2.537 GiB after (whole node, one more test tool server running); each tool server Ready with all backends about 16 s after the switch |
+| 11 | No for create pods, statefulsets, deployments, `pods/exec` and `pods/attach`, for each account |
+| 12 | Recorded for the one `mcp.servers[]` proxy of that install, as the upstream Role says |
+| 13 | The session Secret is still made and reaches the pod as an environment value from a Secret reference; a session ends cleanly on a restart (404) and a new one works |
+| 14 | A Helm upgrade and an operator restart changed nothing in the hand-written objects |
+| 15 | No new or missing volume or environment source |
+
+The stop rule did not trigger, so `outgoingAuth.source: inline` was not tried. **Limits:** one ToolHive version, one single-node kind cluster, one complete run; one shared-group server (`osv`) and one endpoint group, with no knowledge base mirror, notify or diagnostics group in the cluster; the incoming side used the API server's own tokens, not the identity provider of a real install; the Role was applied by hand, so the chart render, the admission policies and the install check were not exercised; memory is for the whole node.
+
+**If a later ToolHive version breaks this,** the fallbacks stay on record: `outgoingAuth.source: inline` (C3), then a namespace per credentialed group (B). Each would need its own amendment.
 
 ## Consequences
 
@@ -150,15 +176,15 @@ Stop rule: if question 1, 2, 3 or 4 is answered against the expectation, the cha
 - Ruled out for now: a shared credential that tool servers do not hold at all (option D); per-agent credentials.
 - Security impact: narrows what every tool server account may read in `mcp.namespace` when the value is on. No new pod, no new network path, nothing new leaves the cluster, nothing new is logged. The control plane is unchanged and reads no Secret. Security-relevant: the chart slice gets an independent review before merge.
 - Compatibility: none with the default. With the value on, every tool server restarts once; the old operator objects are removed by the installer.
-- Proof needed: the spike, then the tests and live checks of the slices.
+- Proof needed: the spike (done, with the limits in "Spike results"), then the tests and live checks of the slices.
 
 ## Relation to other records
 
 | Record | Relation |
 |---|---|
-| ADR 0026 | The follow-up of A3 and decision 12. This record narrows the reach in place; the namespace per credentialed group stays the second fallback |
+| ADR 0026 | The follow-up of A3 and decision 12. This record narrows the reach in place; the namespace per credentialed group stays on record as a fallback |
 | ADR 0025 | Amendment 1's note on Secret reach applies to the diagnostics bearer values; they are covered by the same switch |
-| ADR 0030 (proposed, PR #275) | Its per-caller values for the knowledge base live in `mcp.namespace`; this record removes their reach from other groups' tool server accounts (row 5 of its section 7) |
+| ADR 0030 (accepted, PR #275) | Its per-caller values for the knowledge base live in `mcp.namespace`; this record removes their reach from other groups' tool server accounts (row 5 of its section 7) |
 | ADR 0021 (proposed, PR #142) | Its gate token and option D are the way to a credential the tool server does not hold as a static value |
 | ADR 0019 | The `-workload` variants get accounts like every other tool server |
 
@@ -167,23 +193,26 @@ Stop rule: if question 1, 2, 3 or 4 is answered against the expectation, the cha
 Each slice is one pull request that `Refs #229`, tests first, off by default, with a changelog line when users can see it.
 
 1. **This record.** Docs build.
-2. **Spike** (above). Diary entry with each answer, the commands, the outputs and the limits; this record amended with the result.
+2. **Spike** (done, PR #277, run 46131733146). Diary entry with each answer, the commands, the outputs and the limits; this record amended with the result. The chart slice's live check covers what the spike did not: the knowledge base mirror, notify and the diagnostics group.
 3. **Chart and installer** (security-relevant, independent review). The value, the three objects per tool server, `spec.serviceAccount`, the install check, the clean-up of the operator's objects, the refusal to turn it off, the compose security key. Chart tests as above. `make test-apiserver`: the rendered objects pass a server-side dry run against the ToolHive CRDs at the pinned version, and `kubectl auth can-i` as each rendered account answers no for Secrets on the real API server. Installer tests with fakes: a yes from `can-i` fails the install with the account's name; the clean-up deletes only `<name>-vmcp` objects of tool servers the chart renders. Live, in CI on kind (the `e2e` workflow with endpoints and diagnostics): every backend `ready`, a call through each group reaches its endpoint with its header, `can-i` no for every account, no forbidden line in any tool server log.
 4. **The use cases.** The switch in the full demo list; the bank, equipment and software organisation live scripts with it on, beside a full demo (`--beside-full-demo`, `ALSO_COMPOSE`), on a throwaway cluster; `can-i` steps flipped to no; `what-works.md`, the use case READMEs and the diary with the limits.
 
 ## Not checked / open points
 
-- *Unverified*: every answer of the spike; whether the tool server's start fails or only logs when a right is missing; whether a later ToolHive version adds a run-time read that this Role lacks; whether the pod template of a tool server accepts an extra container (option D).
+- *Unverified*: the chart render and install check; the knowledge base mirror, notify and the diagnostics group under the new accounts; the incoming side with the identity provider of a real install; whether a later ToolHive version adds a run-time read that this Role lacks; whether the pod template of a tool server accepts an extra container (option D).
 - Read again before quoting: the ToolHive version in `components/tools/install.sh`, its discovered and inline rules, `spec.serviceAccount`, and the list of auth types.
+
+### Settled by the spike
+
+- **C2 or B.** C2: the spike answered questions 1 to 4 as expected.
+- **The ConfigMap rule.** It stays (question 7).
+- **Fallback order.** Not needed now; C3 and B stay on record in "Spike results".
 
 ### Open questions, with recommended answers
 
-1. **C2 (own accounts) or B (a namespace per credentialed group)?** *Recommended:* C2, subject to the spike. Same protection against a tool server reading another group's Secret, no move, no new URL, and none of the about 50 references to `mcp.namespace` in the chart templates to change.
-2. **Default.** *Recommended:* off in this record, as every new switch is. The reference use cases and the full demo turn it on in slice 4. A later record makes it the default after one release with the use cases on it.
-3. **Refuse `mcp.endpoints[].auth`, the diagnostics bearer values and ADR 0030's values while the switch is off?** *Recommended:* not now; `install.sh` and the chart's `NOTES.txt` print a warning naming the credentials that every tool server can read. A refusal comes with the record that makes the switch the default.
-4. **Keep the ConfigMap rule.** *Recommended:* keep get, list and watch on ConfigMaps in `mcp.namespace` unless spike question 7 shows it is not needed. No credential is kept in a ConfigMap there.
-5. **Option D upstream.** *Recommended:* record it as the direction, with ADR 0021, and let the maintainer decide whether to ask ToolHive for an outgoing auth type that sends the tool server's own projected token with an audience. Not part of this record's slices.
-6. **Fallback order if the spike fails.** *Recommended:* C3 (`source: inline`) first, because it keeps the namespace and uses upstream's own minimal Role; then B.
+1. **Default.** *Recommended:* off in this record, as every new switch is. The reference use cases and the full demo turn it on in slice 4. A later record makes it the default after one release with the use cases on it.
+2. **Refuse `mcp.endpoints[].auth`, the diagnostics bearer values and ADR 0030's values while the switch is off?** *Recommended:* not now; `install.sh` and the chart's `NOTES.txt` print a warning naming the credentials that every tool server can read. A refusal comes with the record that makes the switch the default.
+3. **Option D upstream.** *Recommended:* record it as the direction, with ADR 0021, and let the maintainer decide whether to ask ToolHive for an outgoing auth type that sends the tool server's own projected token with an audience. Not part of this record's slices.
 
 ## Review notes
 
