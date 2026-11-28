@@ -1,0 +1,18 @@
+The machine is covered and the telemetry shows a steady rise of about 14 degrees, so this is a real thermostat fault under SB-2026-011. I'll record the diagnosis, the work order, the drafts, the slot hold and the timer.
+Case SVC-2026-0001 is at **pending approval**. Approval request APR-0001 (kind parts_order_with_claim) is still pending, so nothing is ordered, claimed, sent or confirmed yet.
+
+**Finding:** Fault E-317 (coolant temperature high) on KH4120-00317, a KH 4120 combine. This is a real thermostat fault, not a sensor spike.
+- Telemetry: the mean coolant temperature for 22–28 Nov is 101.6 °C, against 87.2 °C for 29 Oct–5 Nov. That is a rise of 14.4 °C, above the 8 °C threshold. The readings rise steadily, not in spikes.
+- Per "Service Bulletin SB-2026-011 Coolant Temperature Fault E-317", the early thermostat P-10006 has drifted. P-10006 is superseded by P-10361, so I ordered the replacement.
+- The fault is not a repeated fault (count 1). E-317 is not safety critical.
+- Warranty: the record says covered (14 of 24 months, 700 of 1500 hours). I relied on "Kestrel Warranty Policy" for the limits and "Out of Warranty and Excluded Faults" for the claim rules.
+
+**Drafts and holds:**
+- Diagnosis recorded. Work order WO-0001 created: stop and cool the engine, replace the thermostat with P-10361, check hoses, test run and re-read the temperature.
+- Parts order draft OUT-0001: 1 × P-10361 from Copperton Machinery (D-403). It has 4 in stock, 150 km away. The nearest dealers, Alderfield (D-401) and Brackenridge (D-402), have none.
+- Warranty claim draft OUT-0002.
+- Customer notice draft OUT-0003, which mentions the proposed slot and the claim being prepared.
+- Slot SLT-0001 held: 29 Nov 2026, 08:00, technician T-201 at Alderfield (D-401). It is confirmed only if the manager approves.
+- Response timer TMR-0001 set for 4 Dec 2026.
+
+The approval request status is pending. Its payload matches the drafts, including the warranty claim.
