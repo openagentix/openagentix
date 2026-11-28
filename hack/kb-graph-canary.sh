@@ -73,9 +73,19 @@ curl -fsS -m 3 "$KB_URL/readyz" >/dev/null || die "kb at $KB_URL is not ready"
 # admin GET: the token goes through a descriptor, never argv
 admin_get(){ curl -sS -m 20 -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") "$KB_URL$1"; }
 # mcp_call <tool> <json arguments> -> the JSON-RPC result object (stateless endpoint: no session needed)
+# With knowledge.access.mode set (ADR 0030) /mcp needs the value of a tool group: the shared group's, from its Secret in the tools namespace, unless KB_MCP_AUTHORIZATION
+# ("Bearer <value>") is given. The collection of the canary must then be in knowledge.access.sharedGroupCollections. The header goes to curl through a descriptor.
+KB_MCP_HDR=""
+if [ -n "${KB_MCP_AUTHORIZATION:-}" ]; then KB_MCP_HDR="Authorization: $KB_MCP_AUTHORIZATION"
+else
+  # shellcheck source=hack/kb-callers.sh
+  . "$HERE/kb-callers.sh"
+  KB_MCP_HDR=$(kb_caller_header "$K ${KARGS[*]+${KARGS[*]}}" "${KB_MCP_GROUP:-tools}" "${MCP_NAMESPACE:-mcp-tools}")
+fi
+mcp_cfg(){ [ -z "$KB_MCP_HDR" ] || printf 'header = "%s"\n' "$KB_MCP_HDR"; }
 mcp_call(){
   jq -n --arg t "$1" --argjson a "$2" '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:$t,arguments:$a}}' \
-    | curl -sS -m 60 -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data-binary @- "$KB_URL/mcp" \
+    | curl -sS -m 60 -K <(mcp_cfg) -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data-binary @- "$KB_URL/mcp" \
     | jq -c '.result // {isError:true,content:[{type:"text",text:"no result"}]}'
 }
 tool_text(){ jq -r '[.content[]?|select(.type=="text")|.text]|join("\n")' <<<"$1"; }

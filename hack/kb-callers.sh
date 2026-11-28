@@ -65,6 +65,16 @@ kb_callers_ensure() {
   return 0
 }
 
+# kb_caller_header <kubectl command> <group> [tools namespace]: the whole header "Authorization: Bearer <value>" of a tool group, for a script that calls /mcp itself
+# (hack/kb-graph-canary.sh, hack/ci/upgrade-test.sh) while knowledge.access.mode is set. Prints nothing when the group has no Secret (the mode is off). The caller keeps the
+# header in a shell variable and hands it to curl through a descriptor (curl -K <(printf 'header = "%s"\n' "$H")), never in argv, never printed.
+kb_caller_header() {
+  local k=$1 g=$2 ns=${3:-mcp-tools} v
+  v=$($k get secret -n "$ns" "kb-caller-$g" -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null) || return 0
+  [ -z "$v" ] || printf 'Authorization: %s' "$v"
+  return 0
+}
+
 kb_access_guard() {
   local live=${1:-} new=${2:-} allow=${3:-}
   [ "$live" = enforce ] && [ "$new" != enforce ] || return 0

@@ -115,15 +115,19 @@ SMOKE=${UPGRADE_SMOKE:-}
 # ---- the knowledge base admin API and MCP, through a port-forward (the admin token is read into a variable, never printed) --------------------
 kb_call(){ # kb_call <METHOD> <path> [json body]
   if [ -n "${KB_CALL:-}" ]; then $KB_CALL "$@"; return; fi
-  local port tok
+  local port tok hdr=""
+  # with knowledge.access.mode set /mcp needs the value of the shared tool group (ADR 0030); with the mode off the Secret does not exist and nothing is sent
+  hdr=$(. hack/kb-callers.sh; kb_caller_header "$K" "${KB_MCP_GROUP:-tools}" "${MCP_NAMESPACE:-mcp-tools}")
   port=$(python3 -I -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
   tok=$($K get secret -n "$KB_NS" kb-admin -o jsonpath='{.data.KB_ADMIN_TOKEN}' | base64 -d)
   $K port-forward -n "$KB_NS" svc/kb "$port:8080" >/dev/null 2>&1 & PF=$!
   for _ in $(seq 1 50); do curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz" 2>/dev/null && break; sleep 0.2; done
+  local auth="Authorization: Bearer $tok"
+  [ "$2" != /mcp ] || [ -z "$hdr" ] || auth=$hdr   # /mcp takes the value of a tool group, not the admin token, once the mode is set
   if [ $# -ge 3 ]; then
-    curl -sS -X "$1" "http://127.0.0.1:$port$2" --config <(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\nheader = "Accept: application/json, text/event-stream"\n' "$tok") -d "$3"
+    curl -sS -X "$1" "http://127.0.0.1:$port$2" --config <(printf 'header = "%s"\nheader = "Content-Type: application/json"\nheader = "Accept: application/json, text/event-stream"\n' "$auth") -d "$3"
   else
-    curl -sS -X "$1" "http://127.0.0.1:$port$2" --config <(printf 'header = "Authorization: Bearer %s"\n' "$tok")
+    curl -sS -X "$1" "http://127.0.0.1:$port$2" --config <(printf 'header = "%s"\n' "$auth")
   fi
   local rc=$?; kill "$PF" 2>/dev/null; PF=""; return $rc
 }
