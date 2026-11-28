@@ -2418,6 +2418,8 @@ done
 . "$(dirname "$0")/diagnostics.sh"   # ADR 0025, slice 4: cluster-read
 # shellcheck source=charts/openagentix/tests/endpoints.sh
 . "$(dirname "$0")/endpoints.sh"     # ADR 0026, slice 2: mcp.endpoints[], own group mode
+# shellcheck source=charts/openagentix/tests/budget-classes.sh
+. "$(dirname "$0")/budget-classes.sh"   # ADR 0029, slice 3: budget classes in the one gateway policy
 
 echo
 echo "passed=$PASS failed=$FAIL"

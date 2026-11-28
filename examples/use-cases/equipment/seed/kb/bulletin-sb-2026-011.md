@@ -8,7 +8,7 @@ Applies to: the KH 4120 combine harvester, fault code E-317 (coolant temperature
 
 Machines with the early thermostat part P-10006 can show a coolant temperature that rises over several weeks, then the fault E-317. The part drifts. The sensor reading is usually right.
 
-The part P-10006 is superseded by P-10361. Always order P-10361. The record refuses an order for P-10006.
+The part P-10006 is superseded by P-10361. Always draft the order for P-10361. The record refuses an order for P-10006.
 
 ## What to do
 
@@ -19,7 +19,7 @@ The part P-10006 is superseded by P-10361. Always order P-10361. The record refu
 
 ## Stock
 
-P-10361 is often out of stock at the nearest dealer. Ask the record for the stock at every dealer, and order from the nearest dealer that has the quantity.
+P-10361 is often out of stock at the nearest dealer. Ask the record for the stock at every dealer, and draft the order with the nearest dealer that has the quantity.
 
 ## Warranty
 

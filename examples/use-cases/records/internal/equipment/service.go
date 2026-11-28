@@ -210,6 +210,7 @@ type MachineView struct {
 	Config       string       `json:"config"`
 	FittedParts  string       `json:"fitted_parts"`
 	RecentFaults []FaultCount `json:"recent_faults"`
+	HasTelemetry bool         `json:"has_telemetry"` // false: get_telemetry answers "no telematics for this machine", and no rise can be read
 }
 
 // GetMachine returns a machine and its fault counts over the last 90 days (a repeated fault shows a count above 1).
@@ -220,6 +221,11 @@ func (s *Service) GetMachine(ctx context.Context, serial string) (MachineView, e
 	}
 	v := MachineView{Serial: m.Serial, ModelID: m.ModelID, DealerID: m.DealerID, CustomerRef: m.CustomerRef, InServiceAt: m.InService, Hours: m.Hours,
 		Config: m.Config, FittedParts: m.FittedParts, RecentFaults: []FaultCount{}}
+	var nt int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM telemetry WHERE machine=?`, serial).Scan(&nt); err != nil {
+		return v, err
+	}
+	v.HasTelemetry = nt > 0
 	rows, err := s.db.QueryContext(ctx, `SELECT code, COUNT(*) FROM fault_events WHERE machine=? AND at>=? GROUP BY code ORDER BY code`,
 		serial, core.FormatTime(s.clock().AddDate(0, 0, -90)))
 	if err != nil {
@@ -273,7 +279,7 @@ type Part struct {
 	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
-// GetPart returns a part. A part with superseded_by set must not be ordered: order its replacement.
+// GetPart returns a part. A part with superseded_by set must not be ordered: draft the order for its replacement.
 func (s *Service) GetPart(ctx context.Context, id string) (Part, error) {
 	return getPart(ctx, s.db, id)
 }
@@ -825,7 +831,7 @@ func (s *Service) DraftPartsOrder(ctx context.Context, id, partID string, qty in
 			return "", err
 		}
 		if p.SupersededBy != "" {
-			return "", conflict("this part is superseded; order " + p.SupersededBy + " instead")
+			return "", conflict("this part is superseded; draft the order for " + p.SupersededBy + " instead")
 		}
 		var have int
 		err = tx.QueryRowContext(ctx, `SELECT qty FROM stock WHERE dealer_id=? AND part_id=?`, fromDealer, partID).Scan(&have)

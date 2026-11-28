@@ -306,6 +306,8 @@ queue_build(){ BUILD_Q+=("$1|$2|${3:-}|${4:-}"); }   # image | context | optiona
 # kind load and k3d image import keep an existing tag on the node, so a fixed ":dev" would leave the OLD image running after a source change (hack/image-tag.sh).
 # shellcheck source=hack/image-tag.sh
 . hack/image-tag.sh
+# shellcheck source=hack/key-entry.sh
+. hack/key-entry.sh
 # remote (ADR 0022): the repository becomes IMAGE_REGISTRY/openagentix/<name>, <name> the last part of the first source dir (hack/ci/dockerfiles.sh),
 # and the tag dev-<hash>-<arch>, so two installs for different platforms never share a tag.
 tag_image(){
@@ -681,8 +683,11 @@ while IFS=$'\t' read -r agent secret ns vkey; do
   $K get secret -n "$ns" "$secret" >/dev/null 2>&1 || \
     $K create secret generic "$secret" -n "$ns" --from-file="$vkey"=<(printf 'vk-%s' "$(openssl rand -hex 16)") >/dev/null
   h=$($K get secret -n "$ns" "$secret" -o jsonpath="{.data.${vkey//./\\.}}" | base64 -d | shasum -a 256 | awk '{print "sha256:"$1}')
-  CM_ARGS+=(--from-literal="$agent={\"keyHash\":\"$h\",\"metadata\":{\"user_id\":\"$agent\"}}")
-  echo "virtual key for agent '$agent': Secret $ns/$secret"
+  # ADR 0029: the budget class of a chart agent is the annotation openagentix.io/budget-class of its ModelConfig (the chart checked it); none: no member.
+  bclass=$(jq -r --arg a "$agent" 'select(.kind=="ModelConfig" and .metadata.annotations["openagentix.io/agent"]==$a)|.metadata.annotations["openagentix.io/budget-class"]//empty' <<<"$RENDERED")
+  entry=$(key_entry "$agent" "$h" "$bclass") || die "no key entry for agent '$agent'"
+  CM_ARGS+=(--from-literal="$agent=$entry")
+  echo "virtual key for agent '$agent': Secret $ns/$secret${bclass:+ (budget class $bclass)}"
 done <<<"$AGENT_KEYS"
 if [ ${#CM_ARGS[@]} -gt 0 ]; then
   $K create configmap llm-api-keys -n $GW_NS "${CM_ARGS[@]}" --dry-run=client -o yaml \

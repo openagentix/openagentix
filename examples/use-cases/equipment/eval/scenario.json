@@ -55,7 +55,7 @@
         {
           "tool": "kb_search",
           "args": {
-            "query": "Service bulletin coolant temperature high E-317 thermostat superseded part",
+            "query": "Service Bulletin SB-2026-011 Coolant Temperature Fault E-317: the early thermostat P-10006 is superseded by P-10361",
             "collection": "kestrel-service",
             "top_k": 3
           }
@@ -63,7 +63,7 @@
         {
           "tool": "kb_search",
           "args": {
-            "query": "warranty policy: when a machine is covered and what a warranty claim needs",
+            "query": "warranty policy: the Kestrel Warranty Policy says when a machine is covered and what a warranty claim needs",
             "collection": "kestrel-service",
             "top_k": 3
           }
