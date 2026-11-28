@@ -331,6 +331,8 @@ Limits, as the ADR states them:
 
 ## The first real-model run
 
+**First real-model event (2026-11-28).** On 2026-11-28 the first real-model run of event triggers was done by hand on the maintainer's kind cluster (main at 37adeeb, claude-haiku, the full demo with the three use cases beside it). Equipment and bank were installed again with `EVENTS=1 install.sh --beside-full-demo`, each listing the other use cases in `ALSO_COMPOSE` (the bank also listed the equipment's `values-events.yaml`). Both installs exited 0 at helm revision 20, nothing was lost, and node memory was about 4.9 of 7.7 GiB by `docker stats`. One event, not a rate: `ctl.sh fault KH4120-00317 E-319` opened case SVC-2026-0056 (not a duplicate). With no ask from a person the service agent worked it: within 45 seconds the case was `pending_approval` with one `parts_order_with_claim` request, and the diagnosis cited the coolant rise rule (about 14.4 degrees against 8). The gate audit line names the caller `kestrel-fault-events` for `kagent/service-agent`, event id `case-SVC-2026-0056`, status 200. Not done on the real model: a burst over the rate, a repeat of the same event, the 30 minute sweep, a pass rate.
+
 The agent is meant for a real model. The first run, one per case, is below. Pass rates over several runs and the cost per case are unknown. Before any claim about a rate, run the checklist below several times.
 
 ### Three runs per case (a small sample)

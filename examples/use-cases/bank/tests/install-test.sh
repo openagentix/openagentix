@@ -408,6 +408,22 @@ check "ALSO_COMPOSE may list the other use case's values-events.yaml: its event 
 reset; cp "$TMP/af/release.json" "$LOG/release.json"
 EVENTS=1 ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
 check "EVENTS=1 beside a full demo: this use case's values-events.yaml is composed after its values-full-demo.yaml" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"fernvale-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
+echo "# ALSO_COMPOSE refuses this use case's own files, by full path"
+reset
+ALSO_COMPOSE="$HERE/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE listing this use case's own values-events.yaml is refused before any change (an EVENTS=0 run would carry its event rule)" "[ $rc = 1 ] && grep -q 'own values-events.yaml' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+ALSO_COMPOSE="$HERE/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE listing this use case's own values-full-demo.yaml is refused before any change" "[ $rc = 1 ] && grep -q 'own values-full-demo.yaml' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+ALSO_COMPOSE="$HERE/../$(basename "$HERE")/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "the same file by another path (a .. in it) is refused too" "[ $rc = 1 ] && grep -q 'own values-events.yaml' '$LOG/out'"
+echo "# the release guard compares the namespace entries by namespace: one entry cannot drop while another of the same shape stays"
+reset
+cp "$TMP/release-on.json" "$LOG/release.json"
+jq '.networkPolicy.extraA2ACallers += [{"namespace":"somewhere-else","podLabels":{"app":"records"}}] | .networkPolicy.extraA2ACallers |= map(select(.namespace != "fernvale-records"))' "$TMP/release-on.json" > "$LOG/release.json"
+FAKE_STUB=1 run; rc=$?
+check "a release with another namespace entry of the same shape, and this use case's own entry gone: the other entry is named and refused" "[ $rc = 1 ] && grep -q 'extraA2ACallers\[somewhere-else\]' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
 echo "# checks on the platform after the install"
 reset
 FAKE_NO_AGENT=1 run; rc=$?
