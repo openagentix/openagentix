@@ -229,10 +229,17 @@ echo "# the -workload variant (ADR 0019): a pod-bound token with its audience is
 # kind node (docker exec), used through a port-forward and never printed. The wrong-audience and the foreign-subject tokens are made for the default account of the tools namespace.
 WLNS=${WORKLOAD_NAMESPACE:-openagentix-workloads}
 WLAUD=openagentix-vmcp-lookup-workload
-WLPOD=$($K get pods -n "$WLNS" -o json 2>/dev/null | jq -r '[.items[]|select(.status.phase=="Running" and ([.spec.volumes[]?.name]|index("mcp-token")!=null))][0]|[.metadata.uid,.spec.nodeName]|join(" ")' 2>/dev/null)
-WLUID=${WLPOD% *}; WLNODE=${WLPOD#* }
-if [ -n "$WLUID" ] && [ "$WLUID" != null ] && command -v docker >/dev/null 2>&1 \
-   && docker exec "$WLNODE" cat "/var/lib/kubelet/pods/$WLUID/volumes/kubernetes.io~projected/mcp-token/token" > "$TD/wl-ok" 2>"$TD/wl.err" && [ -s "$TD/wl-ok" ]; then
+WLJ=$($K get pods -n "$WLNS" -o json 2>/dev/null | jq -c '[.items[]|select(.status.phase=="Running" and ([.spec.volumes[]?.name]|index("mcp-token")!=null))][0]' 2>/dev/null)
+WLUID=$(jq -r '.metadata.uid // empty' <<<"$WLJ" 2>/dev/null); WLNODE=$(jq -r '.spec.nodeName // empty' <<<"$WLJ" 2>/dev/null)
+WLNAME=$(jq -r '.metadata.name // empty' <<<"$WLJ" 2>/dev/null); WLDIR=$(jq -r '[.spec.containers[0].volumeMounts[]?|select(.name=="mcp-token")|.mountPath][0] // empty' <<<"$WLJ" 2>/dev/null)
+WLGOT=no
+if [ -n "$WLUID" ]; then
+  # first the way a user would (the agent's own image may have cat), then the kubelet's file on the kind node, as root
+  if [ -n "$WLDIR" ] && $K exec -n "$WLNS" "$WLNAME" -- cat "$WLDIR/token" > "$TD/wl-ok" 2>"$TD/wl.err" && [ -s "$TD/wl-ok" ]; then WLGOT=yes
+  elif command -v docker >/dev/null 2>&1 && docker exec -u 0 "$WLNODE" cat "/var/lib/kubelet/pods/$WLUID/volumes/kubernetes.io~projected/mcp-token/token" > "$TD/wl-ok" 2>>"$TD/wl.err" && [ -s "$TD/wl-ok" ]; then WLGOT=yes
+  fi
+fi
+if [ "$WLGOT" = yes ]; then
   $K create token default -n "$MCPNS" --audience openagentix-not-this-one --duration 10m > "$TD/wl-other" 2>/dev/null
   P4=$((P1 + 3)); $K port-forward -n "$MCPNS" svc/vmcp-tools-lookup-workload "$P4:4483" >/dev/null 2>&1 & PF4=$!
   sleep 4
@@ -245,7 +252,7 @@ if [ -n "$WLUID" ] && [ "$WLUID" != null ] && command -v docker >/dev/null 2>&1 
   check "tools-lookup-workload: a token with the right audience from outside the workload namespace (not pod-bound) lists no tool" "$([ "$SIDN" = - ] && echo none || mcp_call $P4 "$TD/wl-nobound" "$SIDN" 2 tools/list '{}' | jq -r '[.result.tools[]?]|length' 2>/dev/null)" "$([ "$SIDN" = - ] && echo none || echo 0)"
   kill $PF4 2>/dev/null; PF4=""
 else
-  bad "no token of a container agent pod could be read in $WLNS (the sample agent must run there; the kind node must be reachable with docker)" "$(cut -c1-300 "$TD/wl.err" 2>/dev/null) pod='${WLPOD}'"
+  bad "no token of a container agent pod could be read in $WLNS (the sample agent must run there; the kind node must be reachable with docker)" "$(cut -c1-300 "$TD/wl.err" 2>/dev/null) pod='${WLNAME}' dir='${WLDIR}'"
 fi
 rm -f "$TD/wl-ok" "$TD/wl-other" "$TD/wl-nobound"
 
