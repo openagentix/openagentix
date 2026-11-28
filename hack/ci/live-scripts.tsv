@@ -153,3 +153,7 @@ hack/ci/kb-access-ci-setup.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT
 hack/ci/kb-access-live.sh	guard	KB_ACCESS=1	KB_ACCESS_CI_CONTEXT		
 hack/ci/kb-callers-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
 hack/kb-callers.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given
+hack/ci/kb-schema-live.sh	guard	KB_SCHEMA=1	KB_ACCESS_CI_CONTEXT		
+hack/ci/kb-graph-schema-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/ci/kb-graph-load-test.sh	offline	-	-		tests with fakes, fixtures or no cluster call
+hack/kb-graph-schema.sh	user	-	-		a helper that install.sh and the use case installers call, or a read-only check, on the cluster they were given

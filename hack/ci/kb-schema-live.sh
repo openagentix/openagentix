@@ -13,15 +13,9 @@
 set -u
 [ "${KB_SCHEMA:-0}" = 1 ] || { echo "kb-schema-live: set KB_SCHEMA=1 to run this against the current cluster (it is opt-in)"; exit 0; }
 K=${KUBECTL:-kubectl}
-CTX_NOW=$($K config current-context 2>/dev/null || true)
-case "$CTX_NOW" in
-  kind-*|k3d-*) ;;
-  *) echo "kb-schema-live: refusing to run: the current kube context is '${CTX_NOW:-none}', not a kind or k3d context. Nothing was changed." >&2; exit 2;;
-esac
-if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${KB_ACCESS_CI_CONTEXT:-}" != "$CTX_NOW" ]; then
-  echo "kb-schema-live: refusing to run on '$CTX_NOW': it is not a CI run (GITHUB_ACTIONS is not true) and KB_ACCESS_CI_CONTEXT does not name this context. Nothing was changed." >&2
-  exit 2
-fi
+# the one guard of the live CI scripts (issue #212): kind or k3d only, a CI run or the named context, never kind-openagentix by hand; it reads the kubeconfig and nothing else
+. "$(cd "$(dirname "$0")" && pwd)/lib/require-ci-context.sh"
+require_ci_context kb-schema-live KB_ACCESS_CI_CONTEXT
 cd "$(dirname "$0")/../.." || exit 1
 MCPNS=${MCP_NAMESPACE:-mcp-tools}; KBNS=openagentix-knowledge
 PIDS=(); TD=$(mktemp -d)
@@ -189,7 +183,7 @@ OUT_B=$(call '{"collection":"ci-beta"}'); MISS=$(call '{"collection":"ci-nowhere
 check "alpha asking for the schema of beta's collection sees nothing of it" "$(grep -c -E 'The schema of ci-beta|disputes_charge_at' <<<"$OUT_B")" 0
 check "that answer is byte for byte the answer for a collection that does not exist (the name asked for aside)" "$([ "${OUT_B//ci-beta/X}" = "${MISS//ci-nowhere/X}" ] && echo identical || echo different)" identical
 ALL=$(call '{}')
-check "with no collection alpha sees only the schemas of its own collections" "$(grep -c 'ci-alpha' <<<"$ALL")/$(grep -c -E 'ci-beta|ci-schema' <<<"$ALL")" "1/0"
+check "with no collection alpha sees only the schemas of its own collections" "$(grep -q 'Graph schema of collection ci-alpha' <<<"$ALL" && echo own)/$(grep -q -E 'ci-beta|ci-schema' <<<"$ALL" && echo other || echo none)" "own/none"
 
 echo "# delete keeps the facts"
 check "DELETE of the schema is 204" "$(api DELETE /v1/collections/ci-schema/graph/schema)" 204
