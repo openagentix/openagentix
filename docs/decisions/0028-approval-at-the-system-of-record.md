@@ -24,7 +24,7 @@ Read in `examples/use-cases/records/internal/core/approvals.go` and `auth.go` on
 | No self-approval | The proposer cannot decide; agents propose as `agent`, which can never be an approver id |
 | Decision and act together | The status change is a conditional update in the same transaction as `Execute` (or `Reject`) |
 | No tool decides | The decision routes are REST on the pod's loopback; no MCP tool approves or rejects |
-| The approver is named | Bearer tokens checked in constant time against SHA-256 hashes in a file, each with an id and a role |
+| The approver has an id and a role | Bearer tokens checked in constant time against SHA-256 hashes in a file, each with an id and a role |
 
 The payload the approver reads also holds text the agent wrote: the route reason and the drafts (letter, filing) in the bank (`records/internal/bank/service.go`), the diagnosis, its cause, the work order and the drafts (order, claim) in equipment (`records/internal/equipment/service.go`). The agent also chooses the amount within the record's bounds. So the defence against a draft with injected text aimed at the approver is the approver's own reading, not the platform.
 
