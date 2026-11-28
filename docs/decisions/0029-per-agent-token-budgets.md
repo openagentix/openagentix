@@ -5,7 +5,7 @@ Date: 2026-11-28
 Issue: https://github.com/openagentix/openagentix/issues/229 (reference use cases; the follow-up named in ADR 0026 section D)
 Replaces: none. The first slice of the `Budget` kind of ADR 0009, done as chart values and operator policy, with no new kind, no new resource field and no new component. See "Relation to other records".
 
-The operator names a few budget classes in chart values, each a token limit per time unit, counted per agent or shared by every agent of the class. A chart agent names a class in its values; the definitions of an agents namespace get the class the operator maps to that namespace. A definition cannot choose its class. The chart renders one conditional rate limit entry per class in the one gateway policy, and the agent's key entry carries the class name. Agents that name no class keep today's budget. Off by default: with no class, the chart renders byte for byte what it renders today. Nothing here is built. The gateway behaviour it relies on was shown in a spike on a throwaway cluster ("Spike results"); the chart render, the guard and the controller are *unverified* until their slices are done.
+The operator names a few budget classes in chart values, each a token limit per time unit, counted per agent or shared by every agent of the class. A chart agent names a class in its values; every `AgentDefinition` gets the one class the operator sets for definitions. A definition cannot choose its class. The chart renders one conditional rate limit entry per class in the one gateway policy, and the agent's key entry carries the class name. Agents that name no class keep today's budget. Off by default: with no class, the chart renders byte for byte what it renders today. Nothing here is built. The gateway behaviour it relies on was shown in a spike on a throwaway cluster ("Spike results"); the chart render, the guard and the controller are *unverified* until their slices are done.
 
 ## Context
 
@@ -42,7 +42,7 @@ What this means: option C stands, and the fallback to option D is not needed. Th
 Good for:
 
 - **Stopping a runaway agent within about one burst.** An agent that loops spends its class and then gets 429 on every call until the window refills, without any controller action.
-- **Keeping tenants roughly apart.** One agent cannot spend the hour of another agent or of the default keys.
+- **Keeping tenants roughly apart.** One agent of a per-agent class cannot spend the hour of another key. Agents of a shared class can.
 - **Making the spend of a use case predictable to within one burst**, per replica.
 
 Not good for:
@@ -59,16 +59,22 @@ Only partly. The overshoot is "model calls in flight for this key when the bucke
 
 ### Example classes, from measured demand
 
-On a real model (claude-haiku, one run per case, 2026-11-28), one bank run of five cases used about 566,000 to 660,000 tokens and one equipment run about 460,000 to 566,000 (the first real-model runs of #229 on the maintainer's cluster; one run each, not a rate; the figures are not yet in the diary). So the default 1,000,000 tokens per hour per key allows about one full run an hour. Examples the use case values can start from:
+Recorded per-run totals on a real model, from the gateway's token metric (the use case READMEs, sections on measuring a pass rate, and the row "Real-model evaluation path for the three use cases" of `what-works.md`, PR #263):
+
+- **Bank** (`dispute-agent`, five cases): run 1 used 636,561 input tokens (517,233 of them cache reads) and 24,936 output, about 660,000 in all. Run 2 used 351,505 input and 11,232 output before the budget ended it. The README: one key cannot do two full runs in an hour.
+- **Equipment** (`service-agent`, seven cases): 440,375 input and 16,281 output in run 1, 471,973 and 16,885 in run 2, so about 460,000 to 490,000 per run. Two runs fit in an hour, a third does not.
+- **Software organisation** (`pod-rca`, eight cases): input 186,672, 226,312 and 210,169, output 15,008, 16,700 and 15,103, so about 200,000 to 240,000 per run.
+
+Cache reads count against the budget: the bank's second run was stopped by the hourly budget after the first. Per case was not measured, and these are a few runs each, not a rate. Examples the use case values can start from:
 
 | Class | `tokens` per `Hours` | `per` | Meant for |
 |---|---|---|---|
-| `case-agent` | 800000 | `agent` | one case agent: about one five-case run an hour, a loop stopped inside the second run |
+| `case-agent` | 800000 | `agent` | one case agent: one bank run (about 660,000) or one equipment run (about 490,000) an hour, and a loop is stopped inside the second run |
 | `case-agents-shared` | 1500000 | `class` | the bank and equipment agents together: one cap for both use cases |
-| `diagnostic-agent` | 300000 | `agent` | the read-only root-cause agent (not measured; a smaller start) |
+| `diagnostic-agent` | 300000 | `agent` | the read-only root-cause agent: one run of eight cases (about 200,000 to 240,000) an hour |
 | `demo` | 100000 | `agent` | the quick start agent, where a person asks a few questions |
 
-These are starting points, not measured fits. They are read again after a pass-rate run on a real model.
+These are starting points from those few runs, not fits. They are read again when tokens per case are measured.
 
 ## Options
 
@@ -76,14 +82,14 @@ These are starting points, not measured fits. They are read again after a pass-r
 |---|---|---|---|
 | A. Do nothing | Nothing to build | Every agent has the same budget; a use case cannot be capped | `gateway.yaml` |
 | B. One `AgentgatewayPolicy` per agent | Simple per agent | The values already warn that several policies can overwrite each other; the controller would write a gateway policy, which the guard and ADR 0007 do not allow | `values.yaml` comment on `gateway.policy.name` |
-| C. Conditional entries in the one policy, one per budget class, keyed on a class name in the key's metadata; chart agents name a class, definitions get the class of their namespace | One policy, still owned by Helm; the controller writes only a class name into an entry it already writes; a class can be per agent or shared, which gives a per-use-case cap for chart agents | Depends on CEL seeing `apiKey.budget_class` (*unverified*); at most 15 classes; local limits per replica, lost on restart | The v1.7.0 CRD schema |
+| C. Conditional entries in the one policy, one per budget class, keyed on a class name in the key's metadata; chart agents name a class, definitions get the operator's one class for definitions | One policy, still owned by Helm; the controller writes only a class name into an entry it already writes; a class can be per agent or shared, which gives a per-use-case cap for chart agents | CEL sees `apiKey.budget_class` (spike, v1.7.0); at most 15 classes; local limits per replica, lost on restart | The v1.7.0 CRD schema |
 | D. Conditional entries keyed on `apiKey.user_id` lists | No metadata field needed | Helm must list every agent; definitions are created after the render, so they cannot be listed | Same schema |
 | E. Global rate limiting with an external rate limit service (`rateLimit.global`) | Shared across replicas, survives restarts | A new upstream component (a rate limit server and its store) | Same schema; out of scope by the rule of this record |
 | F. The full `Budget` kind of ADR 0009 now | Scope, window, action, alerts, money | A new kind, a reconciler for spend, alert rules; larger than the use cases need | ADR 0009 |
 
 ## Decision
 
-Option C, with D as the stated fallback if the spike shows that CEL cannot read the metadata field.
+Option C. The spike showed that CEL reads the metadata member, so option D is not needed.
 
 ### Chart values
 
@@ -104,8 +110,7 @@ agents:
 controlPlane:
   policy:
     budgetClasses:
-      byNamespace: {}          # agents namespace -> class of every definition there; absent: the default budget
-      default: ""              # the class of definitions in a namespace not listed; "" means the default budget
+      definitions: ""          # the class of every AgentDefinition; empty: the default budget; must be a per: agent class
 ```
 
 | Value | Rule |
@@ -116,8 +121,7 @@ controlPlane:
 | `budgetClasses[].per` | `agent` or `class`, required. No default, so a misspelt field fails the render |
 | list length | At most 15, so that the classes and the fallback fit the CRD's 16 entries |
 | `agents[].budgetClass` | Must name a class; the render fails otherwise |
-| `controlPlane.policy.budgetClasses.byNamespace` | Keys are DNS labels (namespaces), values name a class. A class with `per: class` is refused here (see "Shared classes") |
-| `controlPlane.policy.budgetClasses.default` | Empty, or the name of a class with `per: agent` |
+| `controlPlane.policy.budgetClasses.definitions` | Empty, or the name of a class with `per: agent`. A class with `per: class` is refused here (see "Shared classes"). One value, because definitions live in exactly one agents namespace today (the guard pins entry names to `<agents namespace>.<name>`); a map by namespace comes with more than one namespace (roadmap 0.7) |
 
 ### Render
 
@@ -144,14 +148,14 @@ With no class, the render is today's `rateLimit.local` entry, byte for byte.
 ### Key entries
 
 - **Chart agents.** The chart adds the annotation `openagentix.io/budget-class` to the agent's model object when `budgetClass` is set. `install.sh` writes `"budget_class":"<name>"` after `user_id` in the metadata of that agent's entry. Without the annotation, the entry is unchanged.
-- **Definitions.** The controller writes the class that `byNamespace` gives for the definition's namespace (or `default`) as `"budget_class":"<name>"` at the end of the metadata of the entry it already writes. It reads no Secret. A definition cannot choose its class: a class chosen in a spec could be switched to get a full bucket, because each class is a separate rule, and any author could pick the largest class on the list. No new spec field; one can come with the `Budget` kind.
-- **The guard.** When `byNamespace` or `default` is set, the key ConfigMap rule accepts one more optional member at the end of the metadata, `"budget_class"`, whose value must be the class the policy gives for the entry's namespace (the part of the entry name before the dot), rendered literally into the rule. When neither is set, the rule is rendered exactly as today.
+- **Definitions.** The controller writes the class of `controlPlane.policy.budgetClasses.definitions` as `"budget_class":"<name>"` at the end of the metadata of the entry it already writes. It reads no Secret. A definition cannot choose its class: a class chosen in a spec could be switched to get a full bucket, because each class is a separate rule, and any author could pick the largest class on the list. No new spec field; one can come with the `Budget` kind.
+- **The guard.** When `definitions` is set, the key ConfigMap rule accepts one more optional member at the end of the metadata, `"budget_class"`, whose value must be exactly that one class, rendered literally into the rule. When it is empty, the rule is rendered exactly as today.
 - **Status.** A new public fact, `status.budget.class`: the class written to the key entry, or `default`. It says what was written, not that the gateway enforces it. Enforcement is shown only by the live proof.
 - Labels (`openagentix.io/team`, `openagentix.io/project`) never choose a class.
 
 ### Shared classes
 
-A class with `per: class` has one bucket for every key that names it. That is how a use case gets one cap for all its chart agents. It is also how one agent of the class can spend the others' budget. So in this record only the operator's chart agents may name a shared class; `byNamespace` and `default` refuse one. A later record can open it with a per-namespace or per-team scope, when the `Budget` kind exists.
+A class with `per: class` has one bucket for every key that names it. That is how a use case gets one cap for all its chart agents. It is also how one agent of the class can spend the others' budget. So in this record only the operator's chart agents may name a shared class; `definitions` refuses one. A later record can open it with a per-namespace or per-team scope, when the `Budget` kind exists.
 
 ### Limits, stated plainly
 
@@ -160,7 +164,7 @@ A class with `per: class` has one bucket for every key that names it. That is ho
 - **Late.** Tokens are counted when a call completes, so the call that crosses the limit is allowed, and the next is refused with 429 (shown: two calls of 74 tokens passed a limit of 100).
 - **Parallel calls.** Calls in flight are all admitted before their tokens are counted: in the spike 20 of 20 parallel calls passed with one call of headroom left. So K parallel calls can pass a limit by up to K times the largest call. With a slow or streaming model the overlap is larger.
 - **Class changes.** A key that moves to a class it has not used starts with a full bucket; moving back to a class it has used does not refill (shown). That is why a definition cannot choose its class.
-- **Per tenant.** A class for each agent gives every definition its own bucket, so it does not cap a namespace: N definitions in one namespace may spend N times the class.
+- **Per tenant.** A class for each agent gives every definition its own bucket, so it does not cap a namespace: N definitions may spend N times the class. N is bounded by the definitions quota (`controlPlane.maxDefinitions`, a ResourceQuota on `count/agentdefinitions.openagentix.io`, default 50).
 - **Soft across restarts and replicas.** With every item of this list, the budget is a soft bound, not a hard limit. The docs say "per key, per gateway replica, refilled on restart".
 - **Bucket eviction.** The CRD says each replica keeps a bounded number of buckets per rule and drops the least used. How many is *unverified*. A dropped bucket starts full again.
 - **Tokens only.** No money, no day or month window (the units stop at hours), no per-run or per-schedule limit (ADR 0012, ADR 0017). Cost per agent stays visible in the gateway metrics (ADR 0003).
@@ -168,7 +172,7 @@ A class with `per: class` has one bucket for every key that names it. That is ho
 
 ## Consequences
 
-- Possible: a smaller budget for an agent that acts on records, a larger one for a busy assistant, one cap for all chart agents of a use case, a budget for the definitions of a namespace chosen by the operator.
+- Possible: a smaller budget for an agent that acts on records, a larger one for a busy assistant, one cap for all chart agents of a use case, a budget for definitions chosen by the operator.
 - Ruled out for now: money limits; day or month windows; budgets shared across replicas; shared classes for definitions; a class chosen in a definition's spec or by a label.
 - Harder: the one gateway policy gets a list the operator must keep under 16 entries.
 - Security impact: the operator decides every limit; a definition cannot choose a class; the controller writes one more name into an entry it already writes, checked by the guard. Nothing new leaves the cluster. No secret is read.
@@ -179,7 +183,7 @@ A class with `per: class` has one bucket for every key that names it. That is ho
 | Record | Relation |
 |---|---|
 | ADR 0009 | `Budget` (scope, limit, window, action) is still the later kind. A `Budget` object will map to a class (scope to the keys, limit and window to `tokens` and `unit`) and add alerts and money. This record is its adapter primitive |
-| ADR 0012 | Labels never decide billing; the operator chooses the class (chart values for chart agents, `byNamespace` for definitions) |
+| ADR 0012 | Labels never decide billing; the operator chooses the class (chart values for chart agents, `definitions` for definitions) |
 | ADR 0017 (proposed) | A schedule runs on its agent's key, so it spends from its agent's class. A budget per schedule is still out. ADR 0017 calls the per-key budget a hard limit; with the limits above it is not, and 0017's text should say "the per-key budget, per gateway replica". That correction belongs in PR #123, by its author |
 | ADR 0026 | Section D named this follow-up |
 | ADR 0027 (proposed) | Per-caller rate and open-call limits at the gate bound how fast runs start; this record bounds what an agent spends |
@@ -189,17 +193,17 @@ A class with `per: class` has one bucket for every key that names it. That is ho
 Each slice is one pull request, tests first.
 
 1. **This record.** Docs build.
-2. **Spike (done, see "Spike results").** On a throwaway kind cluster with its own kubeconfig, stub model, no paid call. It first applies the rendered policy to the cluster's agentgateway v1.7.0, which confirms the schema facts above on a real API server. Then each question is answered yes or no in the diary, with the requests, the 429 answers and the gateway log as evidence:
+2. **Spike (done, see "Spike results").** On a throwaway kind cluster with its own kubeconfig, stub model, no paid call. It patched a hand-written conditional policy into the live gateway policy; the chart render is checked in slice 3. Then each question is answered yes or no in the diary, with the requests, the 429 answers and the gateway log as evidence:
    - Does CEL see `apiKey.budget_class`?
    - A key **without** the member: fallback, error, deny, or a shared bucket?
-   - A key whose class changes: a fresh bucket? (This confirms the reset bypass.)
+   - A key whose class changes: a fresh bucket? (A fresh bucket the first time a key meets a class; no refill on a move back.)
    - `per: class` with no `key`: one bucket.
    - Restart: buckets full again.
    - `conditional` together with `apiKeyAuthentication` and `retry` in one policy: is a gateway 429 retried by the same policy?
    - Overshoot: 5 calls in parallel against a small limit. How many are admitted?
    CEL sees the member, so option D is not needed.
-3. **Chart and installer.** Values, refusals, the conditional render, the fallback, the annotation, `install.sh` metadata, the guard's optional member. Chart tests: byte-identical default, quick start and full demo renders; one test per refusal; 15 classes render and 16 fail; the guard's rule is unchanged with `byNamespace` and `default` unset. `make test-apiserver`: the rendered policy passes a server-side dry run against the v1.7.0 CRDs. If question 3 is answered yes: a class with a per-minute entry beside the hourly one, checked live with the stub model (both entries apply).
-4. **Controller.** The class from `byNamespace` or `default`, the entry, `status.budget.class`. Unit tests, guard tests (an entry with a class other than its namespace's is refused; a `per: class` class is refused at render), the field in the console's read-only view.
+3. **Chart and installer.** Values, refusals, the conditional render, the fallback, the annotation, `install.sh` metadata, the guard's optional member. Chart tests: byte-identical default, quick start and full demo renders; one test per refusal; 15 classes render and 16 fail; the guard's rule is unchanged with `definitions` empty. `make test-apiserver`: the rendered policy passes a server-side dry run against the v1.7.0 CRDs. If question 3 is answered yes: a class with a per-minute entry beside the hourly one, checked live with the stub model (both entries apply).
+4. **Controller.** The class from `definitions`, the entry, `status.budget.class`. Unit tests, guard tests (an entry with a class other than `definitions` is refused; a `per: class` class is refused at render), the field in the console's read-only view.
 5. **Use cases.** The three reference agents get classes in their values (a per-agent class each, one shared class for the bank and equipment agents together as an example). Live proof with the stub model: each agent gets 429 at its own limit; the full demo assistant is unaffected. Diary and `what-works.md` row with the limits above.
 
 ## Not checked / open points
@@ -210,11 +214,13 @@ Each slice is one pull request, tests first.
 ## Questions for the maintainer
 
 1. **Budget classes now, as the first slice of `Budget`, instead of waiting for the kind?** Recommended: yes. The spike shows the gateway does it in the one policy, and the reference use cases need a brake before a real model runs unattended. Docs call it a soft limit, never a spend cap.
-2. **Classes for definitions by namespace only, no spec field?** Recommended: yes. The spike confirmed that a key gets a fresh bucket the first time it meets a class, so a class chosen in a spec could be switched to get more.
+2. **One operator-chosen class for all definitions, no spec field?** Recommended: yes. The spike confirmed that a key gets a fresh bucket the first time it meets a class, so a class chosen in a spec could be switched to get more.
 3. **An optional per-minute entry in a class, beside the hourly one, to stop bursts sooner?** Recommended: yes if slice 3 shows that two `local` entries in one conditional policy both apply; otherwise drop it.
-4. **The default budget stays 1,000,000 tokens per hour per key?** Recommended: yes for compatibility. It allows about one full use case run an hour; the use case values set a class.
+4. **The default budget stays 1,000,000 tokens per hour per key?** Recommended: yes for compatibility. The recorded runs fit it (one bank run, two equipment runs or about four root-cause runs an hour per key); the use case values set a class.
 5. **Money limits.** Recommended: out of this record. They need spend read back from the gateway's metrics and a controller that lowers a limit, which ADR 0009 describes; and any price list is owner-gated.
 
 ## Review notes
 
 An independent review (2026-11-28) asked to drop `spec.budget.class` and the global allowed list (a definition author could pick the largest class, and switching classes refills the bucket), to map classes per namespace instead, to add the parallel, class change and per tenant limits, to say where the schema was read and that the CRD is not in this repository, to note the "hard limit" wording of ADR 0017, and to require the spike before acceptance. This text takes all of it. No point of the review was rejected.
+
+**Re-check (2026-11-28).** The reviewer's re-check asked for seven text changes after the spike, and all seven are in: stale "unverified" and fallback wording removed; slice 2 says the spike patched a hand-written policy; `byNamespace` and `default` replaced by one value, `controlPlane.policy.budgetClasses.definitions`, because definitions live in one namespace; the per-tenant limit names the definitions quota; the example classes cite the recorded per-run totals (PR #263) instead of unrecorded figures; the "tenants apart" line is limited to per-agent classes.
