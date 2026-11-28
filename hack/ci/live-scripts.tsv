@@ -149,3 +149,5 @@ Makefile	docker	-	-		builds and tests with docker (images, throwaway database co
 install.sh	user	-	-		the installer, runs on a person's cluster; its own rules (named cluster, kind-openagentix default, CLUSTER_TYPE=remote needs KUBE_CONTEXT)
 uninstall.sh	user	-	-		the uninstaller, keep policy and context rules of its own
 hack/ci/live-sweep-test.sh	offline	-	-		this test
+components/runtime/substrate-helm.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
+components/runtime/substrate-postrender.sh	user	-	-		a part of the installer or a tool for a person's cluster (called by install.sh)
