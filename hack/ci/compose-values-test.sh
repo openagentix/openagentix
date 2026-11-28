@@ -551,6 +551,25 @@ mcp: {virtual: {ownServiceAccounts: "yes"}}
 EOF
 run "$T/sa-none.yaml" "$T/sa-str.yaml"
 check "a value that is not true (a string) from a later file is still a refused change of a security key" "[ $RC = 1 ] && grep -q 'ownServiceAccounts' '$T/err'" "$(cat "$T/err")"
+w sa-vnull.yaml <<'EOF'
+mcp: {virtual: null}
+EOF
+w sa-mcpnull.yaml <<'EOF'
+mcp: null
+EOF
+w sa-name.yaml <<'EOF'
+mcp: {virtual: {name: tools}}
+EOF
+for LW in "" "--later-wins"; do
+  run $LW "$T/sa-on.yaml" "$T/sa-vnull.yaml" "$T/sa-name.yaml"
+  check "true, then mcp.virtual: null, then mcp.virtual.name: the switch may not end off ($LW): refused, exit 1, nothing written" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'ownServiceAccounts' '$T/err' && grep -q 'sa-on.yaml' '$T/err'" "$(cat "$T/err")"
+  run $LW "$T/sa-on.yaml" "$T/sa-mcpnull.yaml" "$T/sa-name.yaml"
+  check "true, then mcp: null, then mcp.virtual.name: refused too ($LW)" "[ $RC = 1 ] && [ ! -s '$T/out' ] && grep -q 'ownServiceAccounts' '$T/err'" "$(cat "$T/err")"
+  run $LW "$T/sa-on.yaml" "$T/sa-vnull.yaml"
+  check "true, then mcp.virtual: null: refused too ($LW)" "[ $RC = 1 ] && [ ! -s '$T/out' ]" "$(cat "$T/err")"
+done
+run --later-wins "$T/sa-on.yaml" "$T/sa-vnull.yaml" "$T/sa-on.yaml"
+check "true, null, true again with --later-wins: the result is on, so it composes" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true'" "$(cat "$T/err")"
 OWN="$ROOT/components/tools/own-service-accounts-values.yaml"
 run "$QS" "$BANK" "$OWN"
 check "the quick start, the bank values and the platform switch file compose: exit 0, switch on" "[ $RC = 0 ] && out_has '.mcp.virtual.ownServiceAccounts == true and (.mcp.profiles|map(.name)) == [\"lookup\",\"disputes\"]'" "$(cat "$T/err")"

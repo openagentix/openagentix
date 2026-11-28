@@ -20,8 +20,11 @@ case "\$1 \$2" in
     if [ -f "$D/err-\$sa" ]; then echo "error: boom" >&2; exit 2; fi
     if [ -f "$D/yes-\$sa-\$3-\$4" ]; then echo yes; exit 0; fi
     echo no; exit 1;;
+  "get serviceaccount"|"get role"|"get rolebinding") f="$D/own-\$2-\$3.json"; [ -f "\$f" ] || { echo "Error from server (NotFound): \$2 \\"\$3\\" not found" >&2; exit 1; }; cat "\$f";;
   "get deployment") [ -f "$D/sa-\$3" ] || exit 1; cat "$D/sa-\$3";;
-  "get virtualmcpserver") f="$D/live-\$4.json"; [ -f "\$f" ] || exit 1; cat "\$f";;
+  "get virtualmcpserver") f="$D/live-\$4.json"
+    if [ -f "$D/apierr-\$4" ]; then cat "$D/apierr-\$4" >&2; exit 1; fi
+    if [ ! -f "\$f" ]; then echo "error: the server doesn't have a resource type \"virtualmcpserver\"" >&2; exit 1; fi; cat "\$f";;
   "rollout status") [ -f "$D/norollout-\${3#deployment/}" ] && exit 1; echo "rolled out";;
 esac
 exit 0
@@ -73,16 +76,34 @@ OUT=$(run 'ta_wait_running kubectl mcp-tools tools openagentix-tools 0')
 t "a rollout that does not finish fails" "$(grep -c '^exit=1$' <<<"$OUT")" 1
 rm -f "$D/norollout-tools"
 
+owned() { for kd in serviceaccount role rolebinding; do printf '{"metadata":{"name":"%s-vmcp","ownerReferences":[{"apiVersion":"toolhive.stacklok.dev/v1beta1","kind":"VirtualMCPServer","name":"%s","controller":true}]}}\n' "$1" "$1" > "$D/own-$kd-$1-vmcp.json"; done; }
+owned tools-disputes
 echo "# clean-up of the operator's objects"
 printf 'openagentix-tools-disputes' > "$D/sa-tools-disputes"
 OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
 t "exit 0" "$(grep -c '^exit=0$' <<<"$OUT")" 1
 t "it deletes the ServiceAccount, the Role and the RoleBinding tools-disputes-vmcp" "$(grep -c '^kubectl delete \(serviceaccount\|role\|rolebinding\) tools-disputes-vmcp -n mcp-tools --ignore-not-found$' "$D/calls")" 3
 t "it deletes nothing else" "$(grep -c '^kubectl delete' "$D/calls")" 3
+t "it read each of the three objects before it deleted it" "$(grep -c '^kubectl get \(serviceaccount\|role\|rolebinding\) tools-disputes-vmcp -n mcp-tools -o json$' "$D/calls")" 3
 t "it never touches the chart's own objects" "$(grep -c 'delete.*openagentix-' "$D/calls")" 0
 printf 'tools-disputes-vmcp' > "$D/sa-tools-disputes"
 OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
 t "while the tool server still runs as the old account: nothing is deleted, exit 1" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c '^kubectl delete' "$D/calls")" 1/0
+printf 'openagentix-tools-disputes' > "$D/sa-tools-disputes"
+echo "# an object of that name that is not the operator's is left alone, and said"
+for kd in serviceaccount role rolebinding; do printf '{"metadata":{"name":"tools-disputes-vmcp","ownerReferences":[{"kind":"Deployment","name":"somebody"}]}}\n' > "$D/own-$kd-tools-disputes-vmcp.json"; done
+OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
+t "owned by something else: nothing is deleted, three WARNING lines, exit 0 (the install goes on)" "$(grep -c '^kubectl delete' "$D/calls")/$(grep -c 'is not owned by the VirtualMCPServer tools-disputes: left alone' <<<"$OUT")/$(grep -c '^exit=0$' <<<"$OUT")" 0/3/1
+for kd in serviceaccount role rolebinding; do printf '{"metadata":{"name":"tools-disputes-vmcp"}}\n' > "$D/own-$kd-tools-disputes-vmcp.json"; done
+OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
+t "no owner reference at all: left alone too" "$(grep -c '^kubectl delete' "$D/calls")/$(grep -c 'left alone' <<<"$OUT")" 0/3
+printf '{"metadata":{"name":"tools-disputes-vmcp","ownerReferences":[{"kind":"VirtualMCPServer","name":"tools"}]}}\n' > "$D/own-role-tools-disputes-vmcp.json"
+OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
+t "owned by ANOTHER tool server (the name differs): left alone" "$(grep -c '^kubectl delete' "$D/calls")/$(grep -c 'role tools-disputes-vmcp in mcp-tools is not owned' <<<"$OUT")" 0/1
+rm -f "$D"/own-*; : > /dev/null
+OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
+t "objects that do not exist (the operator never made them): nothing to delete, exit 0" "$(grep -c '^kubectl delete' "$D/calls")/$(grep -c '^exit=0$' <<<"$OUT")" 0/1
+owned tools-disputes
 rm -f "$D/sa-tools-disputes"
 OUT=$(run 'ta_cleanup kubectl mcp-tools tools-disputes openagentix-tools-disputes')
 t "a Deployment that cannot be read: nothing is deleted, exit 1" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c '^kubectl delete' "$D/calls")" 1/0
@@ -110,6 +131,20 @@ printf '{"items":[{"metadata":{"name":"somebody-else"},"spec":{"serviceAccount":
 OUT=$(run 'ta_refuse_off kubectl <<<"$1"' "$OFF")
 t "a live tool server the chart does not render does not count" "$(grep -c '^exit=0$' <<<"$OUT")" 1
 rm -f "$D/live-mcp-tools.json"
+
+echo "# an API error is not a reason to skip the refusal: only a missing resource type is"
+printf '{"items":[{"metadata":{"name":"tools"},"spec":{"serviceAccount":"openagentix-tools"}}]}\n' > "$D/live-mcp-tools.json"
+printf 'Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded while awaiting headers)\n' > "$D/apierr-mcp-tools"
+OUT=$(run 'ta_refuse_off kubectl <<<"$1"' "$OFF")
+t "a timeout on the read of the tool servers: exit 1, cannot tell, nothing was changed" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'cannot tell' <<<"$OUT")/$(grep -c 'Nothing was changed' <<<"$OUT")" 1/1/1
+printf 'Error from server (Forbidden): virtualmcpservers.toolhive.stacklok.dev is forbidden: User "x" cannot list resource in the namespace "mcp-tools"\n' > "$D/apierr-mcp-tools"
+OUT=$(run 'ta_refuse_off kubectl <<<"$1"' "$OFF")
+t "a Forbidden on the read: exit 1, cannot tell" "$(grep -c '^exit=1$' <<<"$OUT")/$(grep -c 'cannot tell' <<<"$OUT")" 1/1
+OUT=$(ALLOW_TOOL_SECRET_READ=1 run 'ta_refuse_off kubectl <<<"$1"' "$OFF")
+t "... also with ALLOW_TOOL_SECRET_READ=1 (the override is for a decision, not for a read that failed)" "$(grep -c '^exit=1$' <<<"$OUT")" 1
+rm -f "$D/apierr-mcp-tools" "$D/live-mcp-tools.json"
+OUT=$(run 'ta_refuse_off kubectl <<<"$1"' "$OFF")
+t "the resource type does not exist (no ToolHive CRDs yet): exit 0, nothing to turn off" "$(grep -c '^exit=0$' <<<"$OUT")" 1
 
 echo "# the warning while the switch is off and credentials exist"
 OUT=$(run 'ta_warn_off <<<"$1"' "$OFF")

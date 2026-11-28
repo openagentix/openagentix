@@ -38,7 +38,12 @@ ta_refuse_off() {
   [ -n "$rows" ] || return 0
   while IFS=$'\t' read -r ns name; do
     [ -n "$ns" ] || continue
-    live=$("${k[@]}" get virtualmcpserver -n "$ns" -o json 2>/dev/null) || continue
+    # Only a missing resource type (no ToolHive CRDs yet: nothing to turn off) is skipped. Any other error (a timeout, a Forbidden) means the refusal cannot be decided.
+    if ! live=$("${k[@]}" get virtualmcpserver -n "$ns" -o json 2>&1); then
+      if grep -q "doesn't have a resource type" <<<"$live"; then continue; fi
+      echo "ERROR: cannot tell whether a tool server of $ns runs on an account of the chart: the read of the VirtualMCPServers failed ($(head -n 1 <<<"$live" | cut -c1-200)). Nothing was changed." >&2
+      return 1
+    fi
     if jq -e --arg n "$name" '.items[]?|select(.metadata.name==$n and ((.spec.serviceAccount // "")|startswith("openagentix-")))' <<<"$live" >/dev/null 2>&1; then off+=" $ns/$name"; fi
   done <<<"$rows"
   [ -n "$off" ] || return 0
@@ -87,7 +92,19 @@ ta_cleanup() {
   [ "$sa" != "$name-vmcp" ] || { echo "ERROR: the account to keep is the operator's own ($sa): nothing is deleted." >&2; return 1; }
   now=$($k get deployment "$name" -n "$ns" -o jsonpath='{.spec.template.spec.serviceAccountName}' 2>/dev/null) || now=""
   [ "$now" = "$sa" ] || { echo "ERROR: the Deployment $name in $ns runs as ${now:-an account that cannot be read}, not $sa: the operator's objects stay." >&2; return 1; }
+  # An object of that name is the operator's only when it has an owner reference to the VirtualMCPServer <name> (ToolHive 0.67.1 sets it: the spike, run
+  # 46131733146, saw the three objects of each tool server with an owner reference to it). Anything else of that name is left alone and said.
+  local obj
   for kind in serviceaccount role rolebinding; do
-    $k delete "$kind" "$name-vmcp" -n "$ns" --ignore-not-found >/dev/null || return 1
+    if ! obj=$($k get "$kind" "$name-vmcp" -n "$ns" -o json 2>&1); then
+      if grep -q 'NotFound' <<<"$obj"; then continue; fi
+      echo "ERROR: cannot read the $kind $name-vmcp in $ns ($(head -n 1 <<<"$obj" | cut -c1-200)): nothing more is deleted." >&2
+      return 1
+    fi
+    if jq -e --arg n "$name" '[.metadata.ownerReferences[]? | select(.kind == "VirtualMCPServer" and .name == $n)] | length > 0' <<<"$obj" >/dev/null 2>&1; then
+      $k delete "$kind" "$name-vmcp" -n "$ns" --ignore-not-found >/dev/null || return 1
+    else
+      echo "WARNING: the $kind $name-vmcp in $ns is not owned by the VirtualMCPServer $name: left alone. Delete it yourself if it is not in use." >&2
+    fi
   done
 }

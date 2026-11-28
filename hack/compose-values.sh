@@ -294,7 +294,12 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
         | "refused: networkPolicy.extraA2ACallers[" + . + "] has no caller rule for a ServiceAccount of that namespace in the composed result (governance.a2a.callers): an admitted namespace that no rule names would only open the gate's ingress"]) as $e2
     | (platns($f.v)) as $pn
     | ([($f.st.xc // [])[] | xaerrs(.e; .fb; $pn)[]]) as $e3
-    | {result: $f.v, report: $f.st.rep, errors: ($e1 + $f.st.err + $e2 + $e3)}
+    # ADR 0031: the switch mcp.virtual.ownServiceAccounts is never turned off by a compose, whatever the way: a later file that sets a parent to null or to a map
+    # without the key, with or without --later-wins, is caught here, on the composed result, and not only at the leaf.
+    | ([$fs[] | select((try (.doc.mcp.virtual.ownServiceAccounts) catch null) == true) | .file] | first) as $onf
+    | ($f.v | (try (.mcp.virtual.ownServiceAccounts) catch null)) as $res
+    | (if $onf != null and $res != true then ["refused: " + $onf + " sets mcp.virtual.ownServiceAccounts to true, and the composed result does not have it on (a later file replaced a parent of the key, or set it to something else). A later file may turn this switch on and never off, with or without --later-wins. Leave out the file that removes it."] else [] end) as $e4
+    | {result: $f.v, report: $f.st.rep, errors: ($e1 + $f.st.err + $e2 + $e3 + $e4)}
   end
 JQ
 

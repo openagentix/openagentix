@@ -76,6 +76,7 @@ if [ "$PHASE" = off ]; then
   for n in $SERVERS; do
     check "$n: spec.serviceAccount is not set" "$(jq -r --arg n "$n" '.items[]|select(.metadata.name==$n)|.spec.serviceAccount // "none"' <<<"$VMJ")" none
     check "$n: the operator made its ServiceAccount, Role and RoleBinding $n-vmcp" "$(op_objects "$n")" 3
+    check "$n: the operator's three objects each have an owner reference to the VirtualMCPServer $n (the mark that install.sh deletes by)" "$(for kind in serviceaccount role rolebinding; do $K get "$kind" "$n-vmcp" -n "$MCPNS" -o json 2>/dev/null | jq --arg n "$n" '[.metadata.ownerReferences[]?|select(.kind=="VirtualMCPServer" and .name==$n)]|length'; done | tr '\n' ' ')" "1 1 1 "
     check "$n: its account can get secrets (the reach ADR 0031 removes)" "$($K auth can-i get secrets -n "$MCPNS" --as="system:serviceaccount:$MCPNS:$n-vmcp" 2>/dev/null || true)" yes
   done
   check "the chart wrote no account of its own (no ServiceAccount openagentix-tools* in $MCPNS)" "$($K get serviceaccount -n "$MCPNS" -o name | grep -c 'openagentix-tools' || true)" 0
