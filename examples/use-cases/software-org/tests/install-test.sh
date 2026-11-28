@@ -269,6 +269,10 @@ reset
 KUBE_CONTEXT=gke_proj_zone_prod VALUES_FILE="$FDLIST" run --beside-full-demo; rc=$?
 check "beside the full demo still refuses a context that is not kind or k3d" "[ $rc = 1 ] && grep -q 'local kind or k3d' '$LOG/out' && [ ! -e '$LOG/platform.calls' ]"
 
+echo "# ALSO_COMPOSE refuses this use case's own values-full-demo.yaml, by full path"
+reset
+ALSO_COMPOSE="$HERE/values-full-demo.yaml" CLUSTER=openagentix VALUES_FILE="$FDLIST" FAKE_CONTEXTS=kind-openagentix run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE listing the use case's own values-full-demo.yaml is refused before the platform installer runs" "[ $rc = 1 ] && grep -q \"own values-full-demo.yaml\" '$LOG/out' && [ ! -s '$LOG/platform.calls' ]" "rc=$rc $(tail -3 "$LOG/out")"
 echo "# ALSO_COMPOSE: this agent beside the full demo AND the bank (and any other use case with a values-full-demo.yaml)"
 BANKFD="examples/use-cases/bank/values-full-demo.yaml"
 reset

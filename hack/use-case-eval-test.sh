@@ -154,8 +154,17 @@ setup_state() { # setup_state <id prefix>
   echo '{"approvals":[]}' >"$T/state/approvals.json"; echo '{"outbox":[]}' >"$T/state/outbox.json"; echo '{"ledger":[]}' >"$T/state/ledger.json"
   : >"$T/audit.log"; : >"$T/calls"; : >"$T/pids"
 }
+# a fake helm: `helm get values` prints the file FAKE_HELM_VALUES, or fails the way helm does when there is no release; the calls are logged to $T/helm.calls
+cat >"$T/bin/helm" <<'SH'
+#!/usr/bin/env bash
+echo "$*" >>"$FAKE_HELM_CALLS"
+[ "${FAKE_HELM_FAIL:-0}" = 1 ] && { echo "Error: Kubernetes cluster unreachable" >&2; exit 1; }
+if [ -n "${FAKE_HELM_VALUES:-}" ] && [ -f "$FAKE_HELM_VALUES" ]; then cat "$FAKE_HELM_VALUES"; exit 0; fi
+echo "Error: release: not found" >&2; exit 1
+SH
+chmod +x "$T/bin/helm"
 run() { # run <args...>; the environment of the caller is used; output in $T/out, exit code in $RC
-  env KUBECTL="$T/bin/kubectl" OA_EVAL="$T/oa-eval" FAKE_LOG="$T/calls" FAKE_STATE="$T/state" FAKE_AUDIT_LOG="$T/audit.log" FAKE_SECRET="$SECRET" \
+  env HELM="$T/bin/helm" FAKE_HELM_CALLS="$T/helm.calls" KUBECTL="$T/bin/kubectl" OA_EVAL="$T/oa-eval" FAKE_LOG="$T/calls" FAKE_STATE="$T/state" FAKE_AUDIT_LOG="$T/audit.log" FAKE_SECRET="$SECRET" \
     FAKE_SERVER="$T/server.py" FAKE_PIDS="$T/pids" METRICS_SCRAPE_SECONDS=0 METRICS_SCRAPE_MARGIN=0 EVAL_AUDIT_SETTLE=0s \
     "$@" >"$T/out" 2>&1
   RC=$?
@@ -329,6 +338,40 @@ check "the token is never redirected to a file by name (only to the named pipe)"
 check "every kubectl call goes through KC (pinned context)" "$(grep -n '"\$KUBECTL"\|kubectl ' "$S" | grep -v '^[0-9]*:#' | grep -v 'KC=(' | grep -vc 'die \|log \|usage\|echo\|cat >&2\|!!!\|"\$KUBECTL" --context\|go to\|KUBECTL=')" 0
 check "a records pod is deleted only after --reset-records (the guard is before any kubectl call)" "$([ "$(grep -n 'needs --reset-records' "$S" | head -1 | cut -d: -f1)" -lt "$(grep -n 'get namespace' "$S" | head -1 | cut -d: -f1)" ] && echo yes || echo no)" yes
 check "no em dash" "$(grep -c $'\xe2\x80\x94' "$S")" 0
+
+echo "# the budget of the key is read from the composed release (helm get values) when it can be; the flag is the fallback; the script says which it used"
+setup_state DSP
+export FAKE_VM_UID=dispute-agent FAKE_SWEEP_TOOLS="records_list_open_cases"
+printf '%s\n' '{"agents":[{"name":"dispute-agent","budgetClass":"bank-case-agent"}],"gateway":{"policy":{"budgetClasses":[{"name":"bank-case-agent","tokens":800000,"unit":"Hours","per":"agent"}]}}}' > "$T/hv-class.json"
+: > "$T/helm.calls"
+run env CLUSTER=oa-test FAKE_HELM_VALUES="$T/hv-class.json" bash "$S" bank --runs 1 --reset-records --out "$T/h1"
+check "with the class in the release the budget is the class: 800000, and the output says it was read from the release" "$(grep -c 'budget of the key of dispute-agent: 800000 tokens an hour (the class bank-case-agent of the release' "$T/out")" 1
+check "the summary records the number and where it came from" "$(jq -c '.budget | {t: .tokens_per_hour_per_key, s: (.source | test("class bank-case-agent"))}' "$T/h1/summary.json")" '{"t":800000,"s":true}'
+check "helm was asked for the values of the release in the context named, read only" "$(grep -c '^get values openagentix -n openagentix-system --kube-context kind-oa-test -o json$' "$T/helm.calls")" 1
+printf '%s\n' '{"agents":[{"name":"dispute-agent","budgetClass":"bank-case-agent"}],"gateway":{"policy":{"budgetClasses":[{"name":"bank-case-agent","tokens":20000,"unit":"Minutes","per":"agent"}]}}}' > "$T/hv-min.json"
+run env CLUSTER=oa-test FAKE_HELM_VALUES="$T/hv-min.json" bash "$S" bank --runs 1 --reset-records --out "$T/h2"
+check "a class in Minutes is turned into an hour: 20000 a minute is 1200000 an hour" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h2/summary.json")" 1200000
+printf '%s\n' '{"agents":[{"name":"dispute-agent"}],"gateway":{"policy":{"tokenBudget":{"tokens":500000,"unit":"Hours"}}}}' > "$T/hv-none.json"
+run env CLUSTER=oa-test FAKE_HELM_VALUES="$T/hv-none.json" bash "$S" bank --runs 1 --reset-records --out "$T/h3"
+check "an agent with no class gets the default budget of the release (tokenBudget, 500000)" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h3/summary.json")" 500000
+check "  and the output says that the agent has no class" "$(grep -c 'no class' "$T/out")" 1
+run env CLUSTER=oa-test FAKE_HELM_VALUES="$T/hv-class.json" bash "$S" bank --runs 1 --reset-records --budget-tokens-per-hour 123456 --out "$T/h4"
+check "the flag wins when it is given (123456), and the output says it was the flag" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h4/summary.json") $(grep -c 'from the flag --budget-tokens-per-hour' "$T/out")" "123456 1"
+: > "$T/helm.calls"
+run env CLUSTER=oa-test bash "$S" bank --runs 1 --reset-records --budget-tokens-per-hour 123456 --out "$T/h5"
+check "with the flag no helm call is made at all" "$(wc -l < "$T/helm.calls" | tr -d ' ')" 0
+run env CLUSTER=oa-test bash "$S" bank --runs 1 --reset-records --out "$T/h6"
+check "no release: the default 1000000 is used, and the output says why" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h6/summary.json") $(grep -c 'the default 1000000 (no release values: ' "$T/out")" "1000000 1"
+run env CLUSTER=oa-test FAKE_HELM_FAIL=1 bash "$S" bank --runs 1 --reset-records --out "$T/h7"
+check "helm fails: the default is used and the reason is shown" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h7/summary.json") $(grep -c 'the default 1000000 (could not read the release' "$T/out")" "1000000 1"
+run env CLUSTER=oa-test HELM=/nonexistent/helm bash "$S" bank --runs 1 --reset-records --out "$T/h8"
+check "no helm command: the default is used and the output says helm was not found" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h8/summary.json") $(grep -c 'helm was not found' "$T/out")" "1000000 1"
+printf '%s\n' '{"agents":[{"name":"dispute-agent","budgetClass":"gone"}],"gateway":{"policy":{"budgetClasses":[]}}}' > "$T/hv-gone.json"
+run env CLUSTER=oa-test FAKE_HELM_VALUES="$T/hv-gone.json" bash "$S" bank --runs 1 --reset-records --out "$T/h9"
+check "a class that the release does not define: the default is used and the class is named" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h9/summary.json") $(grep -c 'names the class gone, which the release does not define' "$T/out")" "1000000 1"
+printf '%s\n' '{"agents":[{"name":"dispute-agent","budgetClass":"pool"}],"gateway":{"policy":{"budgetClasses":[{"name":"pool","tokens":900000,"unit":"Hours","per":"class"}]}}}' > "$T/hv-pool.json"
+run env CLUSTER=oa-test FAKE_HELM_VALUES="$T/hv-pool.json" bash "$S" bank --runs 1 --reset-records --out "$T/h10"
+check "a class shared by every key (per class): the number is used and the output says it is shared" "$(jq -r '.budget.tokens_per_hour_per_key' "$T/h10/summary.json") $(grep -c 'shared by every key of the class' "$T/out")" "900000 1"
 
 echo "# the budget: a refused case is not run, the run stops early, the sweep is skipped; a run that does not fit waits or stops"
 setup_state DSP

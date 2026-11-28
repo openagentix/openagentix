@@ -30,11 +30,20 @@ mcp:
                   request_approval, get_approval]
         knowledge: [kb_search, kb_get_document, kb_list_collections, kb_graph_search, kb_graph_entity, kb_graph_paths]
 
+# The budget class of the dispute agent (ADR 0029). 800,000 tokens an hour for this agent's key. A measured five-case run on a real model used about 540,000 to
+# 670,000 tokens (100,000 to 180,000 a case), so one full run fits and a loop is stopped inside the second: about 4 to 7 cases an hour. It is a soft limit, not a
+# spend cap: it is counted per gateway replica, a restart empties it, and a call in flight passes. It is the real stop of the event sender (values-events.yaml).
+gateway:
+  policy:
+    budgetClasses:
+      - {name: bank-case-agent, tokens: 800000, unit: Hours, per: agent}
+
 agents:
   - name: dispute-agent
     description: Works a card dispute case from intake to a decision that waits for approval
     model: claude-haiku
     toolProfile: disputes
+    budgetClass: bank-case-agent
     systemPrompt: |
       You are the Fernvale dispute desk agent. You work card dispute cases for Fernvale Bank, a fictional bank. All data is synthetic.
 

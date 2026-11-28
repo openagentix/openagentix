@@ -18,6 +18,7 @@ on:
       - hack/ci/smoke.sh
       - hack/ci/msgid-scope.sh
       - hack/ci/events-live.sh
+      - hack/ci/use-case-class-live.sh
       - hack/ci/event-live.sh
       - hack/ci/event_live.py
       - hack/ci/event-recorder.py
@@ -84,6 +85,10 @@ on:
         type: choice
         options: [none, both, a, b]
         default: none
+      adr0031:
+        description: 'Run the design spike of ADR 0031 (tool servers that cannot read Secrets, issue #229, hack/spikes/adr0031_tool_server_spike.py) instead of the profiles: the endpoints cluster of the endpoints job, then the spike. It observes a throwaway cluster and never gates a merge'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,7 +100,7 @@ concurrency:
 jobs:
   e2e:
     name: e2e (${{ matrix.profile }})
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.diagnostics && !inputs.endpoints && !inputs.bank && !inputs.rca && !inputs.equipment && !inputs.equipment_with_bank && !inputs.budget_classes && !inputs.event_triggers && inputs.adr_spikes == 'none' && !inputs.adr0031) }}
     runs-on: ubuntu-24.04          # 4 vCPU / 16 GB for public repositories
     timeout-minutes: 45
     strategy:
@@ -447,6 +452,13 @@ jobs:
         run: |
           set -o pipefail
           hack/ci/events-live.sh bank on 2>&1 | tee events-on.log
+      - name: "budget class (ADR 0029): the dispute agent's key is refused with 429 at the limit of its class, through the policy the chart rendered (last: it spends the key's bucket)"
+        env:
+          USE_CASE_CLASS_LIVE: "1"
+          USE_CASE_CLASS_CI_CONTEXT: kind-oa-bank-demo
+        run: |
+          set -o pipefail
+          hack/ci/use-case-class-live.sh bank 2>&1 | tee class-live.log
       - name: job summary
         if: always()
         run: |
@@ -459,6 +471,10 @@ jobs:
             echo "### Event sender (ADR 0027), off then on"
             echo '```'
             cat events-off.log events-on.log 2>/dev/null || echo "the events check did not run"
+            echo '```'
+            echo "### Budget class of the dispute agent (ADR 0029)"
+            echo '```'
+            cat class-live.log 2>/dev/null || echo "the class check did not run"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: diagnostics
@@ -493,14 +509,14 @@ jobs:
           HV=$(kubectl get secret -n mcp-tools records-mcp-auth -o jsonpath='{.data.value}' 2>/dev/null | base64 -d 2>/dev/null)
           AT=$(kubectl get secret -n fernvale-records records-approver-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null)
           if [ -n "$HV" ] && [ -n "$AT" ]; then
-            for f in kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log events-out; do
+            for f in kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log class-live.log events-out; do
               [ -e "$f" ] || continue
               if grep -rlF -f <(printf '%s\n%s\n' "${HV#Bearer }" "$AT") "$f" >/dev/null 2>&1; then
                 echo "a secret value is in $f: it is removed from the upload"; rm -rf "$f"; LEAK=1
               fi
             done
           else
-            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log events-out; LEAK=1
+            echo "the secret values could not be read from the cluster: none of the bank files is uploaded"; rm -rf kind-logs bank-out install.log install2.log bank-live.log install-events.log events-off.log events-on.log class-live.log events-out; LEAK=1
           fi
           unset HV AT
           [ "$LEAK" = 0 ]
@@ -516,6 +532,7 @@ jobs:
             bank-live.log
             events-off.log
             events-on.log
+            class-live.log
             events-out/
             install.log
             install2.log
@@ -988,3 +1005,64 @@ jobs:
           name: kind-logs-budget-classes
           path: kind-logs
           retention-days: 7
+
+  # Opt-in (workflow_dispatch with the input `adr0031`): the spike of ADR 0031 (issue #229). The cluster of the endpoints job (two tiny endpoints with header
+  # Secrets, the quick start, the stub model), then hack/spikes/adr0031_tool_server_spike.py writes ServiceAccounts and Roles by hand, sets spec.serviceAccount on
+  # the tool servers and records what ToolHive 0.67.1 does. It changes the throwaway cluster only and refuses to run anywhere else. Notes: docs/diary/features/.
+  e2e-adr0031-spike:
+    name: e2e (adr 0031 spike, tool server accounts)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.adr0031 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.22.0
+      - run: hack/ci/install-tools.sh yq kind
+      - name: cluster, then the endpoints (their namespace and workload come before the platform values)
+        env:
+          ENDPOINTS: "1"
+        run: |
+          set -o pipefail
+          kind create cluster --name openagentix --config hack/kind-config.yaml
+          hack/ci/endpoints-ci-setup.sh 2>&1 | tee setup.log
+      - name: install (PROFILE=quickstart plus the endpoints values, no key, no token)
+        env:
+          PROFILE: quickstart
+          VALUES_FILE: hack/ci/endpoints-ci-values.yaml
+          AGENT_WAIT: 300s
+        run: |
+          set -o pipefail
+          ./install.sh 2>&1 | tee install.log
+      - name: spike
+        env:
+          SPIKE_OUT: ${{ github.workspace }}/spike-out
+        run: |
+          set -o pipefail
+          timeout 3000 python3 -I hack/spikes/adr0031_tool_server_spike.py 2>&1 | tee spike.log
+      - name: job summary
+        if: always()
+        run: |
+          [ -f spike-out/results-adr0031.md ] && cat spike-out/results-adr0031.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: diagnostics
+        if: always()
+        run: |
+          mkdir -p spike-out
+          kubectl get pods -A -o wide > spike-out/pods.txt 2>&1 || true
+          kubectl get virtualmcpserver -n mcp-tools -o yaml > spike-out/vmcp.yaml 2>&1 || true
+          kubectl logs -n toolhive-system deploy/toolhive-operator --tail=3000 > spike-out/log-operator.txt 2>&1 || true
+          for d in tools tools-disputes tools-lookup tools-lookup-cm tools-disputes-workload probe-own; do kubectl logs -n mcp-tools "deploy/$d" --all-containers --tail=1500 > "spike-out/log-$d.txt" 2>&1 || true; done
+      - name: upload the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: adr0031-spike
+          path: |
+            spike-out/
+            spike.log
+            install.log
+          if-no-files-found: ignore
+          retention-days: 30

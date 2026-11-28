@@ -73,6 +73,7 @@ Follow the style of the existing records:
 | [0027](0027-event-triggers-through-the-gate.md) | Event triggers, how a system starts an agent run through the A2A gate | Accepted | 2026-11-28 |
 | [0028](0028-approval-at-the-system-of-record.md) | Approval stays in the system of record; the platform gives a result convention and a trace link | Accepted | 2026-11-28 |
 | [0029](0029-per-agent-token-budgets.md) | Per-agent token budgets in the one gateway policy, by budget class | Accepted | 2026-11-28 |
+| [0030](0030-knowledge-base-isolation-and-graph-schema.md) | Knowledge base isolation per tool group, and an optional graph schema per collection | Accepted | 2026-11-28 |
 | [0031](0031-tool-server-secret-reach.md) | Credentials of tool endpoints, and tool servers that cannot read the Secrets of the tools namespace | Proposed | 2026-11-28 |
 
 Dates and statuses are copied from the first lines of each file. If they differ, the file is right; fix this table.

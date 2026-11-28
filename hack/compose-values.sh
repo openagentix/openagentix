@@ -17,7 +17,7 @@
 #     a parent with such a name, is never shown: only the path is. Numbers and labels such as tokenBudget.tokens and apiKeyLabel are shown.
 #   - These lists are merged by the `name` of their entries: agents, schedules, governance.a2a.callers, gateway.models, mcp.servers,
 #     mcp.endpoints, mcp.profiles; and networkPolicy.extraA2ACallers, whose entries are named by `namespace` (the namespaces that may call the
-#     A2A gate: two use cases that send events each add their own). Entries keep the order of first appearance. Every entry that a later file adds is reported. The same
+#     A2A gate: two use cases that send events each add their own); and gateway.policy.budgetClasses (ADR 0029: the budget classes, a use case adds its own). Entries keep the order of first appearance. Every entry that a later file adds is reported. The same
 #     name with the same content is kept once. The same name with different content is REFUSED, with both file names, unless
 #     --later-wins is given (then the later entry replaces it and each changed value is reported).
 #   - Security keys: a later file may not change these without --later-wins: the allow lists of controlPlane.policy (allowedModels,
@@ -93,7 +93,7 @@ for f in "${FILES[@]}"; do
 done
 
 read -r -d '' PROGRAM <<'JQ' || true
-def namelists: ["agents","schedules","governance.a2a.callers","gateway.models","mcp.servers","mcp.endpoints","mcp.profiles","networkPolicy.extraA2ACallers"];
+def namelists: ["agents","schedules","governance.a2a.callers","gateway.models","mcp.servers","mcp.endpoints","mcp.profiles","networkPolicy.extraA2ACallers","gateway.policy.budgetClasses"];
 # the key that names an entry of a list: `name`, except for the namespaces that may call the A2A gate
 def lkey($p): if $p == "networkPolicy.extraA2ACallers" then "namespace" else "name" end;
 def secpfx: [
@@ -171,22 +171,32 @@ def prep($doc; $f):
         | .err += $r.err | .v = (.v | setpath($path; $r.l))
       end);
 
-# The namespaces an entry of networkPolicy.extraA2ACallers may not name: default, kube-*, openagentix-*, and every namespace value of the chart's own values
-# (the platform namespaces, the same walk that the chart's endpoint check makes over its values; the chart defaults are the base here).
-def platns: ([$base[0] | .. | objects | to_entries[] | select((.key | ascii_downcase | endswith("namespace")) and ((.value | type) == "string")) | (if .value == "" then "openagentix-system" else .value end)]
-  + ["default", "kube-system", "kube-public", "kube-node-lease"]) | unique;
-# A new entry of networkPolicy.extraA2ACallers is refused unless it is narrow (the chart admits the namespace's pods to the gate's ingress).
-def xaerrs($e; $fb):
+# The namespaces an entry of networkPolicy.extraA2ACallers may not name: default, kube-*, openagentix-*, and every namespace value of the chart's own values AND of the
+# composed values (a file that renames a platform namespace is still protected). It is the walk that the chart's endpoint check makes: each key that ends in "namespace",
+# an empty value being the release namespace, and the two caller paths (governance.a2a.callers, networkPolicy.extraA2ACallers) left out, because they name workloads.
+def nsvals($v; $p):
+  if ($v | type) == "object" then
+    ($v | to_entries[]) as $kv
+    | (if $p == "" then $kv.key else $p + "." + $kv.key end) as $kp
+    | if $kp == "governance.a2a.callers" or $kp == "networkPolicy.extraA2ACallers" then empty
+      elif ($kv.key | ascii_downcase | endswith("namespace")) and (($kv.value | type) == "string") then (if $kv.value == "" then "openagentix-system" else $kv.value end)
+      else nsvals($kv.value; $kp) end
+  elif ($v | type) == "array" then $v[] | nsvals(.; $p)
+  else empty end;
+def platns($doc): ([nsvals($base[0]; "")] + [nsvals($doc; "")] + ["default", "kube-system", "kube-public", "kube-node-lease"]) | unique;
+# An entry of networkPolicy.extraA2ACallers that a file adds or changes is refused unless it is narrow (the chart admits the namespace's pods to the gate's ingress).
+def xaerrs($e; $fb; $pn):
   ($e.namespace) as $n
   | ("refused: " + $fb + ": networkPolicy.extraA2ACallers[" + $n + "] ") as $w
   | ((($e | keys) - ["namespace", "podLabels"]) as $x | if ($x | length) > 0 then [$w + "has keys other than namespace and podLabels (" + ($x | join(", ")) + ")"] else [] end)
   + (if (($e.podLabels | type) != "object") or (($e.podLabels | length) == 0) then [$w + "needs podLabels that are a non-empty map: without them every pod of the namespace may call the gate"] else [] end)
-  + (if $n == "default" or ($n | startswith("kube-")) or ($n | startswith("openagentix-")) or ((platns | index($n)) != null) then [$w + "names a platform or system namespace (default, kube-*, openagentix-* and the namespaces of the chart's values are refused)"] else [] end);
+  + (if $n == "default" or ($n | startswith("kube-")) or ($n | startswith("openagentix-")) or ($pn | index($n)) != null then [$w + "names a platform or system namespace (default, kube-*, openagentix-* and the namespaces of the chart's values and of the composed values are refused)"] else [] end);
 
 # Additions that the key list does not refuse but that a reader must see.
 def addnotes($p; $e; $old; $fb):
   (if $p == "governance.a2a.callers" and $old == null then ["SECURITY-RELEVANT: " + $fb + " adds the caller rule " + $e.name + " (a caller rule decides who may ask which agent)"] else [] end)
   + (if $p == "networkPolicy.extraA2ACallers" and $old == null then ["SECURITY-RELEVANT: " + $fb + " admits the namespace " + $e.namespace + " to the A2A gate (a caller rule for it decides what it may ask)"] else [] end)
+  + (if $p == "gateway.policy.budgetClasses" and $old == null then ["SECURITY-RELEVANT: " + $fb + " adds the budget class " + $e.name + " (" + ($e.tokens | tostring) + " tokens per " + ($e.unit | tostring) + ", per " + ($e.per | tostring) + "): an agent that names it gets this limit, which is a soft limit and not a spend cap"] else [] end)
   + (if $p == "mcp.profiles" and ($e.codeMode == true) and (($old | .codeMode?) != true) then ["SECURITY-RELEVANT: " + $fb + " gives the profile " + $e.name + " code mode (codeMode: true), so a script can call its tools"] else [] end);
 
 def mergelist($p; $a; $b; $fb; $lw; $st; $h):
@@ -197,7 +207,7 @@ def mergelist($p; $a; $b; $fb; $lw; $st; $h):
     | (.v | map(.[lkey($p)]) | index($n)) as $i
     | if $i == null then
         .v += [$e]
-        | (if $p == "networkPolicy.extraA2ACallers" then (.st.err += xaerrs($e; $fb)) | (.st.xa += [$e.namespace]) else . end)
+        | (if $p == "networkPolicy.extraA2ACallers" then (.st.xc += [{e: $e, fb: $fb}]) | (.st.xa += [$e.namespace]) else . end)
         | .st.src[$ep] = $fb
         | .st.rep += ["added " + $ep + " (from " + $fb + ")"]
         | .st.rep += addnotes($p; $e; null; $fb)
@@ -208,6 +218,7 @@ def mergelist($p; $a; $b; $fb; $lw; $st; $h):
         | if $lw then
             .st.rep += [diffrep($ep; .v[$i]; $e; $fa; $fb; $h2)]
             | .st.rep += addnotes($p; $e; .v[$i]; $fb)
+            | (if $p == "networkPolicy.extraA2ACallers" then (.st.xc += [{e: $e, fb: $fb}]) | (.st.xa += [$e.namespace]) else . end)
             | .v[$i] = $e
             | .st.src[$ep] = $fb
           else
@@ -224,7 +235,8 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
         | ($h or hidekey($k)) as $h2
         # networkPolicy is merged key by key even when no earlier file has it, so that extraA2ACallers (a list of namespaces, joined by namespace) is not
         # compared with the chart default as a whole; every other networkPolicy key is still a security key
-        | if (.v | has($k)) or ($c == "networkPolicy" and ($b[$k] | isobj) and ($b[$k] | has("extraA2ACallers"))) then
+        | if (.v | has($k)) or ($c == "networkPolicy" and ($b[$k] | isobj) and ($b[$k] | has("extraA2ACallers"))) or ($c == "gateway.policy" and ($b[$k] | isobj) and ($b[$k] | has("budgetClasses")))
+              or ($c == "gateway" and ($b[$k] | isobj) and (($b[$k].policy | type) == "object") and ($b[$k].policy | has("budgetClasses"))) then
             merge($cps; (if (.v | has($k)) then .v[$k] else {} end); $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st
           elif namelist($c) and ($b[$k] | isarr) then
             mergelist($c; []; $b[$k]; $fb; $lw; .st; $h2) as $r | .v[$k] = $r.v | .st = $r.st
@@ -270,7 +282,9 @@ def merge($ps; $a; $b; $fb; $lw; $st; $h):
     # every namespace that a file admitted to the gate needs a caller rule for a ServiceAccount of that namespace in the composed result
     | ([($f.st.xa // [])[] | . as $n | select(((($f.v.governance.a2a.callers // []) | map(.serviceAccount.namespace?)) | index($n)) == null)
         | "refused: networkPolicy.extraA2ACallers[" + . + "] has no caller rule for a ServiceAccount of that namespace in the composed result (governance.a2a.callers): an admitted namespace that no rule names would only open the gate's ingress"]) as $e2
-    | {result: $f.v, report: $f.st.rep, errors: ($e1 + $f.st.err + $e2)}
+    | (platns($f.v)) as $pn
+    | ([($f.st.xc // [])[] | xaerrs(.e; .fb; $pn)[]]) as $e3
+    | {result: $f.v, report: $f.st.rep, errors: ($e1 + $f.st.err + $e2 + $e3)}
   end
 JQ
 

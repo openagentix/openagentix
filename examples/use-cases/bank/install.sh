@@ -156,7 +156,9 @@ release_extras() { # release_extras <json file of the values this script will ha
   printf '%s' "$rel" | jq -r --argjson comp "${COMPANION:-0}" --arg ownev "$OWN_EVENT_CALLER" --arg ownns "$NS" --slurpfile exp "$1" '
     def flat($pre):
       if type == "object" then (if length == 0 then $pre + "{}" else (to_entries[] | .key as $k | .value | flat($pre + "." + $k)) end)
-      elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]") else flat($pre + "[]") end)) end)
+      elif type == "array" then (if length == 0 then $pre + "[]" else (.[] | (if type == "object" and ((.name | type) == "string") then flat($pre + "[" + .name + "]")
+        elif $pre == ".networkPolicy.extraA2ACallers" and type == "object" and ((.namespace | type) == "string") then flat($pre + "[" + .namespace + "]")
+        else flat($pre + "[]") end)) end)
       else $pre end;
     # the one scenario file this script ships is named scenario.json; it is replaced without complaint only when the release holds an earlier copy of it (it names
     # the dispute desk agent). A scenario.json of another use case, and any other file, stay in the list.
@@ -165,7 +167,7 @@ release_extras() { # release_extras <json file of the values this script will ha
     | (if ($comp == 1 and ((.gateway.stubModel.scenarios.files["equipment.json"] // "") | test("kestrel valley service desk agent"; "i"))) then "^[.]gateway[.]stubModel[.]scenarios[.]files[.]equipment[.]json$" else "^$" end) as $companion
     # an install that had the sender on and now has it off: the release holds the event caller of this use case and the namespace admitted to the gate. They go, on purpose, and
     # only they: the paths of that one caller and of the list of namespaces, and only when that list holds no namespace but its own
-    | (if ((((.governance.a2a.callers // []) | map(.name) | index($ownev)) != null) and (((.networkPolicy.extraA2ACallers // []) | map(.namespace)) | all(. == $ownns))) then "^[.]governance[.]a2a[.]callers[[]" + $ownev + "[]]|^[.]networkPolicy[.]extraA2ACallers" else "^$" end) as $ownevt
+    | (if (((.governance.a2a.callers // []) | map(.name) | index($ownev)) != null) then "^[.]governance[.]a2a[.]callers[[]" + $ownev + "[]]|^[.]networkPolicy[.]extraA2ACallers[[]" + $ownns + "[]]" else "^$" end) as $ownevt
     | ([. | flat("")] | unique) - ([$exp[0] | flat("")] | unique)
     | map(select((test("^[.](bridge|scheduling|governance[.]a2a|knowledge[.]kb|notify|gateway[.]stubModel|controlPlane|console|diagnostics)[.]image[.]tag$|^[.](bridge|console|controlPlane|diagnostics|gateway[.]stubModel|governance[.]a2a|knowledge[.]kb|notify|scheduling)[.]sourceHash$|^[.](controlPlane|console|diagnostics)[.]apiServerCIDRs(\\[\\])?$|^[.]controlPlane[.]containerAgents[.]serviceAccountTokens[.]issuer$|^[.]skills[.]openagentix-canary[.]oci$|^[.]notify[.]requireReady$") or test($mine) or test($companion) or test($ownevt)) | not))
     | .[]'
@@ -215,6 +217,9 @@ if [ "$SKIP_PLATFORM" != 1 ]; then
     for f in ${ALSO_COMPOSE:-}; do
       [ -r "$f" ] || die "cannot read $f (ALSO_COMPOSE is read from the repository root). Nothing was changed."
       case "$(basename "$f")" in values-full-demo.yaml|values-events.yaml) ;; *) die "ALSO_COMPOSE takes the values-full-demo.yaml and values-events.yaml files of other use cases, not $f (a use case's own values.yaml replaces lists of the full demo). Nothing was changed." ;; esac
+      for own in "$HERE/values-events.yaml" "$HERE/values-full-demo.yaml"; do
+        [ ! "$f" -ef "$own" ] || die "ALSO_COMPOSE lists this use case's own $(basename "$own") ($f): it is composed by this script itself, and the events file only with EVENTS=1. List the files of the OTHER use cases. Nothing was changed."
+      done
       ALSO_FILES+=("$f")
     done
     "$COMPOSE" -o "$VALUES_COMPOSED" "$VALUES_BASE" ${ALSO_FILES[@]+"${ALSO_FILES[@]}"} "$HERE/values-full-demo.yaml" ${EVF[@]+"${EVF[@]}"} || die "the values did not compose (the reason is above): your install and this agent do not fit together as they are. Nothing was changed."

@@ -65,11 +65,20 @@ mcp:
                          set_timer, escalate_to_person, request_approval, get_approval]
         knowledge: [kb_search, kb_get_document, kb_list_collections, kb_graph_search, kb_graph_entity, kb_graph_paths]
 
+# The budget class of the service agent (ADR 0029). 800,000 tokens an hour for this agent's key. A measured seven-case run on a real model used about 440,000 to
+# 660,000 tokens (about 63,000 to 94,000 a case), so one full run fits and a loop is stopped inside the second: about 8 to 12 cases an hour. It is a soft limit, not a
+# spend cap: it is counted per gateway replica, a restart empties it, and a call in flight passes. It is the real stop of the event sender (values-events.yaml).
+gateway:
+  policy:
+    budgetClasses:
+      - {name: equipment-case-agent, tokens: 800000, unit: Hours, per: agent}
+
 agents:
   - name: service-agent
     description: Works a machine service event from the fault to a parts order and warranty claim that wait for approval
     model: quickstart-model
     toolProfile: dealer
+    budgetClass: equipment-case-agent
     systemPrompt: |
       You are the Kestrel Valley service desk agent. You work service cases for Kestrel Valley Machinery, a fictional maker of tractors, combines and balers. All data is synthetic.
 

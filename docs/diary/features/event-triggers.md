@@ -73,3 +73,7 @@ Off by default. `EVENTS=1 examples/use-cases/<use case>/install.sh` turns on the
 The channels path for senders that cannot speak A2A (slice 7), with what is weaker on it, is in [channels](./channels.md), "Events from a sender that cannot speak A2A". It is documentation only: no use case wires it.
 
 Not done: the sweep for unworked cases was not run live (it waits 30 minutes; the unit tests cover it); a real model was not used; more than one gate replica and a runtime restart were not tried.
+
+## The budget class and the event sender (ADR 0029, slice 5)
+
+Each use case defines one budget class for its agent (`bank-case-agent`, `equipment-case-agent`, `rca-diagnostic-agent`). For the two senders the class is the real stop: the rate spreads a burst, and a run past the class gets 429 and ends `TASK_STATE_FAILED`, which the sender asks again up to 3 attempts. A test checks that the burst of each sender fits inside its class. The live proof (bank run 46130087215, 11 checks) lowers the one entry of the class to 300 tokens for the test and shows the 429 for the dispute agent's own key. It is a soft limit, not a spend cap.

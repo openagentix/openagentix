@@ -408,6 +408,36 @@ check "ALSO_COMPOSE may list the other use case's values-events.yaml: its event 
 reset; cp "$TMP/af/release.json" "$LOG/release.json"
 EVENTS=1 ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
 check "EVENTS=1 beside a full demo: this use case's values-events.yaml is composed after its values-full-demo.yaml" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"fernvale-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
+echo "# ALSO_COMPOSE refuses this use case's own files, by full path"
+reset
+ALSO_COMPOSE="$HERE/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE listing this use case's own values-events.yaml is refused before any change (an EVENTS=0 run would carry its event rule)" "[ $rc = 1 ] && grep -q 'own values-events.yaml' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+ALSO_COMPOSE="$HERE/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE listing this use case's own values-full-demo.yaml is refused before any change" "[ $rc = 1 ] && grep -q 'own values-full-demo.yaml' '$LOG/out' && ! grep -qE 'docker|create |apply|platform-install' '$LOG/calls'" "exit $rc: $(cat "$LOG/out")"
+reset
+ALSO_COMPOSE="$HERE/../$(basename "$HERE")/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "the same file by another path (a .. in it) is refused too" "[ $rc = 1 ] && grep -q 'own values-events.yaml' '$LOG/out'"
+echo "# the release guard compares the namespace entries by namespace: one entry cannot drop while another of the same shape stays"
+reset
+cp "$TMP/release-on.json" "$LOG/release.json"
+jq '.networkPolicy.extraA2ACallers += [{"namespace":"somewhere-else","podLabels":{"app":"records"}}] | .networkPolicy.extraA2ACallers |= map(select(.namespace != "fernvale-records"))' "$TMP/release-on.json" > "$LOG/release.json"
+FAKE_STUB=1 run; rc=$?
+check "a release with another namespace entry of the same shape, and this use case's own entry gone: the other entry is named and refused" "[ $rc = 1 ] && grep -q 'extraA2ACallers\[somewhere-else\]' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+echo "# budget classes (ADR 0029): the class of this use case is composed with the classes of the other two, on the first run, the second run and beside the full demo"
+ALL_FD="$RT/examples/use-cases/equipment/values-full-demo.yaml $RT/examples/use-cases/software-org/values-full-demo.yaml"
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+bash "$RT/hack/compose-values.sh" -o "$TMP/af/release-all.yaml" "$TMP/af/user.json" $ALL_FD 2>/dev/null && yq . "$TMP/af/release-all.yaml" > "$LOG/release.json"
+ALSO_COMPOSE="$ALL_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "beside the full demo with the other two use cases listed in ALSO_COMPOSE: the first run passes" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+check "the platform values hold the three classes once each (this one's last, as composed) and the agent names its class" "[ \"\$(yq -c '.gateway.policy.budgetClasses | map(.name) | sort' '$LOG/platform-values.yaml')\" = '[\"bank-case-agent\",\"equipment-case-agent\",\"rca-diagnostic-agent\"]' ] && [ \"\$(yq -r '.agents[] | select(.name==\"dispute-agent\") | .budgetClass' '$LOG/platform-values.yaml')\" = 'bank-case-agent' ]"
+yq . "$LOG/platform-values.yaml" > "$TMP/af/release-all2.json"
+reset; cp "$TMP/af/release-all2.json" "$LOG/release.json"
+ALSO_COMPOSE="$ALL_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "the second run on the release it made passes (the release guard knows the classes)" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
+reset; cp "$TMP/af/release-all2.json" "$LOG/release.json"
+ALSO_COMPOSE="$RT/examples/use-cases/equipment/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "leaving a use case out of ALSO_COMPOSE when the release holds its class and agent is refused, naming the class" "[ $rc = 1 ] && grep -q 'budgetClasses' '$LOG/out' && ! grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
 echo "# checks on the platform after the install"
 reset
 FAKE_NO_AGENT=1 run; rc=$?
