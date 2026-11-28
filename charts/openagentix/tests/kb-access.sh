@@ -159,7 +159,8 @@ eq "diagnostics on: its knowledge mirror sends the value of the group diagnostic
 eq "diagnostics on: the group is a caller with an empty list (nothing to read), so its backend stays ready" "$(jq -r '.callers[]|select(.name=="diagnostics")|(.collections|length|tostring)' <<<"$(q "$DG" '.[]|select(.kind=="ConfigMap" and .metadata.name=="kb-access")|.data["access.json"]')")" 0
 
 echo "# kb access: the warning for installs with Helm alone (NOTES.txt)"
-notes() { helm install openagentix "$CHART" -n openagentix-system --dry-run=client "$@" 2>&1 | sed -n '/^NOTES:/,$p'; }
+# NOTES.txt is not part of the render and `helm install --dry-run` needs a cluster, so the test renders it as a template of a copy of the chart
+notes() { local T; T=$(mktemp -d); cp -R "$CHART" "$T/c"; mv "$T/c/templates/NOTES.txt" "$T/c/templates/notes-test.yaml"; helm template openagentix "$T/c" -n openagentix-system -s templates/notes-test.yaml "$@" 2>&1; rm -rf "$T"; }
 kv '.knowledge.access.mode=""'
 eq "mode empty and profiles on three tool groups list the knowledge tools: the warning names the groups" "$(notes -f "$KX2" | /usr/bin/grep -c 'WARNING: no isolation in the knowledge base.*3 tool groups (dealer, disputes, tools)')" 1
 eq "mode report: no warning" "$(notes -f "$KX" --set knowledge.access.mode=report | /usr/bin/grep -c WARNING)" 0

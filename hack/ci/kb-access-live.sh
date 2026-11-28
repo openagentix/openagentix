@@ -97,7 +97,7 @@ for p in alpha beta sharedkb; do
   if [ "${SID[$p]}" = - ]; then
     # what the first attempt did, and what the vMCP says: the status and the start of the answer, never a token
     echo "       no session on $p: the answer to initialize was:"
-    curl -s -i -m 20 -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TD/tok-$p")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"kb-access-live","version":"0"}}}' "http://127.0.0.1:${PORT[$p]}/mcp" 2>&1 | head -c 600 | sed 's/^/         /'
+    curl -s -i -m 20 -K <(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TD/tok-$p")") -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"kb-access-live","version":"0"}}}' "http://127.0.0.1:${PORT[$p]}/mcp" 2>&1 | head -c 1800 | sed 's/^/         /'
     echo
     $K logs -n "$MCPNS" "deploy/tools-$p" --tail=15 2>&1 | cut -c1-300 | sed 's/^/         vmcp: /'
   fi
