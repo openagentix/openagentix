@@ -233,30 +233,20 @@ func register[In, Out any](d *Domain, srv *mcp.Server, name, desc string, readOn
 	}
 	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, Annotations: ann},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+			// A write can cancel the pending request of its case. The ids come from the write's own transaction (core.SupersedePending returns them from
+			// the UPDATE), and the result then names them in superseded_approvals.
+			cctx, superseded := core.WithSupersededCollector(ctx)
+			out, err := fn(cctx, in)
+			if err == nil {
+				if ids := superseded(); len(ids) > 0 {
+					if sp, ok := any(&out).(supersedable); ok {
+						sp.setSuperseded(ids)
+					}
+				}
+			}
 			sub := ""
 			if subject != nil {
 				sub = subject(in)
-			}
-			// A write can cancel the pending request of its case. The result then names the cancelled requests (superseded_approvals).
-			var pending []string
-			if !readOnly && sub != "" {
-				if ps, perr := d.approvals.List(ctx, "pending", sub); perr == nil {
-					for _, a := range ps {
-						pending = append(pending, a.ID)
-					}
-				}
-			}
-			out, err := fn(ctx, in)
-			if err == nil && len(pending) > 0 {
-				var gone []string
-				for _, id := range pending {
-					if a, gerr := d.approvals.Get(ctx, id); gerr == nil && a.Status == "superseded" {
-						gone = append(gone, id)
-					}
-				}
-				if sp, ok := any(&out).(supersedable); ok && len(gone) > 0 {
-					sp.setSuperseded(gone)
-				}
 			}
 			d.audit.Record(ctx, core.AuditEntry{Actor: "agent", Channel: "mcp", Action: name, Subject: sub, Outcome: core.Outcome(err)})
 			if err != nil {

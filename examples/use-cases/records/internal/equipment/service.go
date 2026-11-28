@@ -691,7 +691,7 @@ func (s *Service) mutateKeepingSlot(ctx context.Context, id string, keepSlot boo
 		return err
 	}
 	if c.Status == "pending_approval" {
-		if err := core.SupersedePending(ctx, tx, id, s.clock()); err != nil {
+		if _, err := core.SupersedePending(ctx, tx, id, s.clock()); err != nil {
 			return err
 		}
 		if !keepSlot {

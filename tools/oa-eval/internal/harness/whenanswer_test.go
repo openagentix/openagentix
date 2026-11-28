@@ -69,9 +69,13 @@ func TestWhenAnswerWithABadPatternIsRefusedAtLoad(t *testing.T) {
 	// and the command exits 2 for it (a bad file is a bad setup)
 }
 
-// The real answers of the first real-model run of the bank, against the rule as the bank sets carry it. The defect: the agent retried a write after the
-// request, the write superseded it, and the answer still said the request was pending. The record then has no pending request.
-func TestWhenAnswerCatchesTheRealAnswerOfTheBankDefect(t *testing.T) {
+// The pending-answers fixtures, against the rule as the bank set for a real model carries it. File names say what the answer does:
+//
+//	claims-*  says the request is pending (the real answer of the first real-model defect, and other ways to word the same false claim). With no pending
+//	          request in the record the rule must FAIL it, and it must be applied (not skipped).
+//	true-*    says it is pending and a request is pending: the rule runs and passes.
+//	denies-*  says the request is NOT pending (correct after a superseded request): the rule is not applied, so the case is not failed.
+func TestWhenAnswerOnTheFixtures(t *testing.T) {
 	cs, err := LoadCases("../../../../examples/use-cases/bank/eval/cases-real.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +95,6 @@ func TestWhenAnswerCatchesTheRealAnswerOfTheBankDefect(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("the bank set for a real model has no state check with when_answer on out-of-time-declined")
 	}
-	// the record the second case of the defect run left: the request is superseded, so the pending list is empty
 	srv := func(pending bool) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body := `{"approvals":[]}`
@@ -101,29 +104,40 @@ func TestWhenAnswerCatchesTheRealAnswerOfTheBankDefect(t *testing.T) {
 			_, _ = w.Write([]byte(body))
 		}))
 	}
-	read := func(name string) string {
-		b, err := os.ReadFile(filepath.Join("testdata/pending-answers", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
 	run := func(answer string, pending bool) Check {
 		s := srv(pending)
 		defer s.Close()
-		got := stateChecks(context.Background(), http.DefaultClient, e, s.URL, "", answer)
-		return got[idx]
+		return stateChecks(context.Background(), http.DefaultClient, e, s.URL, "", answer)[idx]
 	}
-	if c := run(read("bank__out-of-time-declined__defect1-superseded.txt"), false); c.Pass {
-		t.Errorf("the real answer of the defect (it says the request is pending, the record has none) must FAIL the rule: %+v", c)
-	}
-	if c := run(read("bank__out-of-time-declined__pending-and-true.txt"), true); !c.Pass || strings.Contains(c.Detail, "not applied") {
-		t.Errorf("a real answer that says pending, with a request that is pending, passes the rule (it ran): %+v", c)
-	}
-	// an answer that says the request is NOT pending is not held to the rule, in any of its phrasings
-	for _, f := range []string{"bank__out-of-time-declined__no-longer-pending.txt", "bank__out-of-time-declined__not-pending.txt"} {
-		if c := run(read(f), false); !c.Pass || !strings.Contains(c.Detail, "not applied") {
-			t.Errorf("%s: an answer that says the request is no longer or not pending is correct and must not fail: %+v", f, c)
+	files, _ := filepath.Glob("testdata/pending-answers/*.txt")
+	counts := map[string]int{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
 		}
+		name := filepath.Base(f)
+		parts := strings.Split(strings.TrimSuffix(name, ".txt"), "__")
+		kind := strings.SplitN(parts[len(parts)-1], "-", 2)[0]
+		counts[kind]++
+		switch kind {
+		case "claims":
+			if c := run(string(b), false); c.Pass || strings.Contains(c.Detail, "not applied") {
+				t.Errorf("%s: the answer says a request is pending and none is: the rule must run and FAIL: %+v", name, c)
+			}
+		case "true":
+			if c := run(string(b), true); !c.Pass || strings.Contains(c.Detail, "not applied") {
+				t.Errorf("%s: the answer says pending and a request is pending: the rule runs and passes: %+v", name, c)
+			}
+		case "denies":
+			if c := run(string(b), false); !c.Pass || !strings.Contains(c.Detail, "not applied") {
+				t.Errorf("%s: the answer says no request is pending: the rule is not applied and the case is not failed: %+v", name, c)
+			}
+		default:
+			t.Errorf("%s: the name must say claims, true or denies", name)
+		}
+	}
+	if counts["claims"] < 8 || counts["denies"] < 5 || counts["true"] < 1 {
+		t.Errorf("the fixtures are too few to mean anything: %v", counts)
 	}
 }

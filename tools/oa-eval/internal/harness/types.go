@@ -76,8 +76,10 @@ type StateCheck struct {
 	Matches string `yaml:"matches"` // the value, as text, must match this regular expression
 	Count   *int   `yaml:"count"`   // the value is an array or object with this many entries
 	Exists  *bool  `yaml:"exists"`  // the path exists (true) or does not (false)
-	// WhenAnswer is a regular expression over the answer: the check runs only when the answer matches it (ADR 0028). It is how "when the answer says a
-	// request is pending, a pending request must exist" is one rule. A check that does not run is shown as not applied, and it passes.
+	// WhenAnswer is a regular expression over the answer: the check runs only when the answer matches it outside a denying clause ("no request is waiting
+	// for approval" does not make the claim), read as answer_claims_not reads it (ADR 0028). It is how "when the answer says a request is pending, a
+	// pending request must exist" is one rule. A check that does not run is shown as not applied, and it passes: the rule catches only the phrasings its
+	// pattern names.
 	WhenAnswer string `yaml:"when_answer"`
 }
 

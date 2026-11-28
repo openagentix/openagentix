@@ -262,8 +262,26 @@ func TestSupersedeMarksPendingStale(t *testing.T) {
 	q, _, db := approvalsFixture(t)
 	a, _ := q.Propose(ctx, Proposal{Subject: "T1", Kind: "pay", AmountCents: 500, ProposedBy: "agent"})
 	tx, _ := db.Begin()
-	if err := SupersedePending(ctx, tx, "T1", t0); err != nil {
+	cctx, collected := WithSupersededCollector(ctx)
+	ids, err := SupersedePending(cctx, tx, "T1", t0)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != a.ID {
+		t.Fatalf("SupersedePending must return the ids it changed, in the same transaction: want [%s], got %v", a.ID, ids)
+	}
+	if got := collected(); len(got) != 1 || got[0] != a.ID {
+		t.Fatalf("the collector in the context must hold the same ids: %v", got)
+	}
+	// nothing pending any more, and another subject: no ids, no collector entry
+	if again, err := SupersedePending(cctx, tx, "T1", t0); err != nil || len(again) != 0 {
+		t.Fatalf("a second call changes nothing and returns nothing: %v %v", again, err)
+	}
+	if other, err := SupersedePending(cctx, tx, "T2", t0); err != nil || len(other) != 0 {
+		t.Fatalf("another subject has nothing pending: %v %v", other, err)
+	}
+	if got := collected(); len(got) != 1 {
+		t.Fatalf("the collector holds only what was changed: %v", got)
 	}
 	_ = tx.Commit()
 	got, _ := q.Get(ctx, a.ID)

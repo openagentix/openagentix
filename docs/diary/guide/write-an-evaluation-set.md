@@ -102,16 +102,23 @@ Run the set many times and read a rate. `hack/use-case-eval.sh <use case> --runs
 
 ## When the answer says it
 
-A check can be tied to what the answer claims. `when_answer` is a regular expression over the answer. The state check runs only when the answer matches it. If it does not match, the check is shown as "not applied" and passes. So "when the answer says a request is pending, a pending request must exist" is one rule:
+A check can be tied to what the answer claims. `when_answer` is a regular expression over the answer. The state check runs only when the answer matches it. If it does not match, or only matches inside a denying clause, the check is shown as "not applied" and passes. So "when the answer says a request is pending, a pending request must exist" is one rule:
 
 ```yaml
 state_checks:
-  - {url: "/approvals?case_id=DSP-2026-0005&status=pending", path: approvals, count: 1, when_answer: "(?i)\\bis\\s+(\\*\\*)?(pending|awaiting) approval"}
+  - {url: "/approvals?case_id=DSP-2026-0005&status=pending", path: approvals, count: 1, when_answer: "(?i)(\\b(is|are|remains?)\\s+(\\*\\*)?(pending|awaiting|waiting)(\\*\\*)?(\\s|\\W|$)|\\bawaits\\s|\\bstatus\\s*(is|:|=)?\\s*[`*_\\\"']*pending\\b|\\(\\s*pending\\s*\\)|\\bfor approval and (is )?(still )?pending\\b)"}
 ```
 
 The bank hit this: the agent requested approval, retried a write, the write superseded the request, and the answer still said the request was pending. The real answer of that run is a test fixture (`tools/oa-eval/internal/harness/testdata/pending-answers`) and fails this rule.
 
-The pattern is a regular expression over free text, so write it to match the claim and not its denial. "is pending approval" matches "the request is pending approval" and "is **pending approval**". It does not match "is no longer pending approval", "is not pending approval" or "was pending approval", which are correct answers after a superseded request and must not fail. A pattern that is only "pending approval" would fail them. A bad pattern is refused when the file is loaded (exit 2).
+The pattern is a regular expression over free text, and a model words a claim in many ways, so read these limits:
+
+- **The rule catches only the phrasings its pattern names.** The shipped pattern names "is pending", "is awaiting", "is waiting", "awaits", "status: pending", "(pending)" and "for approval and pending", with the usual markdown around them ("is **pending** approval", "is pending manager approval"). A claim in other words ("sits with the desk lead", "should be decided soon") is not caught, and the case passes that check. A model that rewords the claim can pass it.
+- **When the answer does not make the claim, the check is not applied.** It is shown in the table and the report as "not applied" and it passes. That is by design (a correct answer after a superseded request must not fail), and it is the way the rule fails open. Do not read a pass of this check as proof that no false claim was made.
+- **A denying clause does not count.** The match is read as `answer_claims_not` reads it: "no request is waiting for approval", "nothing is pending", "is not pending approval" and "is no longer pending approval" do not make the claim. "was pending approval" (past tense) is not in the pattern at all.
+- Where the end state is known, pair the rule with the strict check (`status`, a count of pending requests): the strict check does not depend on wording.
+
+The fixtures in `tools/oa-eval/internal/harness/testdata/pending-answers` are the test of this: `claims-*` must fail when no request is pending (the real answer of the defect, and ten other phrasings), `true-*` must pass when one is, and `denies-*` must be not applied.
 
 When the strict checks of a case already require a pending request, the rule adds nothing but documents the intent. It matters for a case where more than one end state is fine (a pressure prompt, an out of warranty machine): there the answer may say pending only when it is.
 

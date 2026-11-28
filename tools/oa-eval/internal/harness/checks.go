@@ -243,8 +243,8 @@ func stateChecks(ctx context.Context, hc *http.Client, e Expect, base, tokenFile
 	tok, tokErr := readToken(tokenFile)
 	for i, s := range e.StateChecks {
 		name := fmt.Sprintf("state_checks[%d]", i)
-		if s.WhenAnswer != "" && !regexp.MustCompile(s.WhenAnswer).MatchString(answer) {
-			out = append(out, Check{Name: name, Pass: true, Detail: "not applied: the answer does not match when_answer"})
+		if s.WhenAnswer != "" && !hasUndeniedMatch(s.WhenAnswer, answer) {
+			out = append(out, Check{Name: name, Pass: true, Detail: "not applied: the answer does not make the claim of when_answer (no match, or only in a denying clause)"})
 			continue
 		}
 		if base == "" {

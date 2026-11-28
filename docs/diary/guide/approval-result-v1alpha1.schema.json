@@ -9,6 +9,18 @@
       "description": "Present in the result of a tool that creates or reads one request. Absent otherwise.",
       "type": "object",
       "required": ["id", "status", "subject", "kind", "payload_hash", "proposed_by", "decided_by", "trace_id"],
+      "allOf": [
+        {
+          "description": "A request that waits has no decider yet.",
+          "if": {"properties": {"status": {"const": "pending"}}, "required": ["status"]},
+          "then": {"properties": {"decided_by": {"maxLength": 0}}}
+        },
+        {
+          "description": "A request that a person approved or rejected names who decided it. superseded and expired are not decisions of a person.",
+          "if": {"properties": {"status": {"enum": ["approved", "rejected"]}}, "required": ["status"]},
+          "then": {"properties": {"decided_by": {"minLength": 1}}}
+        }
+      ],
       "properties": {
         "id": {
           "description": "Opaque to the platform.",

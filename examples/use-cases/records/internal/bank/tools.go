@@ -191,7 +191,15 @@ func register[In, Out any](d *Domain, srv *mcp.Server, name, desc string, readOn
 	}
 	mcp.AddTool(srv, &mcp.Tool{Name: name, Description: desc, Annotations: ann},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-			out, err := fn(ctx, in)
+			cctx, superseded := core.WithSupersededCollector(ctx)
+			out, err := fn(cctx, in)
+			if err == nil {
+				if ids := superseded(); len(ids) > 0 {
+					if sp, ok := any(&out).(supersedable); ok {
+						sp.setSuperseded(ids)
+					}
+				}
+			}
 			sub := ""
 			if subject != nil {
 				sub = subject(in)
@@ -208,31 +216,15 @@ func register[In, Out any](d *Domain, srv *mcp.Server, name, desc string, readOn
 		})
 }
 
-// pendingApprovals returns the ids of the approval requests of a case that wait for a decision, before a write.
-func (d *Domain) pendingApprovals(ctx context.Context, caseID string) []string {
-	ps, err := d.approvals.List(ctx, "pending", caseID)
-	if err != nil {
-		return nil
-	}
-	ids := make([]string, 0, len(ps))
-	for _, a := range ps {
-		ids = append(ids, a.ID)
-	}
-	return ids
-}
+// supersedable is implemented by the results of the writes that can cancel a pending request. register fills the members in from the ids that the
+// write's own transaction superseded (core.SupersedePending returns them from the UPDATE itself), not from a read before and a read after.
+type supersedable interface{ setSuperseded([]string) }
 
-// superseded says which of those requests the write superseded: the ids (the convention's superseded_approvals) and a notice that says what to do.
-// Both are empty when none was.
-func (d *Domain) superseded(ctx context.Context, ids []string) (notice string, gone []string) {
-	for _, id := range ids {
-		if a, err := d.approvals.Get(ctx, id); err == nil && a.Status == "superseded" {
-			gone = append(gone, id)
-		}
-	}
-	if len(gone) == 0 {
-		return "", nil
-	}
-	return supersededNotice(gone), gone
+func (r *caseResult) setSuperseded(ids []string) {
+	r.SupersededApprovals, r.Notice = ids, supersededNotice(ids)
+}
+func (r *draftOut) setSuperseded(ids []string) {
+	r.SupersededApprovals, r.Notice = ids, supersededNotice(ids)
 }
 
 func supersededNotice(gone []string) string {
@@ -293,38 +285,28 @@ func (d *Domain) MCPHandler(version string) http.Handler {
 		})
 	register(d, srv, "attach_evidence", "Attach one evidence item to a case. kind is exactly one of transaction, rule, linked_case, gap or other. ref is an id or rule reference of at most 64 characters (letters, digits and _ . : / space -). note is at most 1000 characters. Any change to a case after request_approval supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in evidenceIn) string { return in.CaseID },
 		func(ctx context.Context, in evidenceIn) (caseResult, error) {
-			ids := d.pendingApprovals(ctx, in.CaseID)
 			c, err := s.AttachEvidence(ctx, in.CaseID, in.Kind, in.Ref, in.Note)
-			n, g := d.superseded(ctx, ids)
-			return caseResult{Case: agentCase(c), Notice: n, SupersededApprovals: g}, err
+			return caseResult{Case: agentCase(c)}, err
 		})
 	register(d, srv, "set_route", "Set the route and the reason on a case. This moves no money. The reason is at most 500 characters. Changing the route after an approval was requested supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in routeIn) string { return in.CaseID },
 		func(ctx context.Context, in routeIn) (caseResult, error) {
-			ids := d.pendingApprovals(ctx, in.CaseID)
 			c, err := s.SetRoute(ctx, in.CaseID, in.Route, in.Reason)
-			n, g := d.superseded(ctx, ids)
-			return caseResult{Case: agentCase(c), Notice: n, SupersededApprovals: g}, err
+			return caseResult{Case: agentCase(c)}, err
 		})
 	register(d, srv, "set_case_status", "Mark a case in_review or needs_analyst. This too supersedes a pending approval request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in statusIn) string { return in.CaseID },
 		func(ctx context.Context, in statusIn) (caseResult, error) {
-			ids := d.pendingApprovals(ctx, in.CaseID)
 			c, err := s.SetStatus(ctx, in.CaseID, in.Status)
-			n, g := d.superseded(ctx, ids)
-			return caseResult{Case: agentCase(c), Notice: n, SupersededApprovals: g}, err
+			return caseResult{Case: agentCase(c)}, err
 		})
 	register(d, srv, "draft_letter", "Store the customer letter as a draft (at most 4000 characters). It is not sent until an approver approves. A new draft after request_approval supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in bodyIn) string { return in.CaseID },
 		func(ctx context.Context, in bodyIn) (draftOut, error) {
-			ids := d.pendingApprovals(ctx, in.CaseID)
 			it, err := s.DraftLetter(ctx, in.CaseID, in.Body)
-			n, g := d.superseded(ctx, ids)
-			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status, Notice: n, SupersededApprovals: g}, err
+			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status}, err
 		})
 	register(d, srv, "draft_chargeback", "Store the chargeback filing as a draft (at most 4000 characters). It is not filed until an approver approves. A new draft after request_approval supersedes that request. The result lists superseded_approvals when this write cancelled a pending request.", false, func(in bodyIn) string { return in.CaseID },
 		func(ctx context.Context, in bodyIn) (draftOut, error) {
-			ids := d.pendingApprovals(ctx, in.CaseID)
 			it, err := s.DraftChargeback(ctx, in.CaseID, in.Body)
-			n, g := d.superseded(ctx, ids)
-			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status, Notice: n, SupersededApprovals: g}, err
+			return draftOut{DraftID: it.ID, Kind: it.Kind, Status: it.Status}, err
 		})
 	register(d, srv, "set_timer", "Set a deadline timer on a case. When it is due it is marked fired for the next sweep.", false, func(in timerIn) string { return in.CaseID },
 		func(ctx context.Context, in timerIn) (timerOut, error) {

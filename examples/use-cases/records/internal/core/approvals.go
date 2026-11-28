@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -262,9 +263,54 @@ func (q *Approvals) decide(ctx context.Context, id string, who Approver, payload
 }
 
 // SupersedePending marks the pending approval of a subject stale. A domain calls it, in its own transaction,
-// whenever it changes something the approver was shown (a new draft, a new route).
-func SupersedePending(ctx context.Context, tx *sql.Tx, subject string, now time.Time) error {
-	_, err := tx.ExecContext(ctx, `UPDATE approvals SET status='superseded', decided_at=?, decision_note='changed after it was proposed'
-		WHERE subject=? AND status='pending'`, FormatTime(now), subject)
-	return err
+// whenever it changes something the approver was shown (a new draft, a new route). It returns the ids it changed, read
+// from the same UPDATE (RETURNING), so the list is exactly what this statement superseded and cannot be confused by a
+// concurrent writer. When the context holds a collector (WithSupersededCollector) the ids are added to it too: that is
+// how a tool reports them without every domain function passing them up.
+func SupersedePending(ctx context.Context, tx *sql.Tx, subject string, now time.Time) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET status='superseded', decided_at=?, decision_note='changed after it was proposed'
+		WHERE subject=? AND status='pending' RETURNING seq`, FormatTime(now), subject)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, FormatID("APR", seq))
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if c, ok := ctx.Value(supersededKey{}).(*supersededCollector); ok && len(ids) > 0 {
+		c.mu.Lock()
+		c.ids = append(c.ids, ids...)
+		c.mu.Unlock()
+	}
+	return ids, nil
+}
+
+type supersededKey struct{}
+
+type supersededCollector struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+// WithSupersededCollector returns a context that collects the ids SupersedePending changes, and a function that reads them.
+// A tool wraps its write with it and reports the ids in superseded_approvals. The ids are those of the write's own
+// transaction. If the write then fails and rolls back, the tool returns an error and reports nothing.
+func WithSupersededCollector(ctx context.Context) (context.Context, func() []string) {
+	c := &supersededCollector{}
+	return context.WithValue(ctx, supersededKey{}, c), func() []string {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return append([]string(nil), c.ids...)
+	}
 }

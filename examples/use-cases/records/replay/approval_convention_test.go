@@ -103,8 +103,26 @@ func TestTheSchemaRejectsWhatTheConventionForbids(t *testing.T) {
 	for _, st := range []string{"pending", "approved", "rejected", "superseded", "expired"} {
 		m := good()
 		m["approval"].(map[string]any)["status"] = st
+		if st == "approved" || st == "rejected" {
+			m["approval"].(map[string]any)["decided_by"] = "desk:lead-1"
+		}
 		if err := rs.Validate(m); err != nil {
 			t.Errorf("status %s must pass: %v", st, err)
+		}
+	}
+	for _, st := range []string{"approved", "rejected"} {
+		m := good()
+		a := m["approval"].(map[string]any)
+		a["status"], a["decided_by"] = st, "desk:lead-1"
+		if err := rs.Validate(m); err != nil {
+			t.Errorf("%s with a decider must pass: %v", st, err)
+		}
+	}
+	for _, st := range []string{"superseded", "expired"} { // no person decides these: the decider may be empty
+		m := good()
+		m["approval"].(map[string]any)["status"] = st
+		if err := rs.Validate(m); err != nil {
+			t.Errorf("%s with no decider must pass: %v", st, err)
 		}
 	}
 	m := good()
@@ -127,6 +145,9 @@ func TestTheSchemaRejectsWhatTheConventionForbids(t *testing.T) {
 		"no trace_id":                           func(a map[string]any) { delete(a, "trace_id") },
 		"no payload_hash (the old name hash)":   func(a map[string]any) { delete(a, "payload_hash"); a["hash"] = strings.Repeat("a", 64) },
 		"a subject that is not in the alphabet": func(a map[string]any) { a["subject"] = "a/b" },
+		"a pending request that has a decider":  func(a map[string]any) { a["decided_by"] = "desk:lead-1" },
+		"an approved request with no decider":   func(a map[string]any) { a["status"] = "approved"; a["decided_by"] = "" },
+		"a rejected request with no decider":    func(a map[string]any) { a["status"] = "rejected"; a["decided_by"] = "" },
 	} {
 		m := good()
 		mut(m["approval"].(map[string]any))
