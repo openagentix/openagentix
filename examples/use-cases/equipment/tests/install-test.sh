@@ -343,13 +343,6 @@ ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" ANTHROP
 check "with ALSO_COMPOSE the install passes" "[ $rc = 0 ] && grep -q 'platform-install' '$LOG/calls'" "exit $rc: $(tail -4 "$LOG/out")"
 check "the composed values keep every entry of the full demo list and of the other use case, and add this one: agents, schedules, endpoints, profiles, callers, code mode" "yq -e '([.agents[].name] | sort == [\"assistant\",\"dispute-agent\",\"service-agent\"]) and ([.schedules[].name] | sort == [\"deadline-sweep\",\"fleet-sweep\",\"nightly\"]) and ([.mcp.endpoints[].name] | sort == [\"dealer-records\",\"records\"]) and ([.mcp.profiles[].name] | sort == [\"dealer\",\"disputes\"]) and ([.governance.a2a.callers[].name] | sort == [\"disputes-desk\",\"service-desk\"]) and .mcp.virtual.codeMode.enabled == true' '$LOG/platform-values.yaml' >/dev/null" "$(yq -c '[.agents[].name, .schedules[].name, .mcp.endpoints[].name]' "$LOG/platform-values.yaml" 2>&1)"
 check "the other use case's entry is composed before this one's: the other agent comes first in the agents list, then this one" "[ \"\$(yq -r '[.agents[].name] | index(\"dispute-agent\") < index(\"service-agent\")' '$LOG/platform-values.yaml')\" = true ]"
-reset; cp "$TMP/af/release.json" "$LOG/release.json"
-bash "$RT/hack/compose-values.sh" -o "$TMP/af/release-ev.yaml" "$TMP/af/user.json" "$OTHER_FD" "$RT/examples/use-cases/bank/values-events.yaml" 2>/dev/null && yq . "$TMP/af/release-ev.yaml" > "$LOG/release.json"
-ALSO_COMPOSE="$OTHER_FD $RT/examples/use-cases/bank/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
-check "ALSO_COMPOSE may list the other use case's values-events.yaml: its event caller and namespace are kept, and this use case's own are not added (EVENTS unset)" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and (.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) == null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"fernvale-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
-reset; cp "$TMP/af/release.json" "$LOG/release.json"
-EVENTS=1 ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
-check "EVENTS=1 beside a full demo: this use case's values-events.yaml is composed after its values-full-demo.yaml" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) != null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"kestrel-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
 check "your provider key stays and no scenario file is set" "grep -q 'platform-install .*PROFILE= STUB_SCENARIOS= ANTHROPIC=set' '$LOG/calls'"
 yq . "$LOG/platform-values.yaml" > "$TMP/af/release2.json"
 reset; cp "$TMP/af/release2.json" "$LOG/release.json"
@@ -374,6 +367,13 @@ mkdir -p "$TMP/af/x"; cp "$RT/examples/use-cases/bank/values-full-demo.yaml" "$T
 ALSO_COMPOSE="$TMP/af/x/values-full-demo.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
 check "a file with that name, wherever it is, is accepted" "[ $rc = 0 ]" "exit $rc: $(tail -3 "$LOG/out")"
 
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+bash "$RT/hack/compose-values.sh" -o "$TMP/af/release-ev.yaml" "$TMP/af/user.json" "$OTHER_FD" "$RT/examples/use-cases/bank/values-events.yaml" 2>/dev/null && yq . "$TMP/af/release-ev.yaml" > "$LOG/release.json"
+ALSO_COMPOSE="$OTHER_FD $RT/examples/use-cases/bank/values-events.yaml" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "ALSO_COMPOSE may list the other use case's values-events.yaml: its event caller and namespace are kept, and this use case's own are not added (EVENTS unset)" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"fernvale-case-events\")) != null and (.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) == null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"fernvale-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
+reset; cp "$TMP/af/release.json" "$LOG/release.json"
+EVENTS=1 ALSO_COMPOSE="$OTHER_FD" VALUES_FILE="$TMP/af/one.yaml $TMP/af/two.yaml" run --beside-full-demo; rc=$?
+check "EVENTS=1 beside a full demo: this use case's values-events.yaml is composed after its values-full-demo.yaml" "[ $rc = 0 ] && yq -e '(.governance.a2a.callers | map(.name) | index(\"kestrel-fault-events\")) != null and (.networkPolicy.extraA2ACallers | map(.namespace)) == [\"kestrel-records\"]' '$LOG/platform-values.yaml' >/dev/null" "exit $rc: $(tail -5 "$LOG/out")"
 echo "# checks on the platform after the install"
 reset
 FAKE_NO_AGENT=1 run; rc=$?
